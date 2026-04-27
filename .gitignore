@@ -76,3 +76,6 @@ temp/
 # Documentation (temporary)
 docs/
 AGENTS.md
+
+# Worktrees
+.worktrees/
