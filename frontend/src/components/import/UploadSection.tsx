@@ -83,17 +83,17 @@ export function UploadSection({
   const selectedFile = files[selectedPreviewIndex]?.file ?? null;
 
   return (
-    <div className="flex gap-6 h-full">
-      <div className="w-96 flex flex-col">
-        <div className="flex items-center gap-2 mb-4">
+    <div className="flex gap-6 h-full overflow-hidden">
+      <div className="w-96 flex flex-col h-full overflow-hidden">
+        <div className="flex items-center gap-2 mb-4 flex-shrink-0">
           <Upload className="h-4 w-4 text-primary" />
           <h3 className="text-sm font-semibold text-dark dark:text-white uppercase tracking-wide">
             Upload Statement
           </h3>
         </div>
 
-        <div className="flex-1 bg-white dark:bg-dark-2 rounded-lg border border-stroke dark:border-dark-3 p-4 flex flex-col gap-4">
-          <div className="w-full">
+        <div className="flex-1 bg-white dark:bg-dark-2 rounded-lg border border-stroke dark:border-dark-3 p-4 flex flex-col gap-4 overflow-hidden">
+          <div className="w-full flex-shrink-0">
             <label className="block text-sm font-medium text-dark dark:text-white mb-2">
               Select Parser
             </label>
@@ -106,7 +106,7 @@ export function UploadSection({
             />
           </div>
 
-          <div className="h-32 min-h-[128px]">
+          <div className="h-32 min-h-[128px] flex-shrink-0">
             <FileUploadDropzone
               onFilesAdd={handleFilesAdd}
               compact
@@ -115,7 +115,7 @@ export function UploadSection({
 
           {files.length > 0 && (
             <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-hidden">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-shrink-0">
                 <h4 className="text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
                   Files ({files.length})
                 </h4>
@@ -180,40 +180,42 @@ export function UploadSection({
             </div>
           )}
 
-          <Button
-            onClick={onUpload}
-            disabled={!canParse}
-            isLoading={isUploading}
-            leftIcon={<Upload className="h-4 w-4" />}
-            className="w-full"
-          >
-            {isUploading ? "Parsing..." : `Parse ${pendingOrErrorFiles.length > 1 ? `${pendingOrErrorFiles.length} Files` : "File"}`}
-          </Button>
-
-          {accountMismatchError && (
-            <div className="p-3 bg-warning/10 dark:bg-warning/20 border border-warning/30 dark:border-warning/40 rounded-lg flex items-start gap-2">
-              <AlertCircle className="h-4 w-4 text-warning flex-shrink-0 mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <p className="text-warning text-sm font-medium">
-                  Account Mismatch
-                </p>
-                <p className="text-warning/80 text-xs mt-1">
-                  {accountMismatchError}
-                </p>
+          <div className="flex-shrink-0 flex flex-col gap-2">
+            {accountMismatchError && (
+              <div className="p-3 bg-warning/10 dark:bg-warning/20 border border-warning/30 dark:border-warning/40 rounded-lg flex items-start gap-2">
+                <AlertCircle className="h-4 w-4 text-warning flex-shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-warning text-sm font-medium">
+                    Account Mismatch
+                  </p>
+                  <p className="text-warning/80 text-xs mt-1">
+                    {accountMismatchError}
+                  </p>
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {error && (
-            <div className="p-3 bg-red/10 dark:bg-red/20 border border-red/30 dark:border-red/40 rounded-lg flex items-center gap-2">
-              <XCircle className="h-4 w-4 text-red flex-shrink-0" />
-              <p className="text-red text-sm">{error}</p>
-            </div>
-          )}
+            {error && (
+              <div className="p-3 bg-red/10 dark:bg-red/20 border border-red/30 dark:border-red/40 rounded-lg flex items-center gap-2">
+                <XCircle className="h-4 w-4 text-red flex-shrink-0" />
+                <p className="text-red text-sm">{error}</p>
+              </div>
+            )}
+
+            <Button
+              onClick={onUpload}
+              disabled={!canParse}
+              isLoading={isUploading}
+              leftIcon={<Upload className="h-4 w-4" />}
+              className="w-full"
+            >
+              {isUploading ? "Parsing..." : `Parse ${pendingOrErrorFiles.length > 1 ? `${pendingOrErrorFiles.length} Files` : "File"}`}
+            </Button>
+          </div>
         </div>
       </div>
 
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0 overflow-hidden">
         <FilePreview file={selectedFile} />
       </div>
     </div>
