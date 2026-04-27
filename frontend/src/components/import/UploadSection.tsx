@@ -57,7 +57,19 @@ export function UploadSection({
   const [selectedPreviewIndex, setSelectedPreviewIndex] = useState<number>(0);
 
   const handleFilesAdd = (newFiles: File[]) => {
-    const newFileStates: FileUploadState[] = newFiles.map((file) => ({
+    const existingKeys = new Set(
+      files.map((f) => `${f.file.name}-${f.file.size}`),
+    );
+    const uniqueFiles = newFiles.filter(
+      (file) => !existingKeys.has(`${file.name}-${file.size}`),
+    );
+    const duplicates = newFiles.length - uniqueFiles.length;
+
+    if (duplicates > 0 && uniqueFiles.length === 0) {
+      return;
+    }
+
+    const newFileStates: FileUploadState[] = uniqueFiles.map((file) => ({
       file,
       status: "pending" as const,
     }));
