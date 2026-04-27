@@ -21,6 +21,7 @@
     "@prisma/client": "5.15.0",
     "@tailwindcss/postcss": "^4.1.18",
     "@tanstack/react-query": "^5.45.1",
+    "@tanstack/react-virtual": "^3.13.24",
     "apexcharts": "^4.5.0",
     "bcryptjs": "^2.4.3",
     "class-variance-authority": "^0.7.1",
