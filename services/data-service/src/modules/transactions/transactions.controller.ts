@@ -58,6 +58,13 @@ const ImportRuleSchema = z.object({
   sortOrder: z.number().int().optional(),
 });
 
+const ClassificationPatternUpdateSchema = z.object({
+  status: z.enum(["auto_apply", "suggest", "disabled", "unresolved"]).optional(),
+  label: z.string().nullable().optional(),
+  categoryId: z.string().nullable().optional(),
+  markInternal: z.boolean().optional(),
+});
+
 const CheckImportSchema = z.object({
   userId: z.string(),
   transactions: z.array(ImportTransactionSchema),
@@ -209,6 +216,122 @@ transactionRouter.post(
         return res.status(500).json({ error: result.error });
       }
 
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  },
+);
+
+/**
+ * GET /api/transactions/classification-patterns
+ * Get learned classification patterns for dashboard and import matching
+ */
+transactionRouter.get(
+  "/classification-patterns",
+  async (req: Request, res: Response) => {
+    try {
+      const userId = String(req.query.userId || "");
+      if (!userId) {
+        return res.status(400).json({ error: "userId is required" });
+      }
+
+      const patterns = await TransactionService.getClassificationPatterns(userId, {
+        status: req.query.status as any,
+        patternType: req.query.patternType as any,
+      });
+      res.json({ patterns });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  },
+);
+
+/**
+ * POST /api/transactions/classification-patterns/rebuild
+ * Rebuild learned classification patterns from committed transactions
+ */
+transactionRouter.post(
+  "/classification-patterns/rebuild",
+  async (req: Request, res: Response) => {
+    try {
+      const userId = String(req.body?.userId || "");
+      if (!userId) {
+        return res.status(400).json({ error: "userId is required" });
+      }
+
+      const result = await TransactionService.rebuildClassificationPatterns(userId);
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  },
+);
+
+/**
+ * GET /api/transactions/classification-patterns/applied-summary
+ * Get aggregate history of fixed and learned rule applications
+ */
+transactionRouter.get(
+  "/classification-patterns/applied-summary",
+  async (req: Request, res: Response) => {
+    try {
+      const userId = String(req.query.userId || "");
+      if (!userId) {
+        return res.status(400).json({ error: "userId is required" });
+      }
+
+      const summary = await TransactionService.getAppliedClassificationSummary(userId);
+      res.json({ summary });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  },
+);
+
+/**
+ * PATCH /api/transactions/classification-patterns/:id
+ * Update learned classification pattern dashboard controls
+ */
+transactionRouter.patch(
+  "/classification-patterns/:id",
+  async (req: Request, res: Response) => {
+    try {
+      const userId = String(req.body?.userId || "");
+      if (!userId) {
+        return res.status(400).json({ error: "userId is required" });
+      }
+
+      const payload = ClassificationPatternUpdateSchema.parse(req.body?.pattern || req.body);
+      const pattern = await TransactionService.updateClassificationPattern(
+        userId,
+        req.params.id,
+        payload,
+      );
+      res.json({ pattern });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  },
+);
+
+/**
+ * DELETE /api/transactions/classification-patterns/:id
+ * Delete a learned classification pattern
+ */
+transactionRouter.delete(
+  "/classification-patterns/:id",
+  async (req: Request, res: Response) => {
+    try {
+      const userId = String(req.query.userId || "");
+      if (!userId) {
+        return res.status(400).json({ error: "userId is required" });
+      }
+
+      const result = await TransactionService.deleteClassificationPattern(
+        userId,
+        req.params.id,
+      );
       res.json(result);
     } catch (error: any) {
       res.status(400).json({ error: error.message });

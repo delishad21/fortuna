@@ -2,6 +2,10 @@ import { getCategories } from "@/app/actions/categories";
 import { getAccountNumbers } from "@/app/actions/accountNumbers";
 import { getCurrentUser } from "@/app/actions/user";
 import { bootstrapDefaultImportRules, getImportRules } from "@/app/actions/importRules";
+import {
+  getAppliedClassificationSummary,
+  getClassificationPatterns,
+} from "@/app/actions/classificationPatterns";
 import { getParserOptions } from "@/lib/parsers";
 import { SettingsClient } from "@/components/settings/SettingsClient";
 
@@ -12,12 +16,22 @@ export default async function SettingsPage() {
     console.error("Failed to bootstrap import rules:", error);
   }
 
-  const [user, categories, accounts, importRules, parserOptions] = await Promise.all([
+  const [
+    user,
+    categories,
+    accounts,
+    importRules,
+    parserOptions,
+    classificationPatterns,
+    appliedClassificationSummary,
+  ] = await Promise.all([
     getCurrentUser(),
     getCategories({ scope: "settings" }),
     getAccountNumbers(),
     getImportRules(),
     getParserOptions("bank"),
+    getClassificationPatterns(),
+    getAppliedClassificationSummary(),
   ]);
 
   return (
@@ -27,6 +41,8 @@ export default async function SettingsPage() {
       initialAccountIdentifiers={accounts}
       initialImportRules={importRules}
       parserOptions={parserOptions}
+      initialClassificationPatterns={classificationPatterns}
+      initialAppliedClassificationSummary={appliedClassificationSummary}
     />
   );
 }

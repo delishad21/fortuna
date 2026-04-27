@@ -43,6 +43,14 @@ import {
   deleteImportRule,
   type ImportRule,
 } from "@/app/actions/importRules";
+import {
+  getAppliedClassificationSummary,
+  rebuildClassificationPatterns,
+  updateClassificationPattern,
+  type AppliedClassificationSummaryItem,
+  type ClassificationPattern,
+  type ClassificationPatternStatus,
+} from "@/app/actions/classificationPatterns";
 import type { ParserOption } from "@/lib/parsers";
 
 interface SettingsClientProps {
@@ -51,6 +59,8 @@ interface SettingsClientProps {
   initialAccountIdentifiers: AccountIdentifier[];
   initialImportRules: ImportRule[];
   parserOptions: ParserOption[];
+  initialClassificationPatterns: ClassificationPattern[];
+  initialAppliedClassificationSummary: AppliedClassificationSummaryItem[];
 }
 
 export function SettingsClient({
@@ -59,6 +69,8 @@ export function SettingsClient({
   initialAccountIdentifiers,
   initialImportRules,
   parserOptions,
+  initialClassificationPatterns,
+  initialAppliedClassificationSummary,
 }: SettingsClientProps) {
   const PREVIEW_CHIP_LIMIT = 4;
   const tripCategoryNames = TRIP_CATEGORY_DEFINITIONS.map((item) => item.name);
@@ -69,6 +81,13 @@ export function SettingsClient({
     initialAccountIdentifiers,
   );
   const [importRules, setImportRules] = useState<ImportRule[]>(initialImportRules);
+  const [classificationPatterns, setClassificationPatterns] = useState<
+    ClassificationPattern[]
+  >(initialClassificationPatterns);
+  const [appliedClassificationSummary, setAppliedClassificationSummary] = useState<
+    AppliedClassificationSummaryItem[]
+  >(initialAppliedClassificationSummary);
+  const [activeTab, setActiveTab] = useState<"profile" | "rules">("profile");
 
   const [passwordState, setPasswordState] = useState({
     current: "",
@@ -367,6 +386,44 @@ export function SettingsClient({
     }
   };
 
+  const handleRebuildClassificationPatterns = async () => {
+    try {
+      const result = await rebuildClassificationPatterns();
+      const summary = await getAppliedClassificationSummary();
+      setClassificationPatterns(result.patterns || []);
+      setAppliedClassificationSummary(summary);
+      showModal(
+        "success",
+        "Learned Rules Rebuilt",
+        `Rebuilt ${result.rebuiltCount} learned classification rules.`,
+      );
+    } catch (error) {
+      showModal(
+        "error",
+        "Rebuild Failed",
+        error instanceof Error ? error.message : "Failed to rebuild learned rules",
+      );
+    }
+  };
+
+  const handlePatternStatusChange = async (
+    patternId: string,
+    status: ClassificationPatternStatus,
+  ) => {
+    try {
+      const updated = await updateClassificationPattern(patternId, { status });
+      setClassificationPatterns((prev) =>
+        prev.map((pattern) => (pattern.id === patternId ? updated : pattern)),
+      );
+    } catch (error) {
+      showModal(
+        "error",
+        "Update Failed",
+        error instanceof Error ? error.message : "Failed to update learned rule",
+      );
+    }
+  };
+
   const baselineAutoLabelEnabled = profile?.autoLabelEnabled ?? false;
   const baselineAutoLabelThreshold = profile?.autoLabelThreshold ?? 0.5;
   const isAutoLabelDirty =
@@ -380,6 +437,22 @@ export function SettingsClient({
   const accountRemaining = Math.max(accounts.length - PREVIEW_CHIP_LIMIT, 0);
   const rulePreview = importRules.slice(0, PREVIEW_CHIP_LIMIT);
   const ruleRemaining = Math.max(importRules.length - PREVIEW_CHIP_LIMIT, 0);
+  const learnedPatterns = classificationPatterns.filter(
+    (pattern) =>
+      pattern.status !== "unresolved" &&
+      pattern.status !== "suggest" &&
+      pattern.conflictCount === 0,
+  );
+  const ambiguousPatterns = classificationPatterns.filter(
+    (pattern) => pattern.status === "suggest" || pattern.conflictCount > 0,
+  );
+  const unresolvedPatterns = classificationPatterns.filter(
+    (pattern) => pattern.status === "unresolved",
+  );
+  const formatConfidence = (value: number | string) =>
+    `${Math.round(Number(value || 0) * 100)}%`;
+  const statusLabel = (status: ClassificationPatternStatus) =>
+    status.replace(/_/g, " ");
 
   return (
     <div className="flex flex-col gap-6">
@@ -388,10 +461,37 @@ export function SettingsClient({
           Settings
         </h2>
         <p className="text-sm text-dark-5 dark:text-dark-6">
-          Manage your profile, categories, and account identifiers.
+          Manage preferences and classification rules.
         </p>
       </div>
 
+      <div className="inline-flex w-fit rounded-lg border border-stroke bg-white p-1 dark:border-dark-3 dark:bg-dark-2">
+        <button
+          type="button"
+          onClick={() => setActiveTab("profile")}
+          className={`rounded-md px-4 py-2 text-sm font-medium transition ${
+            activeTab === "profile"
+              ? "bg-primary text-white"
+              : "text-dark-5 hover:text-dark dark:text-dark-6 dark:hover:text-white"
+          }`}
+        >
+          Profile & Preferences
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("rules")}
+          className={`rounded-md px-4 py-2 text-sm font-medium transition ${
+            activeTab === "rules"
+              ? "bg-primary text-white"
+              : "text-dark-5 hover:text-dark dark:text-dark-6 dark:hover:text-white"
+          }`}
+        >
+          Rules
+        </button>
+      </div>
+
+      {activeTab === "profile" ? (
+      <>
       <Card>
         <CardHeader className="flex flex-col gap-4">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -462,7 +562,6 @@ export function SettingsClient({
       </Card>
 
       <div className="grid gap-6 xl:grid-cols-2">
-
       <Card>
         <CardHeader>
           <div className="flex items-center gap-3 min-w-0">
@@ -563,6 +662,11 @@ export function SettingsClient({
           </div>
         </CardContent>
       </Card>
+
+      </div>
+      </>
+      ) : (
+      <>
 
       <Card>
         <CardHeader>
@@ -667,7 +771,179 @@ export function SettingsClient({
           </div>
         </CardContent>
       </Card>
-      </div>
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-center gap-3 min-w-0">
+              <WandSparkles className="h-6 w-6 shrink-0 text-primary" />
+              <div className="min-w-0">
+                <CardTitle>Learned Rules</CardTitle>
+                <p className="text-sm text-dark-5 dark:text-dark-6 mt-1">
+                  Review classifier patterns learned from committed transactions.
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleRebuildClassificationPatterns}
+            >
+              Rebuild Learned Rules
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-4">
+            <div className="rounded-lg border border-stroke p-3 dark:border-dark-3">
+              <p className="text-xs text-dark-5 dark:text-dark-6">Learned</p>
+              <p className="text-2xl font-semibold text-dark dark:text-white">
+                {learnedPatterns.length}
+              </p>
+            </div>
+            <div className="rounded-lg border border-stroke p-3 dark:border-dark-3">
+              <p className="text-xs text-dark-5 dark:text-dark-6">Auto-apply</p>
+              <p className="text-2xl font-semibold text-dark dark:text-white">
+                {classificationPatterns.filter((pattern) => pattern.status === "auto_apply").length}
+              </p>
+            </div>
+            <div className="rounded-lg border border-stroke p-3 dark:border-dark-3">
+              <p className="text-xs text-dark-5 dark:text-dark-6">Ambiguous</p>
+              <p className="text-2xl font-semibold text-dark dark:text-white">
+                {ambiguousPatterns.length}
+              </p>
+            </div>
+            <div className="rounded-lg border border-stroke p-3 dark:border-dark-3">
+              <p className="text-xs text-dark-5 dark:text-dark-6">Unresolved</p>
+              <p className="text-2xl font-semibold text-dark dark:text-white">
+                {unresolvedPatterns.length}
+              </p>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto rounded-lg border border-stroke dark:border-dark-3">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-gray-1 text-xs uppercase tracking-wide text-dark-5 dark:bg-dark-3 dark:text-dark-6">
+                <tr>
+                  <th className="px-3 py-2">Pattern</th>
+                  <th className="px-3 py-2">Outcome</th>
+                  <th className="px-3 py-2">Confidence</th>
+                  <th className="px-3 py-2">Support</th>
+                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {learnedPatterns.slice(0, 12).map((pattern) => (
+                  <tr key={pattern.id} className="border-t border-stroke dark:border-dark-3">
+                    <td className="px-3 py-2">
+                      <div className="font-medium text-dark dark:text-white">
+                        {pattern.patternValue}
+                      </div>
+                      <div className="text-xs text-dark-5 dark:text-dark-6">
+                        {pattern.patternType.replace(/_/g, " ")}
+                        {pattern.parserId ? ` · ${pattern.parserId}` : ""}
+                        {pattern.direction ? ` · ${pattern.direction}` : ""}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-dark-5 dark:text-dark-6">
+                      {pattern.label || "No label"}
+                      {pattern.category?.name ? ` · ${pattern.category.name}` : ""}
+                      {pattern.markInternal ? " · Internal" : ""}
+                    </td>
+                    <td className="px-3 py-2 text-dark dark:text-white">
+                      {formatConfidence(pattern.confidence)}
+                    </td>
+                    <td className="px-3 py-2 text-dark-5 dark:text-dark-6">
+                      {pattern.supportCount} matches
+                      {pattern.conflictCount > 0 ? ` · ${pattern.conflictCount} conflicts` : ""}
+                    </td>
+                    <td className="px-3 py-2 capitalize text-dark-5 dark:text-dark-6">
+                      {statusLabel(pattern.status)}
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => handlePatternStatusChange(pattern.id, "auto_apply")}
+                        >
+                          Auto
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => handlePatternStatusChange(pattern.id, "suggest")}
+                        >
+                          Suggest
+                        </Button>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={() => handlePatternStatusChange(pattern.id, "disabled")}
+                        >
+                          Disable
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {learnedPatterns.length === 0 && (
+                  <tr>
+                    <td className="px-3 py-4 text-dark-5 dark:text-dark-6" colSpan={6}>
+                      No learned rules yet. They will appear after imports are committed.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-3">
+            <div className="rounded-lg border border-stroke p-4 dark:border-dark-3">
+              <h4 className="text-sm font-semibold text-dark dark:text-white">
+                Ambiguous Suggestions
+              </h4>
+              <div className="mt-3 space-y-2 text-sm text-dark-5 dark:text-dark-6">
+                {ambiguousPatterns.slice(0, 5).map((pattern) => (
+                  <div key={pattern.id} className="rounded-md bg-gray-1 p-2 dark:bg-dark-3">
+                    {pattern.patternValue} · {formatConfidence(pattern.confidence)} · {pattern.conflictCount} conflicts
+                  </div>
+                ))}
+                {ambiguousPatterns.length === 0 && <p>No ambiguous learned rules.</p>}
+              </div>
+            </div>
+            <div className="rounded-lg border border-stroke p-4 dark:border-dark-3">
+              <h4 className="text-sm font-semibold text-dark dark:text-white">
+                Unresolved Patterns
+              </h4>
+              <div className="mt-3 space-y-2 text-sm text-dark-5 dark:text-dark-6">
+                {unresolvedPatterns.slice(0, 5).map((pattern) => (
+                  <div key={pattern.id} className="rounded-md bg-gray-1 p-2 dark:bg-dark-3">
+                    {pattern.patternValue} · {pattern.supportCount} occurrences
+                  </div>
+                ))}
+                {unresolvedPatterns.length === 0 && <p>No unresolved repeated patterns.</p>}
+              </div>
+            </div>
+            <div className="rounded-lg border border-stroke p-4 dark:border-dark-3">
+              <h4 className="text-sm font-semibold text-dark dark:text-white">
+                Applied Rules
+              </h4>
+              <div className="mt-3 space-y-2 text-sm text-dark-5 dark:text-dark-6">
+                {appliedClassificationSummary.slice(0, 5).map((item) => (
+                  <div key={`${item.type}-${item.id}`} className="rounded-md bg-gray-1 p-2 dark:bg-dark-3">
+                    {item.type === "fixed" ? item.name : item.patternValue || item.name} · {item.appliedCount} applied
+                  </div>
+                ))}
+                {appliedClassificationSummary.length === 0 && <p>No applied rule history yet.</p>}
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+      </>
+      )}
 
       <ManageCategoriesModal
         isOpen={manageCategoriesOpen}

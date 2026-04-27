@@ -66,6 +66,7 @@ model User {
   accountIdentifiers AccountIdentifier[]
   transactions  Transaction[]
   importBatches ImportBatch[]
+  classificationPatterns ClassificationPattern[]
 
   @@map("users")
 }
@@ -117,6 +118,7 @@ model Category {
 
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions Transaction[]
+  classificationPatterns ClassificationPattern[]
 
   @@unique([userId, name])
   @@map("categories")
@@ -187,4 +189,34 @@ model ParserDefinition {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   @@map("parser_definitions")
+}
+
+model ClassificationPattern {
+  id            String   @id @default(cuid())
+  userId        String   @map("user_id")
+  patternType   String   @map("pattern_type")
+  patternValue  String   @map("pattern_value")
+  parserId      String?  @map("parser_id")
+  direction     String?
+  label         String?
+  categoryId    String?  @map("category_id")
+  markInternal  Boolean  @default(false) @map("mark_internal")
+  confidence    Decimal  @default(0) @db.Decimal(5, 3)
+  supportCount  Int      @default(0) @map("support_count")
+  matchCount    Int      @default(0) @map("match_count")
+  conflictCount Int      @default(0) @map("conflict_count")
+  appliedCount  Int      @default(0) @map("applied_count")
+  status        String   @default("suggest")
+  lastSeenAt    DateTime? @map("last_seen_at")
+  metadata      Json?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, patternType, patternValue, parserId, direction])
+  @@index([userId, status])
+  @@index([userId, patternType])
+  @@map("classification_patterns")
 }

@@ -7,6 +7,11 @@ import {
 } from "../duplicates/duplicate-detector";
 import prisma from "../../lib/prisma";
 import { Prisma } from "@prisma/client";
+import {
+  buildClassificationPatternsFromTransactions,
+  ClassificationPatternStatus,
+  ClassificationPatternType,
+} from "./classification-patterns";
 
 // Reserved category names and colors
 const RESERVED_CATEGORIES = {
@@ -34,6 +39,18 @@ export interface ImportRulePayload {
   setCategoryName?: string | null;
   markInternal?: boolean;
   sortOrder?: number;
+}
+
+export interface ClassificationPatternFilters {
+  status?: ClassificationPatternStatus;
+  patternType?: ClassificationPatternType;
+}
+
+export interface ClassificationPatternUpdatePayload {
+  status?: ClassificationPatternStatus;
+  label?: string | null;
+  categoryId?: string | null;
+  markInternal?: boolean;
 }
 
 export class TransactionService {
@@ -196,9 +213,13 @@ export class TransactionService {
       for (const rule of rules) {
         if (!this.ruleMatches(rule, tx)) continue;
 
-        const hasExplicitLinkage = !!tx.linkage;
-        const hasExplicitCategory = !!tx.categoryId;
-        const hasExplicitLabel = !!tx.label && tx.label.trim().length > 0;
+        const metadata = (tx.metadata || {}) as Record<string, any>;
+        const hasLearnedClassification = !!metadata.classificationPatternId;
+        const hasExplicitLinkage = !!tx.linkage && !hasLearnedClassification;
+        const hasExplicitCategory = !!tx.categoryId && !hasLearnedClassification;
+        const hasExplicitLabel =
+          !!tx.label && tx.label.trim().length > 0 && !hasLearnedClassification;
+        let applied = false;
 
         if (rule.markInternal && !hasExplicitLinkage) {
           tx.linkage = {
@@ -206,10 +227,12 @@ export class TransactionService {
             autoDetected: true,
             detectionReason: `Matched import rule: ${rule.name}`,
           };
+          applied = true;
         }
 
         if (rule.setLabel && !hasExplicitLabel) {
           tx.label = rule.setLabel;
+          applied = true;
         }
 
         if (
@@ -220,11 +243,288 @@ export class TransactionService {
           const categoryId = categoryMap.get(rule.setCategoryName.toLowerCase());
           if (categoryId) {
             tx.categoryId = categoryId;
+            applied = true;
           }
+        }
+
+        if (applied) {
+          tx.metadata = {
+            ...((tx.metadata || {}) as Record<string, any>),
+            fixedRuleId: rule.id,
+            fixedRuleName: rule.name,
+            classificationAppliedAt: new Date().toISOString(),
+          };
         }
       }
       return tx;
     });
+  }
+
+  private static classificationPatternKey(pattern: {
+    patternType: string;
+    patternValue: string;
+    parserId?: string | null;
+    direction?: string | null;
+  }) {
+    return [
+      pattern.patternType,
+      pattern.patternValue,
+      pattern.parserId || "__all__",
+      pattern.direction || "none",
+    ].join("::");
+  }
+
+  static async getClassificationPatterns(
+    userId: string,
+    filters: ClassificationPatternFilters = {},
+  ) {
+    return prisma.classificationPattern.findMany({
+      where: {
+        userId,
+        ...(filters.status ? { status: filters.status } : {}),
+        ...(filters.patternType ? { patternType: filters.patternType } : {}),
+      },
+      include: {
+        category: { select: { id: true, name: true, color: true } },
+      },
+      orderBy: [
+        { status: "asc" },
+        { confidence: "desc" },
+        { supportCount: "desc" },
+        { updatedAt: "desc" },
+      ],
+    });
+  }
+
+  static async rebuildClassificationPatterns(userId: string) {
+    const uncategorized = await prisma.category.findFirst({
+      where: { userId, name: { equals: "Uncategorized", mode: "insensitive" } },
+      select: { id: true },
+    });
+
+    const [transactions, existingPatterns] = await Promise.all([
+      prisma.transaction.findMany({
+        where: { userId },
+        select: {
+          description: true,
+          label: true,
+          categoryId: true,
+          amountIn: true,
+          amountOut: true,
+          metadata: true,
+          linkage: true,
+          date: true,
+        },
+        orderBy: { date: "desc" },
+        take: 10000,
+      }),
+      prisma.classificationPattern.findMany({ where: { userId } }),
+    ]);
+
+    const existingByKey = new Map(
+      existingPatterns.map((pattern) => [
+        this.classificationPatternKey(pattern),
+        pattern,
+      ]),
+    );
+    const ignoredCategoryIds = new Set<string>();
+    if (uncategorized?.id) ignoredCategoryIds.add(uncategorized.id);
+
+    const builtPatterns = buildClassificationPatternsFromTransactions({
+      ignoredCategoryIds,
+      transactions: transactions.map((transaction) => ({
+        ...transaction,
+        amountIn: transaction.amountIn ? Number(transaction.amountIn) : null,
+        amountOut: transaction.amountOut ? Number(transaction.amountOut) : null,
+        metadata: (transaction.metadata as Record<string, any> | null) || null,
+        linkage: (transaction.linkage as { type?: string } | null) || null,
+      })),
+    });
+
+    await prisma.$transaction(async (tx) => {
+      await tx.classificationPattern.deleteMany({ where: { userId } });
+      if (builtPatterns.length === 0) return;
+
+      await tx.classificationPattern.createMany({
+        data: builtPatterns.map((pattern) => {
+          const existing = existingByKey.get(this.classificationPatternKey(pattern));
+          const existingMetadata =
+            existing?.metadata && typeof existing.metadata === "object"
+              ? (existing.metadata as Record<string, any>)
+              : {};
+          const userStatusOverride = existingMetadata.userStatusOverride === true;
+
+          return {
+            userId,
+            patternType: pattern.patternType,
+            patternValue: pattern.patternValue,
+            parserId: pattern.parserId,
+            direction: pattern.direction,
+            label: pattern.label,
+            categoryId: pattern.categoryId,
+            markInternal: pattern.markInternal,
+            confidence: pattern.confidence,
+            supportCount: pattern.supportCount,
+            matchCount: pattern.matchCount,
+            conflictCount: pattern.conflictCount,
+            appliedCount: existing?.appliedCount || 0,
+            status: userStatusOverride && existing ? existing.status : pattern.status,
+            lastSeenAt: pattern.lastSeenAt,
+            metadata: {
+              ...pattern.metadata,
+              ...(userStatusOverride ? { userStatusOverride: true } : {}),
+            },
+          };
+        }),
+      });
+    });
+
+    return {
+      success: true,
+      rebuiltCount: builtPatterns.length,
+      patterns: await this.getClassificationPatterns(userId),
+    };
+  }
+
+  static async updateClassificationPattern(
+    userId: string,
+    patternId: string,
+    payload: ClassificationPatternUpdatePayload,
+  ) {
+    const existing = await prisma.classificationPattern.findFirst({
+      where: { id: patternId, userId },
+    });
+    if (!existing) throw new Error("Classification pattern not found");
+
+    const existingMetadata =
+      existing.metadata && typeof existing.metadata === "object"
+        ? (existing.metadata as Record<string, any>)
+        : {};
+
+    return prisma.classificationPattern.update({
+      where: { id: patternId },
+      data: {
+        ...(payload.status !== undefined && { status: payload.status }),
+        ...(payload.label !== undefined && { label: payload.label?.trim() || null }),
+        ...(payload.categoryId !== undefined && { categoryId: payload.categoryId || null }),
+        ...(payload.markInternal !== undefined && { markInternal: payload.markInternal }),
+        metadata: {
+          ...existingMetadata,
+          ...(payload.status !== undefined ? { userStatusOverride: true } : {}),
+        },
+      },
+      include: { category: { select: { id: true, name: true, color: true } } },
+    });
+  }
+
+  static async deleteClassificationPattern(userId: string, patternId: string) {
+    const existing = await prisma.classificationPattern.findFirst({
+      where: { id: patternId, userId },
+      select: { id: true },
+    });
+    if (!existing) throw new Error("Classification pattern not found");
+    await prisma.classificationPattern.delete({ where: { id: patternId } });
+    return { success: true };
+  }
+
+  static async incrementClassificationPatternAppliedCounts(
+    userId: string,
+    patternIds: string[],
+  ) {
+    const counts = new Map<string, number>();
+    for (const patternId of patternIds) {
+      if (!patternId) continue;
+      counts.set(patternId, (counts.get(patternId) || 0) + 1);
+    }
+
+    await Promise.all(
+      Array.from(counts.entries()).map(([id, count]) =>
+        prisma.classificationPattern.updateMany({
+          where: { id, userId },
+          data: { appliedCount: { increment: count } },
+        }),
+      ),
+    );
+  }
+
+  static async getAppliedClassificationSummary(userId: string) {
+    const transactions = await prisma.transaction.findMany({
+      where: { userId },
+      select: { description: true, date: true, metadata: true },
+      orderBy: { date: "desc" },
+      take: 10000,
+    });
+
+    const summary = new Map<
+      string,
+      {
+        id: string;
+        type: "fixed" | "learned";
+        name: string;
+        patternValue?: string | null;
+        appliedCount: number;
+        lastAppliedAt: string | null;
+        exampleDescription: string;
+      }
+    >();
+
+    for (const transaction of transactions) {
+      const metadata =
+        transaction.metadata && typeof transaction.metadata === "object"
+          ? (transaction.metadata as Record<string, any>)
+          : {};
+      const appliedAt = String(
+        metadata.classificationAppliedAt || transaction.date.toISOString(),
+      );
+
+      const entries = [
+        metadata.fixedRuleName
+          ? {
+              key: `fixed:${metadata.fixedRuleId || metadata.fixedRuleName}`,
+              id: String(metadata.fixedRuleId || metadata.fixedRuleName),
+              type: "fixed" as const,
+              name: String(metadata.fixedRuleName),
+              patternValue: null,
+            }
+          : null,
+        metadata.classificationPatternId || metadata.classificationPatternValue
+          ? {
+              key: `learned:${metadata.classificationPatternId || metadata.classificationPatternValue}`,
+              id: String(metadata.classificationPatternId || metadata.classificationPatternValue),
+              type: "learned" as const,
+              name: String(metadata.classificationPatternType || "Learned pattern"),
+              patternValue: String(metadata.classificationPatternValue || ""),
+            }
+          : null,
+      ].filter(Boolean) as Array<{
+        key: string;
+        id: string;
+        type: "fixed" | "learned";
+        name: string;
+        patternValue?: string | null;
+      }>;
+
+      for (const entry of entries) {
+        const current = summary.get(entry.key);
+        if (!current) {
+          summary.set(entry.key, {
+            id: entry.id,
+            type: entry.type,
+            name: entry.name,
+            patternValue: entry.patternValue,
+            appliedCount: 1,
+            lastAppliedAt: appliedAt,
+            exampleDescription: transaction.description,
+          });
+        } else {
+          current.appliedCount += 1;
+        }
+      }
+    }
+
+    return Array.from(summary.values()).sort(
+      (a, b) => b.appliedCount - a.appliedCount,
+    );
   }
 
   private static sanitizeLinkageForTransaction(
@@ -1111,6 +1411,21 @@ export class TransactionService {
             );
           }
         }
+      }
+
+      try {
+        const appliedPatternIds = selectedTransactions
+          .map((transaction) =>
+            String(transaction.metadata?.classificationPatternId || ""),
+          )
+          .filter(Boolean);
+        await this.incrementClassificationPatternAppliedCounts(userId, appliedPatternIds);
+        await this.rebuildClassificationPatterns(userId);
+      } catch (classificationError) {
+        console.error(
+          "Failed to refresh classification patterns after import:",
+          classificationError,
+        );
       }
 
       return {

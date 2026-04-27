@@ -1,4 +1,4 @@
-export type SuggestionSource = "history" | "heuristic" | "rule";
+export type SuggestionSource = "history" | "heuristic" | "rule" | "learned_pattern";
 
 export interface ParsedImportTransaction {
   date: string;
@@ -33,6 +33,11 @@ export interface AutoSuggestion {
   source: SuggestionSource;
   confidence: number;
   reason: string;
+  patternId?: string;
+  patternType?: string;
+  patternValue?: string;
+  supportCount?: number;
+  autoApply?: boolean;
 }
 
 export interface AutoCategorizationContext {

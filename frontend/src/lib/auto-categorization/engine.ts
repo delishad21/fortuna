@@ -71,11 +71,22 @@ export async function runAutoCategorization(
       metadata: {
         ...(transaction.metadata || {}),
         suggestionReason: candidate.reason,
+        ...(candidate.patternId
+          ? {
+              classificationPatternId: candidate.patternId,
+              classificationPatternType: candidate.patternType,
+              classificationPatternValue: candidate.patternValue,
+            }
+          : {}),
       },
       suggestionApplied: false,
     };
 
-    if (!settings.enabled || candidate.confidence < settings.threshold) {
+    if (
+      !settings.enabled ||
+      candidate.confidence < settings.threshold ||
+      candidate.autoApply === false
+    ) {
       return next;
     }
 
@@ -98,6 +109,13 @@ export async function runAutoCategorization(
     if (candidate.categoryId && canApplyCategory(next)) {
       next.categoryId = candidate.categoryId;
       applied = true;
+    }
+
+    if (applied && candidate.patternId) {
+      next.metadata = {
+        ...(next.metadata || {}),
+        classificationAppliedAt: new Date().toISOString(),
+      };
     }
 
     next.suggestionApplied = applied;

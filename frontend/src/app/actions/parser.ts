@@ -124,6 +124,7 @@ export async function parseFile(formData: FormData): Promise<ParseResult> {
             const ruleParserId = rule.parserId?.trim();
             if (ruleParserId && ruleParserId !== result.parserId) continue;
             if (!ruleMatches(rule, next.description || "")) continue;
+            let applied = false;
 
             if (rule.markInternal && !next.linkage) {
               next.linkage = {
@@ -131,10 +132,12 @@ export async function parseFile(formData: FormData): Promise<ParseResult> {
                 autoDetected: true,
                 detectionReason: `Matched import rule: ${rule.name}`,
               };
+              applied = true;
             }
 
             if (rule.setLabel && (!next.label || !next.label.trim())) {
               next.label = rule.setLabel;
+              applied = true;
             }
 
             if (
@@ -147,7 +150,17 @@ export async function parseFile(formData: FormData): Promise<ParseResult> {
               );
               if (categoryId) {
                 next.categoryId = categoryId;
+                applied = true;
               }
+            }
+
+            if (applied) {
+              next.metadata = {
+                ...(next.metadata || {}),
+                fixedRuleId: rule.id,
+                fixedRuleName: rule.name,
+                classificationAppliedAt: new Date().toISOString(),
+              };
             }
           }
           return next;
