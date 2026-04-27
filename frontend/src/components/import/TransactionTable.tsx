@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useRef, useMemo, Fragment } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   CheckCircle,
@@ -180,8 +180,12 @@ export function TransactionTable({
   };
 
   const handleCopyAllDescriptionsToLabels = () => {
-    transactions.forEach((transaction, index) => {
-      onUpdateTransaction(index, "label", transaction.description);
+    const updates = transactions.map((transaction, index) => ({
+      index,
+      label: transaction.description,
+    }));
+    updates.forEach(({ index, label }) => {
+      onUpdateTransaction(index, "label", label);
     });
   };
 
@@ -234,7 +238,11 @@ export function TransactionTable({
     document.removeEventListener("mouseup", handleResizeEnd);
   }, [handleResizeMove]);
 
-  const virtualItems = virtualizer.getVirtualItems();
+  const virtualItems = useMemo(
+    () => virtualizer.getVirtualItems(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [virtualizer.getVirtualItems(), filteredData.length],
+  );
 
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -440,9 +448,8 @@ export function TransactionTable({
                 const isExpanded = expandedRows.has(index);
 
                 return (
-                  <>
+                  <Fragment key={`row-${index}`}>
                     <tr
-                      key={`row-${index}`}
                       className={`border-b border-stroke dark:border-dark-3 hover:bg-gray-1 dark:hover:bg-dark-3/50 transition-colors group ${
                         hasDuplicates
                           ? "bg-orange-light-4 dark:bg-orange-dark-3/20"
@@ -685,7 +692,7 @@ export function TransactionTable({
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 );
               })}
             </tbody>
