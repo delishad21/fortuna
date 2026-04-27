@@ -272,3 +272,57 @@ export async function checkParserServiceHealth() {
     return false;
   }
 }
+
+export interface MultiFileParseResult {
+  filename: string;
+  success: boolean;
+  parserId: string;
+  transactions: ParseResult["transactions"];
+  count: number;
+  error?: string;
+  accountIdentifier?: string;
+}
+
+export async function parseMultipleFiles(
+  files: File[],
+  parserId: string,
+): Promise<MultiFileParseResult[]> {
+  const results: MultiFileParseResult[] = [];
+
+  for (const file of files) {
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("parserId", parserId);
+
+      const parseResult = await parseFile(formData);
+
+      const detectedAccount =
+        (parseResult as any)?.accountIdentifier ||
+        parseResult.transactions[0]?.accountIdentifier ||
+        parseResult.transactions[0]?.accountNumber ||
+        parseResult.transactions[0]?.metadata?.accountIdentifier ||
+        parseResult.transactions[0]?.metadata?.accountNumber;
+
+      results.push({
+        filename: file.name,
+        success: true,
+        parserId: parseResult.parserId,
+        transactions: parseResult.transactions,
+        count: parseResult.count,
+        accountIdentifier: detectedAccount,
+      });
+    } catch (error) {
+      results.push({
+        filename: file.name,
+        success: false,
+        parserId,
+        transactions: [],
+        count: 0,
+        error: error instanceof Error ? error.message : "Failed to parse file",
+      });
+    }
+  }
+
+  return results;
+}

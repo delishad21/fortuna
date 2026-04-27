@@ -32,10 +32,12 @@ import {
   ArrowDownToLine,
   ArrowRightLeft,
   ArrowUpFromLine,
+  FileText,
   Link2,
   Pencil,
   Receipt,
   Upload,
+  X,
 } from "lucide-react";
 import type { ParserOption } from "@/lib/parsers";
 
@@ -95,7 +97,7 @@ export function TripImportReviewClient({
   const [localCategories, setLocalCategories] = useState(categories);
   const [isBusy, setIsBusy] = useState(false);
   const [isAddCategoryModalOpen, setIsAddCategoryModalOpen] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [mainFiles, setMainFiles] = useState<File[]>([]);
   const [supplementalFile, setSupplementalFile] = useState<File | null>(null);
   const [tripImportStep, setTripImportStep] = useState<"setup" | "review">(
     "setup",
@@ -107,6 +109,7 @@ export function TripImportReviewClient({
   const [tripImportSelectedIndices, setTripImportSelectedIndices] = useState<
     Set<number>
   >(new Set());
+  const [parseErrors, setParseErrors] = useState<Map<string, string>>(new Map());
   const [importForm, setImportForm] = useState({
     parserId: tripParserOptions[0]?.id || "",
     walletId: "",
@@ -943,72 +946,121 @@ export function TripImportReviewClient({
   };
 
   const handleStartTripImportReview = async () => {
-    if (!selectedFile || !importForm.parserId) return;
+    if (mainFiles.length === 0 || !importForm.parserId) return;
     setIsBusy(true);
+    setParseErrors(new Map());
     try {
-      const formData = new FormData();
-      formData.append("file", selectedFile);
-      formData.append("parserId", importForm.parserId);
-      if (isRevolutParser && supplementalFile) {
-        formData.append("supplementalFile", supplementalFile);
-      }
-      const parsed = (await parseFile(formData)) as ImportParseResult;
+      let parsedResults: ImportParseResult[] = [];
 
-      const normalized = (parsed.transactions || []).map((tx) => {
-        const metadata =
-          tx.metadata && typeof tx.metadata === "object"
-            ? { ...(tx.metadata as Record<string, unknown>) }
-            : {};
-        const transactionType = String(metadata.transactionType || "").toLowerCase();
-        const amountIn = Number(tx.amountIn ?? 0) || 0;
-        const amountOut = Number(tx.amountOut ?? 0) || 0;
-        const netTopupAmount =
-          amountIn > 0 ? Math.max(0, amountIn - amountOut) : 0;
-        const topupCurrency = String(
-          metadata.currency || trip.baseCurrency,
-        ).toUpperCase();
-        const defaultTopupLabel =
-          transactionType === "topup" && netTopupAmount > 0
-            ? `Top up of (${topupCurrency}) ${netTopupAmount.toFixed(2)}`
-            : undefined;
-        const fundingInDisabled = metadata.fundingInDisabled === true;
-        const normalizedTx: ImportTransaction = {
-          ...tx,
-          label:
-            tx.label && tx.label.trim().length > 0
-              ? tx.label
-              : defaultTopupLabel,
-          entryTypeOverride:
-            tx.entryTypeOverride ||
-            (transactionType === "topup" && !fundingInDisabled
-              ? "funding_in"
-              : undefined),
-          metadata,
-        };
-        if (
-          getTransactionType(normalizedTx) === "conversion" &&
-          tx.entryTypeOverride !== "funding_out"
-        ) {
-          const existingConversionReview =
-            metadata.conversionReview &&
-            typeof metadata.conversionReview === "object"
-              ? (metadata.conversionReview as Record<string, unknown>)
-              : null;
-          if (!existingConversionReview) {
-            metadata.conversionReview = {
-              mode: "unreviewed",
-              linkedFundingId: null,
-            };
+      if (mainFiles.length === 1 && isRevolutParser && supplementalFile) {
+        const formData = new FormData();
+        formData.append("file", mainFiles[0]);
+        formData.append("parserId", importForm.parserId);
+        formData.append("supplementalFile", supplementalFile);
+        const parsed = (await parseFile(formData)) as ImportParseResult;
+        parsedResults = [parsed];
+      } else {
+        const { parseMultipleFiles } = await import("@/app/actions/parser");
+        const results = await parseMultipleFiles(mainFiles, importForm.parserId);
+
+        const errors = new Map<string, string>();
+        results.forEach((result) => {
+          if (!result.success && result.error) {
+            errors.set(result.filename, result.error);
           }
+        });
+
+        if (errors.size > 0) {
+          setParseErrors(errors);
         }
-        return normalizedTx;
+
+        parsedResults = results
+          .filter((r) => r.success)
+          .map((r) => ({
+            success: true,
+            filename: r.filename,
+            parserId: r.parserId,
+            transactions: r.transactions,
+            count: r.count,
+          }));
+      }
+
+      if (parsedResults.length === 0) {
+        showModal(
+          "error",
+          "Parse Failed",
+          "All files failed to parse. Please check the file formats.",
+        );
+        return;
+      }
+
+      const allTransactions: ImportTransaction[] = [];
+      parsedResults.forEach((parsed) => {
+        const normalized = (parsed.transactions || []).map((tx) => {
+          const metadata =
+            tx.metadata && typeof tx.metadata === "object"
+              ? { ...(tx.metadata as Record<string, unknown>) }
+              : {};
+          const transactionType = String(metadata.transactionType || "").toLowerCase();
+          const amountIn = Number(tx.amountIn ?? 0) || 0;
+          const amountOut = Number(tx.amountOut ?? 0) || 0;
+          const netTopupAmount =
+            amountIn > 0 ? Math.max(0, amountIn - amountOut) : 0;
+          const topupCurrency = String(
+            metadata.currency || trip.baseCurrency,
+          ).toUpperCase();
+          const defaultTopupLabel =
+            transactionType === "topup" && netTopupAmount > 0
+              ? `Top up of (${topupCurrency}) ${netTopupAmount.toFixed(2)}`
+              : undefined;
+          const fundingInDisabled = metadata.fundingInDisabled === true;
+          const normalizedTx: ImportTransaction = {
+            ...tx,
+            label:
+              tx.label && tx.label.trim().length > 0
+                ? tx.label
+                : defaultTopupLabel,
+            entryTypeOverride:
+              tx.entryTypeOverride ||
+              (transactionType === "topup" && !fundingInDisabled
+                ? "funding_in"
+                : undefined),
+            metadata,
+          };
+          if (
+            getTransactionType(normalizedTx) === "conversion" &&
+            tx.entryTypeOverride !== "funding_out"
+          ) {
+            const existingConversionReview =
+              metadata.conversionReview &&
+              typeof metadata.conversionReview === "object"
+                ? (metadata.conversionReview as Record<string, unknown>)
+                : null;
+            if (!existingConversionReview) {
+              metadata.conversionReview = {
+                mode: "unreviewed",
+                linkedFundingId: null,
+              };
+            }
+          }
+          return normalizedTx;
+        });
+        allTransactions.push(...normalized);
       });
 
-      setTripImportParsedData(parsed);
-      setTripImportEditedTransactions(normalized);
-      setTripImportSelectedIndices(new Set(normalized.map((_, index) => index)));
+      const aggregatedParsed: ImportParseResult = {
+        success: true,
+        filename: parsedResults.map((p) => p.filename).join("; "),
+        parserId: importForm.parserId,
+        transactions: allTransactions,
+        count: allTransactions.length,
+      };
+
+      setTripImportParsedData(aggregatedParsed);
+      setTripImportEditedTransactions(allTransactions);
+      setTripImportSelectedIndices(new Set(allTransactions.map((_, index) => index)));
       setConversionReviewOpen(
-        normalized.some(
+        allTransactions.some(
           (transaction) =>
             isConversionTransaction(transaction) &&
             !isConversionDecisionResolved(transaction),
@@ -1264,7 +1316,7 @@ export function TripImportReviewClient({
                   <div className="min-h-0 min-w-0 flex flex-col gap-3">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                        Statement file
+                        Statement file{mainFiles.length > 1 ? `s (${mainFiles.length})` : ""}
                       </label>
                       <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">
                         Required
@@ -1272,11 +1324,46 @@ export function TripImportReviewClient({
                     </div>
                     <div className="flex-1 min-h-0 min-w-0">
                       <FileUploadDropzone
-                        file={selectedFile}
-                        onFileSelect={setSelectedFile}
+                        file={mainFiles[0] || null}
+                        onFileSelect={(file) => {
+                          if (file) {
+                            setMainFiles([...mainFiles, file]);
+                          }
+                        }}
                         accept=".pdf,.csv"
                       />
                     </div>
+                    {mainFiles.length > 0 && (
+                      <div className="flex flex-col gap-1 max-h-24 overflow-y-auto">
+                        {mainFiles.map((f, idx) => (
+                          <div
+                            key={`${f.name}-${idx}`}
+                            className="flex items-center gap-2 text-xs"
+                          >
+                            <FileText className="h-3 w-3 text-primary flex-shrink-0" />
+                            <span className="flex-1 truncate text-dark dark:text-white">
+                              {f.name}
+                            </span>
+                            <span className="text-dark-5 dark:text-dark-6">
+                              ({(f.size / 1024).toFixed(1)} KB)
+                            </span>
+                            <button
+                              onClick={() =>
+                                setMainFiles(mainFiles.filter((_, i) => i !== idx))
+                              }
+                              className="text-red hover:text-red/80 flex-shrink-0"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                        {parseErrors.size > 0 && (
+                          <div className="mt-1 text-xs text-red">
+                            {parseErrors.size} file(s) failed to parse
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {isRevolutParser && (
@@ -1311,7 +1398,7 @@ export function TripImportReviewClient({
                 <Button
                   variant="primary"
                   onClick={handleStartTripImportReview}
-                  disabled={isBusy || !selectedFile || !importForm.parserId}
+                  disabled={isBusy || mainFiles.length === 0 || !importForm.parserId}
                 >
                   {isBusy ? "Parsing..." : "Review Import"}
                 </Button>
@@ -1320,7 +1407,7 @@ export function TripImportReviewClient({
           </div>
 
           <div className="flex-1 min-w-0">
-            <FilePreview file={selectedFile} />
+            <FilePreview file={mainFiles[0] || null} />
           </div>
         </div>
       )}

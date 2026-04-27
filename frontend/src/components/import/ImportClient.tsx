@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { parseFile } from "@/app/actions/parser";
+import { parseMultipleFiles, type MultiFileParseResult } from "@/app/actions/parser";
 import { createCategory } from "@/app/actions/categories";
 import { upsertAccountNumber } from "@/app/actions/accountNumbers";
 import {
@@ -17,7 +17,7 @@ import { AddCategoryModal } from "@/components/ui/AddCategoryModal";
 import { Modal, type ModalType } from "@/components/ui/Modal";
 import { NewAccountColorModal } from "@/components/ui/NewAccountColorModal";
 import { AddAccountIdentifierModal } from "@/components/ui/AddAccountIdentifierModal";
-import { UploadSection } from "./UploadSection";
+import { UploadSection, type FileUploadState } from "./UploadSection";
 import { TransactionTable } from "@/components/transaction-table/TransactionTable";
 import { ReimbursementSelectorModal } from "./ReimbursementSelectorModal";
 import type { TransactionLinkage } from "@/components/transaction-table/types";
@@ -72,14 +72,6 @@ interface Category {
   color: string;
 }
 
-interface ParseResult {
-  success: boolean;
-  filename: string;
-  parserId: string;
-  transactions: Transaction[];
-  count: number;
-}
-
 interface ParserOption {
   value: string;
   label: string;
@@ -103,14 +95,13 @@ export function ImportClient({
   initialAccountNumbers,
   parserOptions,
 }: ImportClientProps) {
-  // Stage management
   const [stage, setStage] = useState<ImportStage>("upload");
 
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<FileUploadState[]>([]);
   const [selectedParser, setSelectedParser] = useState<string>(
     parserOptions[0]?.value || "generic_csv",
   );
-  const [parsedData, setParsedData] = useState<ParseResult | null>(null);
+  const [parseResults, setParseResults] = useState<MultiFileParseResult[]>([]);
   const [editedTransactions, setEditedTransactions] = useState<Transaction[]>(
     [],
   );
@@ -125,6 +116,7 @@ export function ImportClient({
   const [categories, setCategories] = useState<Category[]>(initialCategories);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [accountMismatchError, setAccountMismatchError] = useState<string | null>(null);
   const [isAddAccountModalOpen, setIsAddAccountModalOpen] = useState(false);
   const [isPaylahPromptOpen, setIsPaylahPromptOpen] = useState(false);
   const [isPaylahPromptConfirming, setIsPaylahPromptConfirming] =
@@ -133,12 +125,10 @@ export function ImportClient({
     useState(false);
   const paylahPromptConfirmedRef = useRef(false);
 
-  // Selection state - all transactions selected by default after parsing
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(
     new Set(),
   );
 
-  // Duplicate detection state
   const [duplicates, setDuplicates] = useState<Map<number, DuplicateMatch[]>>(
     new Map(),
   );
@@ -148,7 +138,6 @@ export function ImportClient({
   const [isCheckingDuplicates, setIsCheckingDuplicates] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
 
-  // Modal state
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
     type: ModalType;
@@ -161,7 +150,6 @@ export function ImportClient({
     message: "",
   });
 
-  // Reimbursement selector modal state
   const [reimbursementModalOpen, setReimbursementModalOpen] = useState(false);
   const [reimbursementTargetIndex, setReimbursementTargetIndex] = useState<
     number | null
@@ -175,7 +163,6 @@ export function ImportClient({
     setModalState((prev) => ({ ...prev, isOpen: false }));
   };
 
-  // Handle linkage changes (internal/reimbursement marking)
   const handleLinkageChange = (
     index: number,
     linkage: TransactionLinkage | null,
@@ -195,9 +182,6 @@ export function ImportClient({
     const updated = [...editedTransactions];
     updated[index] = { ...updated[index], linkage };
 
-    // Auto-assign category based on linkage type
-    // The actual category ID will be assigned on commit by the backend
-    // For now, we just mark it and clear any user-set category
     if (linkage?.type === "internal" || linkage?.type === "reimbursement") {
       const reservedName =
         linkage.type === "internal" ? "Internal" : "Reimbursement";
@@ -220,7 +204,6 @@ export function ImportClient({
     setEditedTransactions(updated);
   };
 
-  // Open reimbursement selector modal
   const handleOpenReimbursementSelector = (index: number) => {
     const transaction = editedTransactions[index];
     const inflow = transaction?.amountIn ?? 0;
@@ -236,7 +219,6 @@ export function ImportClient({
     setReimbursementModalOpen(true);
   };
 
-  // Confirm reimbursement selection
   const handleConfirmReimbursement = (linkage: TransactionLinkage) => {
     if (reimbursementTargetIndex !== null) {
       const currentLinkage =
@@ -263,62 +245,116 @@ export function ImportClient({
     setReimbursementTargetIndex(null);
   };
 
+  const validateSameAccount = (
+    results: MultiFileParseResult[],
+  ): { valid: boolean; mismatches: Array<{ filename: string; account: string }> } => {
+    const accountsWithFilename = results
+      .filter((r) => r.success && r.accountIdentifier)
+      .map((r) => ({ filename: r.filename, account: r.accountIdentifier! }));
+
+    if (accountsWithFilename.length <= 1) {
+      return { valid: true, mismatches: [] };
+    }
+
+    const firstAccount = accountsWithFilename[0].account;
+    const mismatches = accountsWithFilename.filter(
+      (a) => a.account !== firstAccount,
+    );
+
+    return {
+      valid: mismatches.length === 0,
+      mismatches,
+    };
+  };
+
   const performUpload = async () => {
-    if (!file) {
-      setError("Please select a file");
+    const pendingFiles = files.filter(
+      (f) => f.status === "pending" || f.status === "error",
+    );
+    if (pendingFiles.length === 0) {
+      setError("No files to parse");
       return;
     }
 
     setIsUploading(true);
     setError(null);
-    setParsedData(null);
+    setAccountMismatchError(null);
+    setParseResults([]);
 
-    // Clear all state when parsing a new file
-    setDuplicates(new Map());
-    setSelectedIndices(new Set());
-    setNonDuplicateIndices(new Set());
+    setFiles((prev) =>
+      prev.map((f) =>
+        f.status === "pending" || f.status === "error"
+          ? { ...f, status: "parsing" as const, error: undefined }
+          : f,
+      ),
+    );
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("parserId", selectedParser);
+      const fileList = pendingFiles.map((f) => f.file);
+      const results = await parseMultipleFiles(fileList, selectedParser);
 
-      const result = await parseFile(formData);
+      const updatedFiles = files.map((f) => {
+        if (f.status !== "parsing") return f;
+        const result = results.find((r) => r.filename === f.file.name);
+        if (!result) return { ...f, status: "error" as const, error: "Not found in results" };
+        if (!result.success) {
+          return { ...f, status: "error" as const, error: result.error };
+        }
+        return { ...f, status: "success" as const };
+      });
+      setFiles(updatedFiles);
+      setParseResults(results);
 
-      if (!result || !result.transactions) {
-        throw new Error("Invalid response from parser service");
+      const successfulResults = results.filter((r) => r.success);
+      if (successfulResults.length === 0) {
+        setError("All files failed to parse");
+        return;
       }
 
-      setParsedData(result);
+      const accountValidation = validateSameAccount(successfulResults);
+      if (!accountValidation.valid) {
+        const mismatchList = accountValidation.mismatches
+          .map((m) => `${m.filename} → ${m.account}`)
+          .join(", ");
+        setAccountMismatchError(
+          `Files resolved to different accounts (${mismatchList}). Please import separately.`,
+        );
+        setStage("upload");
+        return;
+      }
 
-      const initialTransactions = result.transactions.map((t) => ({
+      const allTransactions: Transaction[] = successfulResults.flatMap(
+        (result) => result.transactions,
+      );
+
+      const initialTransactions = allTransactions.map((t) => ({
         ...t,
         label: t.label && t.label.trim().length > 0 ? t.label : undefined,
       }));
       setEditedTransactions(initialTransactions);
 
-      // Select all transactions by default
-      setSelectedIndices(new Set(initialTransactions.map((_, index) => index)));
+      setSelectedIndices(
+        new Set(initialTransactions.map((_, index) => index)),
+      );
 
-      // Detect and handle account identifier (from transaction root or metadata)
+      const firstResult = successfulResults[0];
       const detectedAccount =
-        (result as any)?.accountIdentifier ||
-        (result.transactions[0] as any)?.accountIdentifier ||
-        result.transactions[0]?.accountNumber ||
-        result.transactions[0]?.metadata?.accountIdentifier ||
-        result.transactions[0]?.metadata?.accountNumber;
+        firstResult.accountIdentifier ||
+        firstResult.transactions[0]?.accountIdentifier ||
+        firstResult.transactions[0]?.accountNumber ||
+        firstResult.transactions[0]?.metadata?.accountIdentifier ||
+        firstResult.transactions[0]?.metadata?.accountNumber;
+
       if (detectedAccount) {
         const existingAccount = accountIdentifiers.find(
           (acc) => acc.accountIdentifier === detectedAccount,
         );
 
         if (existingAccount) {
-          // Existing account - auto-select with saved color
           setAccountIdentifier(existingAccount.accountIdentifier);
           setAccountColor(existingAccount.color);
           setIsNewAccount(false);
         } else {
-          // New account - assign random color and prompt user
           const randomColor =
             PRESET_COLORS[Math.floor(Math.random() * PRESET_COLORS.length)];
           setAccountIdentifier(detectedAccount);
@@ -328,10 +364,16 @@ export function ImportClient({
         }
       }
 
-      // Move to review stage
       setStage("review");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to parse file");
+      setError(err instanceof Error ? err.message : "Failed to parse files");
+      setFiles((prev) =>
+        prev.map((f) =>
+          f.status === "parsing"
+            ? { ...f, status: "error" as const, error: "Parse failed" }
+            : f,
+        ),
+      );
     } finally {
       setIsUploading(false);
     }
@@ -370,8 +412,11 @@ export function ImportClient({
   };
 
   const handleUpload = async () => {
-    if (!file) {
-      setError("Please select a file");
+    const pendingFiles = files.filter(
+      (f) => f.status === "pending" || f.status === "error",
+    );
+    if (pendingFiles.length === 0) {
+      setError("No files to parse");
       return;
     }
 
@@ -419,10 +464,7 @@ export function ImportClient({
 
   const handleAddCategory = async (name: string, color: string) => {
     try {
-      // Save to database via server action
       const newCategory = await createCategory(name, color);
-
-      // Update local state with the database-created category
       setCategories([...categories, newCategory]);
     } catch (error) {
       console.error("Failed to create category:", error);
@@ -435,13 +477,12 @@ export function ImportClient({
   };
 
   const handleImportTransactions = async () => {
-    if (!parsedData || selectedIndices.size === 0) return;
+    if (parseResults.length === 0 || selectedIndices.size === 0) return;
 
     setIsCheckingDuplicates(true);
     setError(null);
 
     try {
-      // Get only the selected transactions
       const selectedTransactions = Array.from(selectedIndices)
         .sort((a, b) => a - b)
         .map((index) => ({
@@ -449,11 +490,9 @@ export function ImportClient({
           date: new Date(editedTransactions[index].date),
         }));
 
-      // Check for duplicates
       const result = await checkImportDuplicates(selectedTransactions);
 
       if (result.duplicates.length > 0) {
-        // Map duplicate indices back to original transaction indices
         const duplicateMap = new Map<number, DuplicateMatch[]>();
         result.duplicates.forEach(({ index, matches }) => {
           const originalIndex = Array.from(selectedIndices)[index];
@@ -461,7 +500,6 @@ export function ImportClient({
         });
         setDuplicates(duplicateMap);
 
-        // Store non-duplicate indices for later import
         const duplicateOriginalIndices = new Set(
           result.duplicates.map(
             ({ index }) => Array.from(selectedIndices)[index],
@@ -474,13 +512,10 @@ export function ImportClient({
         );
         setNonDuplicateIndices(nonDups);
 
-        // Clear current selection - user will select duplicates to import
         setSelectedIndices(new Set());
 
-        // Move to duplicates stage
         setStage("duplicates");
       } else {
-        // No duplicates - import all selected
         await performImport(selectedIndices);
       }
     } catch (err) {
@@ -493,12 +528,13 @@ export function ImportClient({
   };
 
   const performImport = async (indices: Set<number>) => {
-    if (!parsedData || indices.size === 0) return;
+    if (parseResults.length === 0 || indices.size === 0) return;
 
     setIsImporting(true);
     setError(null);
 
     try {
+      const firstParseResult = parseResults[0];
       const result = await commitImport(
         editedTransactions.map((t) => ({
           ...t,
@@ -514,9 +550,9 @@ export function ImportClient({
         })),
         Array.from(indices),
         {
-          filename: parsedData.filename,
-          fileType: file?.type || "unknown",
-          parserId: parsedData.parserId,
+          filename: parseResults.map((r) => r.filename).join("; "),
+          fileType: "multiple",
+          parserId: firstParseResult.parserId,
         },
       );
 
@@ -526,14 +562,7 @@ export function ImportClient({
           "Import Successful",
           `Successfully imported ${result.importedCount} transaction${result.importedCount !== 1 ? "s" : ""} into your account!`,
         );
-        // Reset to upload stage
-        setStage("upload");
-        setParsedData(null);
-        setEditedTransactions([]);
-        setFile(null);
-        setDuplicates(new Map());
-        setSelectedIndices(new Set());
-        setNonDuplicateIndices(new Set());
+        resetImportFlow();
       } else {
         throw new Error(result.error || "Import failed");
       }
@@ -583,7 +612,6 @@ export function ImportClient({
   };
 
   const handleConfirmImport = async () => {
-    // Import both selected duplicates AND non-duplicates
     const allIndicesToImport = new Set([
       ...selectedIndices,
       ...nonDuplicateIndices,
@@ -597,9 +625,9 @@ export function ImportClient({
 
   const resetImportFlow = () => {
     setStage("upload");
-    setParsedData(null);
+    setParseResults([]);
     setEditedTransactions([]);
-    setFile(null);
+    setFiles([]);
     setDuplicates(new Map());
     setSelectedIndices(new Set());
     setNonDuplicateIndices(new Set());
@@ -607,10 +635,10 @@ export function ImportClient({
     setAccountColor("#6366f1");
     setIsNewAccount(false);
     setShowNewAccountModal(false);
+    setAccountMismatchError(null);
   };
 
   const handleBackFromDuplicates = () => {
-    // Go back to review stage, restore original selection
     setStage("review");
     const allOriginalIndices = new Set([
       ...selectedIndices,
@@ -660,29 +688,37 @@ export function ImportClient({
     setIsAddAccountModalOpen(true);
   };
 
+  const aggregatedParsedData = parseResults.length > 0
+    ? {
+        success: true,
+        filename: parseResults.map((r) => r.filename).join("; "),
+        parserId: parseResults[0]?.parserId || selectedParser,
+        transactions: editedTransactions,
+        count: editedTransactions.length,
+      }
+    : null;
+
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {stage === "upload" && (
         <div className="flex-1 p-8 overflow-hidden">
           <UploadSection
-            file={file}
+            files={files}
             selectedParser={selectedParser}
             parserOptions={parserOptions}
             isUploading={isUploading}
             error={error}
-            onFileSelect={(file) => {
-              setFile(file);
-              setError(null);
-            }}
+            accountMismatchError={accountMismatchError}
+            onFilesChange={setFiles}
             onParserChange={setSelectedParser}
             onUpload={handleUpload}
           />
         </div>
       )}
 
-      {(stage === "review" || stage === "duplicates") && parsedData && (
+      {(stage === "review" || stage === "duplicates") && aggregatedParsedData && (
         <TransactionTable
-          parsedData={parsedData}
+          parsedData={aggregatedParsedData}
           transactions={editedTransactions}
           categories={categories}
           accountIdentifier={accountIdentifier}
