@@ -1048,6 +1048,10 @@ export function TripImportReviewClient({
         allTransactions.push(...normalized);
       });
 
+      allTransactions.sort(
+        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+      );
+
       const aggregatedParsed: ImportParseResult = {
         success: true,
         filename: parsedResults.map((p) => p.filename).join("; "),

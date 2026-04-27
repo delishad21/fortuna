@@ -327,7 +327,11 @@ export function ImportClient({
         (result) => result.transactions,
       );
 
-      const initialTransactions = allTransactions.map((t) => ({
+      const sortedTransactions = allTransactions.sort(
+        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+      );
+
+      const initialTransactions = sortedTransactions.map((t) => ({
         ...t,
         label: t.label && t.label.trim().length > 0 ? t.label : undefined,
       }));
