@@ -113,7 +113,6 @@ export function ImportClient({
     AccountIdentifier[]
   >(initialAccountNumbers);
   const [isAddCategoryModalOpen, setIsAddCategoryModalOpen] = useState(false);
-  const [pendingCategoryRowIndex, setPendingCategoryRowIndex] = useState<number | null>(null);
   const [categories, setCategories] = useState<Category[]>(initialCategories);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -471,10 +470,6 @@ export function ImportClient({
     try {
       const newCategory = await createCategory(name, color);
       setCategories([...categories, newCategory]);
-      if (pendingCategoryRowIndex !== null) {
-        handleUpdateTransaction(pendingCategoryRowIndex, "categoryId", newCategory.id);
-      }
-      setPendingCategoryRowIndex(null);
     } catch (error) {
       console.error("Failed to create category:", error);
       showModal(
@@ -751,10 +746,7 @@ export function ImportClient({
           onSelectVisible={handleSelectVisible}
           onDeselectVisible={handleDeselectVisible}
           onToggleSelection={handleToggleSelection}
-          onAddCategoryClick={() => {
-            setIsAddCategoryModalOpen(true);
-            setPendingCategoryRowIndex(null);
-          }}
+          onAddCategoryClick={() => setIsAddCategoryModalOpen(true)}
           onBack={
             stage === "review" ? handleBackFromReview : handleBackFromDuplicates
           }

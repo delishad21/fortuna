@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useMemo, Fragment } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useState, useCallback, useRef, Fragment } from "react";
 import {
   CheckCircle,
   ArrowLeft,
@@ -75,7 +74,7 @@ interface TransactionTableProps {
   onSelectAll?: () => void;
   onDeselectAll?: () => void;
   onToggleSelection?: (index: number) => void;
-  onAddCategoryClick: (rowIndex?: number) => void;
+  onAddCategoryClick: () => void;
   onBack?: () => void;
 }
 
@@ -102,7 +101,6 @@ const NEXT_COLUMN: Record<string, string | null> = {
 };
 
 const MIN_COLUMN_WIDTH = 60;
-const BASE_ROW_HEIGHT = 52;
 
 export function TransactionTable({
   parsedData,
@@ -127,43 +125,12 @@ export function TransactionTable({
 }: TransactionTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const [columnWidths, setColumnWidths] = useState(DEFAULT_COLUMN_WIDTHS);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const resizingColumn = useRef<string | null>(null);
   const nextColumn = useRef<string | null>(null);
   const startX = useRef<number>(0);
   const startWidthLeft = useRef<number>(0);
   const startWidthRight = useRef<number>(0);
-
-  const filteredData = useMemo(() => {
-    return transactions
-      .map((transaction, index) => ({ transaction, index }))
-      .filter(({ index }) =>
-        showDuplicatesOnly ? duplicates?.has(index) : true,
-      );
-  }, [transactions, showDuplicatesOnly, duplicates]);
-
-  const rowheights = useMemo(() => {
-    const heights: number[] = [];
-    filteredData.forEach(({ index }) => {
-      let height = BASE_ROW_HEIGHT;
-      if (expandedRows.has(index)) {
-        height += 180;
-      }
-      if (duplicates?.has(index)) {
-        height += 120;
-      }
-      heights.push(height);
-    });
-    return heights;
-  }, [filteredData, expandedRows, duplicates]);
-
-  const virtualizer = useVirtualizer({
-    count: filteredData.length,
-    getScrollElement: () => scrollContainerRef.current,
-    estimateSize: (i) => rowheights[i] || BASE_ROW_HEIGHT,
-    overscan: 5,
-  });
 
   const toggleRowExpanded = (index: number) => {
     const newExpanded = new Set(expandedRows);
@@ -180,12 +147,8 @@ export function TransactionTable({
   };
 
   const handleCopyAllDescriptionsToLabels = () => {
-    const updates = transactions.map((transaction, index) => ({
-      index,
-      label: transaction.description,
-    }));
-    updates.forEach(({ index, label }) => {
-      onUpdateTransaction(index, "label", label);
+    transactions.forEach((transaction, index) => {
+      onUpdateTransaction(index, "label", transaction.description);
     });
   };
 
@@ -238,12 +201,6 @@ export function TransactionTable({
     document.removeEventListener("mouseup", handleResizeEnd);
   }, [handleResizeMove]);
 
-  const virtualItems = useMemo(
-    () => virtualizer.getVirtualItems(),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [virtualizer.getVirtualItems(), filteredData.length],
-  );
-
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
       {/* Toolbar */}
@@ -281,6 +238,7 @@ export function TransactionTable({
             )}
 
             {showDuplicatesOnly ? (
+              /* Duplicate handling stage */
               <div className="flex items-center gap-2">
                 <span className="text-sm text-orange-dark dark:text-orange-light font-medium">
                   {selectedIndices?.size || 0} selected to import
@@ -295,6 +253,7 @@ export function TransactionTable({
                 </Button>
               </div>
             ) : (
+              /* Review stage */
               <Button
                 variant="success"
                 onClick={onImport}
@@ -346,109 +305,112 @@ export function TransactionTable({
       )}
 
       {/* Table */}
-      <div className="flex-1 min-h-0 bg-white dark:bg-dark-2 rounded-lg border border-stroke dark:border-dark-3 overflow-hidden">
-        <div ref={scrollContainerRef} className="h-full overflow-auto">
-          <table
-            className="w-full border-collapse"
-            style={{ tableLayout: "fixed" }}
-          >
-            <thead className="sticky top-0 z-10 bg-gray-1 dark:bg-dark-2">
-              <tr className="border-b border-stroke dark:border-dark-3">
-                <th
-                  className="py-3 px-4 font-medium text-dark dark:text-white"
-                  style={{ width: columnWidths.checkbox }}
-                >
-                  <div className="flex items-center justify-center">
-                    <Checkbox
-                      checked={
-                        selectedIndices?.size === transactions.length &&
-                        transactions.length > 0
+      <div className="flex-1 min-h-0 overflow-auto bg-white dark:bg-dark-2 rounded-lg border border-stroke dark:border-dark-3">
+        <table
+          className="w-full border-collapse"
+          style={{ tableLayout: "fixed" }}
+        >
+          <thead className="sticky top-0 z-10 bg-gray-1 dark:bg-dark-2">
+            <tr className="border-b border-stroke dark:border-dark-3">
+              {/* Checkbox column */}
+              <th
+                className="py-3 px-4 font-medium text-dark dark:text-white"
+                style={{ width: columnWidths.checkbox }}
+              >
+                <div className="flex items-center justify-center">
+                  <Checkbox
+                    checked={
+                      selectedIndices?.size === transactions.length &&
+                      transactions.length > 0
+                    }
+                    indeterminate={
+                      (selectedIndices?.size || 0) > 0 &&
+                      selectedIndices?.size !== transactions.length
+                    }
+                    onChange={(checked) => {
+                      if (checked) {
+                        onSelectAll?.();
+                      } else {
+                        onDeselectAll?.();
                       }
-                      indeterminate={
-                        (selectedIndices?.size || 0) > 0 &&
-                        selectedIndices?.size !== transactions.length
-                      }
-                      onChange={(checked) => {
-                        if (checked) {
-                          onSelectAll?.();
-                        } else {
-                          onDeselectAll?.();
-                        }
-                      }}
-                    />
-                  </div>
-                </th>
-                <th
-                  className="py-3 px-2 font-medium text-dark dark:text-white"
-                  style={{ width: columnWidths.expand }}
-                ></th>
-                <ResizableHeader
-                  columnKey="date"
-                  columnWidth={columnWidths.date}
-                  onResizeStart={handleResizeStart}
-                >
-                  Date
-                </ResizableHeader>
-                <ResizableHeader
-                  columnKey="label"
-                  columnWidth={columnWidths.label}
-                  onResizeStart={handleResizeStart}
-                >
-                  <div className="flex items-center gap-2">
-                    Label
-                    {!showDuplicatesOnly && (
-                      <button
-                        onClick={handleCopyAllDescriptionsToLabels}
-                        className="p-1 hover:bg-gray-2 dark:hover:bg-dark-3 rounded transition-colors"
-                        title="Copy all descriptions to labels"
-                      >
-                        <ArrowLeftToLine className="h-3.5 w-3.5 text-primary" />
-                      </button>
-                    )}
-                  </div>
-                </ResizableHeader>
-                <ResizableHeader
-                  columnKey="description"
-                  columnWidth={columnWidths.description}
-                  onResizeStart={handleResizeStart}
-                >
-                  Description
-                </ResizableHeader>
-                <ResizableHeader
-                  columnKey="category"
-                  columnWidth={columnWidths.category}
-                  onResizeStart={handleResizeStart}
-                >
-                  Category
-                </ResizableHeader>
-                <ResizableHeader
-                  columnKey="amountIn"
-                  columnWidth={columnWidths.amountIn}
-                  align="right"
-                  onResizeStart={handleResizeStart}
-                >
-                  In
-                </ResizableHeader>
-                <ResizableHeader
-                  columnKey="amountOut"
-                  columnWidth={columnWidths.amountOut}
-                  align="right"
-                  resizable={false}
-                >
-                  Out
-                </ResizableHeader>
-              </tr>
-            </thead>
-            <tbody>
-              {virtualItems.map((virtualRow) => {
-                const { transaction, index } = filteredData[virtualRow.index];
+                    }}
+                  />
+                </div>
+              </th>
+              <th
+                className="py-3 px-2 font-medium text-dark dark:text-white"
+                style={{ width: columnWidths.expand }}
+              ></th>
+              <ResizableHeader
+                columnKey="date"
+                columnWidth={columnWidths.date}
+                onResizeStart={handleResizeStart}
+              >
+                Date
+              </ResizableHeader>
+              <ResizableHeader
+                columnKey="label"
+                columnWidth={columnWidths.label}
+                onResizeStart={handleResizeStart}
+              >
+                <div className="flex items-center gap-2">
+                  Label
+                  {!showDuplicatesOnly && (
+                    <button
+                      onClick={handleCopyAllDescriptionsToLabels}
+                      className="p-1 hover:bg-gray-2 dark:hover:bg-dark-3 rounded transition-colors"
+                      title="Copy all descriptions to labels"
+                    >
+                      <ArrowLeftToLine className="h-3.5 w-3.5 text-primary" />
+                    </button>
+                  )}
+                </div>
+              </ResizableHeader>
+              <ResizableHeader
+                columnKey="description"
+                columnWidth={columnWidths.description}
+                onResizeStart={handleResizeStart}
+              >
+                Description
+              </ResizableHeader>
+              <ResizableHeader
+                columnKey="category"
+                columnWidth={columnWidths.category}
+                onResizeStart={handleResizeStart}
+              >
+                Category
+              </ResizableHeader>
+              <ResizableHeader
+                columnKey="amountIn"
+                columnWidth={columnWidths.amountIn}
+                align="right"
+                onResizeStart={handleResizeStart}
+              >
+                In
+              </ResizableHeader>
+              <ResizableHeader
+                columnKey="amountOut"
+                columnWidth={columnWidths.amountOut}
+                align="right"
+                resizable={false}
+              >
+                Out
+              </ResizableHeader>
+            </tr>
+          </thead>
+          <tbody>
+            {transactions
+              .map((transaction, index) => ({ transaction, index }))
+              .filter(({ index }) =>
+                showDuplicatesOnly ? duplicates?.has(index) : true,
+              )
+              .map(({ transaction, index }) => {
                 const rowDuplicates = duplicates?.get(index);
                 const hasDuplicates = rowDuplicates && rowDuplicates.length > 0;
                 const isSelected = selectedIndices?.has(index);
-                const isExpanded = expandedRows.has(index);
 
                 return (
-                  <Fragment key={`row-${index}`}>
+                  <Fragment key={`transaction-${index}`}>
                     <tr
                       className={`border-b border-stroke dark:border-dark-3 hover:bg-gray-1 dark:hover:bg-dark-3/50 transition-colors group ${
                         hasDuplicates
@@ -456,6 +418,7 @@ export function TransactionTable({
                           : ""
                       }`}
                     >
+                      {/* Checkbox column */}
                       <td
                         className="py-0 px-4"
                         style={{ width: columnWidths.checkbox }}
@@ -476,7 +439,7 @@ export function TransactionTable({
                           onClick={() => toggleRowExpanded(index)}
                           className="p-1 hover:bg-gray-2 dark:hover:bg-dark-3 rounded"
                         >
-                          {isExpanded ? (
+                          {expandedRows.has(index) ? (
                             <ChevronDown className="h-4 w-4 text-dark-5 dark:text-dark-6" />
                           ) : (
                             <ChevronRight className="h-4 w-4 text-dark-5 dark:text-dark-6" />
@@ -559,7 +522,7 @@ export function TransactionTable({
                           onChange={(categoryId) =>
                             onUpdateTransaction(index, "categoryId", categoryId)
                           }
-                          onAddClick={() => onAddCategoryClick(index)}
+                          onAddClick={onAddCategoryClick}
                           disabled={showDuplicatesOnly}
                         />
                       </td>
@@ -609,7 +572,7 @@ export function TransactionTable({
                       </td>
                     </tr>
 
-                    {isExpanded && (
+                    {expandedRows.has(index) && (
                       <tr className="border-b border-stroke dark:border-dark-3 bg-gray-1 dark:bg-dark-3/30">
                         <td colSpan={8} className="py-3 px-4">
                           <div className="text-sm space-y-1 pl-8">
@@ -636,15 +599,16 @@ export function TransactionTable({
                       </tr>
                     )}
 
+                    {/* Duplicate warning row */}
                     {hasDuplicates && (
                       <tr className="bg-orange-light-3 dark:bg-orange-dark-3/30 border-b border-orange-light-2 dark:border-orange-dark-1">
                         <td
-                          colSpan={8}
+                          colSpan={duplicates && duplicates.size > 0 ? 8 : 7}
                           className="py-2 px-4"
                         >
                           <div className="flex items-start gap-2">
                             <div className="text-orange-dark dark:text-orange-light font-semibold text-sm mt-0.5">
-                              Potential Duplicate
+                              ⚠ Potential Duplicate
                               {rowDuplicates.length > 1 ? "s" : ""}:
                             </div>
                             <div className="flex-1 space-y-2">
@@ -695,9 +659,8 @@ export function TransactionTable({
                   </Fragment>
                 );
               })}
-            </tbody>
-          </table>
-        </div>
+          </tbody>
+        </table>
       </div>
     </div>
   );

@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowRightCircle, Receipt, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { DatePicker } from "@/components/ui/DatePicker";
@@ -99,6 +101,7 @@ export function ReimbursementSelectorModal({
   categories = [],
   currentReimbursementId,
 }: ReimbursementSelectorModalProps) {
+  const currentImportListRef = useRef<HTMLDivElement>(null);
   const reimbursementAmount = toAbsTransactionAmount(
     transactions[currentIndex]?.amountIn,
     transactions[currentIndex]?.amountOut,
@@ -309,6 +312,22 @@ export function ReimbursementSelectorModal({
     currentSameAmountOnly,
     reimbursementAmount,
   ]);
+  const currentImportVirtualizer = useVirtualizer({
+    count: filteredCurrentImportItems.length,
+    getScrollElement: () => currentImportListRef.current,
+    estimateSize: () => 92,
+    overscan: 8,
+  });
+  const currentImportVirtualRows = currentImportVirtualizer.getVirtualItems();
+  const currentImportTopSpacer = currentImportVirtualRows[0]?.start ?? 0;
+  const currentImportBottomSpacer =
+    currentImportVirtualRows.length > 0
+      ? Math.max(
+          currentImportVirtualizer.getTotalSize() -
+            currentImportVirtualRows[currentImportVirtualRows.length - 1].end,
+          0,
+        )
+      : 0;
 
   const stagedAllocatedByBatchIndex = useMemo(() => {
     const map = new Map<number, number>();
@@ -819,7 +838,10 @@ export function ReimbursementSelectorModal({
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            <div
+              ref={currentImportListRef}
+              className="min-h-0 flex-1 overflow-y-auto p-3"
+            >
               <div className="space-y-2">
                 {selectorTab === "current" ? (
                   filteredCurrentImportItems.length === 0 ? (
@@ -827,27 +849,38 @@ export function ReimbursementSelectorModal({
                       No current-import transactions found.
                     </div>
                   ) : (
-                    filteredCurrentImportItems.map((item) => (
-                      (() => {
-                        const stagedAlready = stagedAllocatedByBatchIndex.get(item.index) || 0;
+                    <>
+                      {currentImportTopSpacer > 0 && (
+                        <div style={{ height: currentImportTopSpacer }} />
+                      )}
+                      {currentImportVirtualRows.map((virtualRow) => {
+                        const item = filteredCurrentImportItems[virtualRow.index];
+                        if (!item) return null;
+                        const stagedAlready =
+                          stagedAllocatedByBatchIndex.get(item.index) || 0;
                         const selectableAmount = Math.max(
-                          toAbsTransactionAmount(item.amountIn, item.amountOut) - stagedAlready,
+                          toAbsTransactionAmount(item.amountIn, item.amountOut) -
+                            stagedAlready,
                           0,
                         );
+
                         return (
-                      <TransactionCard
-                        key={toBatchKey(item.index)}
-                        transaction={toCardTransaction(item, item.index)}
-                        selected={selectedBatchIndices.has(item.index)}
-                        selectionTone="success"
-                        onToggleSelect={() =>
-                          handleToggleBatch(item.index, selectableAmount)
-                        }
-                        wrapText
-                      />
+                          <TransactionCard
+                            key={toBatchKey(item.index)}
+                            transaction={toCardTransaction(item, item.index)}
+                            selected={selectedBatchIndices.has(item.index)}
+                            selectionTone="success"
+                            onToggleSelect={() =>
+                              handleToggleBatch(item.index, selectableAmount)
+                            }
+                            wrapText
+                          />
                         );
-                      })()
-                    ))
+                      })}
+                      {currentImportBottomSpacer > 0 && (
+                        <div style={{ height: currentImportBottomSpacer }} />
+                      )}
+                    </>
                   )
                 ) : isLoadingDb ? (
                   <div className="py-8 text-center text-sm text-dark-5 dark:text-dark-6">

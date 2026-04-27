@@ -2,6 +2,7 @@
 
 import { useState, Fragment, useRef, useCallback, useEffect, memo } from "react";
 import type { KeyboardEvent, FormEvent } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowRight,
   ArrowRightToLine,
@@ -23,6 +24,8 @@ import { TransactionRowExpanded } from "./TransactionRowExpanded";
 import { DuplicateMatchList } from "./DuplicateMatchList";
 import { useColumnResize } from "./hooks/useColumnResize";
 import { DEFAULT_COLUMN_WIDTHS, MIN_COLUMN_WIDTHS } from "./config/columns";
+import { areTransactionTablePropsEqual } from "./memo";
+import { shouldShowTablePreparingState } from "./virtualization";
 import type { TransactionTableProps } from "./types";
 
 interface DeferredTextInputProps {
@@ -155,7 +158,7 @@ const DeferredTextarea = memo(function DeferredTextarea({
   );
 });
 
-export function TransactionTable({
+function TransactionTableComponent({
   parsedData,
   transactions,
   categories,
@@ -205,7 +208,9 @@ export function TransactionTable({
   >("all");
   const [tableDateFrom, setTableDateFrom] = useState("");
   const [tableDateTo, setTableDateTo] = useState("");
+  const [isTableReady, setIsTableReady] = useState(false);
   const tableContainerRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizerMeasureRef = useRef<(() => void) | null>(null);
   const { columnWidths, handleResizeStart } = useColumnResize(
     DEFAULT_COLUMN_WIDTHS,
   );
@@ -268,8 +273,9 @@ export function TransactionTable({
   const autoResizeTextarea = useCallback(
     (event: FormEvent<HTMLTextAreaElement>) => {
       const el = event.currentTarget;
-      el.style.height = "0px";
+      el.style.height = "auto";
       el.style.height = `${el.scrollHeight}px`;
+      rowVirtualizerMeasureRef.current?.();
     },
     [],
   );
@@ -281,9 +287,10 @@ export function TransactionTable({
       'textarea[data-col="description"]',
     );
     textareas.forEach((el) => {
-      el.style.height = "0px";
+      el.style.height = "auto";
       el.style.height = `${el.scrollHeight}px`;
     });
+    rowVirtualizerMeasureRef.current?.();
   }, []);
 
   useEffect(() => {
@@ -373,6 +380,27 @@ export function TransactionTable({
   });
 
   const visibleIndices = visibleRows.map(({ index }) => index);
+  const rowVirtualizer = useVirtualizer({
+    count: visibleRows.length,
+    getScrollElement: () => tableContainerRef.current,
+    estimateSize: () => 52,
+    overscan: 12,
+  });
+  rowVirtualizerMeasureRef.current = () => rowVirtualizer.measure();
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const totalVirtualSize = rowVirtualizer.getTotalSize();
+  const topSpacerHeight = virtualRows[0]?.start ?? 0;
+  const bottomSpacerHeight =
+    virtualRows.length > 0
+      ? Math.max(
+          totalVirtualSize - virtualRows[virtualRows.length - 1].end,
+          0,
+        )
+      : 0;
+  const showPreparingState = shouldShowTablePreparingState(
+    visibleRows.length,
+    isTableReady,
+  );
   const selectedVisibleCount = visibleIndices.filter((index) =>
     selectedIndices?.has(index),
   ).length;
@@ -412,6 +440,12 @@ export function TransactionTable({
     }
   };
 
+  useEffect(() => {
+    setIsTableReady(false);
+    const raf = requestAnimationFrame(() => setIsTableReady(true));
+    return () => cancelAnimationFrame(raf);
+  }, [visibleRows.length, showDuplicatesOnly]);
+
   return (
     <div className="h-full flex-1 flex flex-col min-h-0 overflow-hidden">
       <TransactionTableToolbar
@@ -447,8 +481,19 @@ export function TransactionTable({
       <div
         ref={tableContainerRef}
         onKeyDown={handleTableKeyDown}
-        className="flex-1 min-h-0 overflow-auto bg-white dark:bg-dark-2 rounded-lg border border-stroke dark:border-dark-3"
+        className="relative flex-1 min-h-0 overflow-auto bg-white dark:bg-dark-2 rounded-lg border border-stroke dark:border-dark-3"
       >
+        {showPreparingState && (
+          <div className="sticky top-0 z-20 border-b border-primary/20 bg-primary/10 px-4 py-2 backdrop-blur-sm">
+            <div className="flex items-center justify-between text-xs font-medium text-primary">
+              <span>Preparing review table</span>
+              <span>{visibleRows.length.toLocaleString()} rows</span>
+            </div>
+            <div className="mt-2 h-1 overflow-hidden rounded-full bg-primary/15">
+              <div className="h-full w-1/2 animate-pulse rounded-full bg-primary" />
+            </div>
+          </div>
+        )}
         <table
           className="w-full border-collapse"
           style={{ tableLayout: "fixed" }}
@@ -657,7 +702,14 @@ export function TransactionTable({
             </tr>
           </thead>
           <tbody>
-            {visibleRows.map(({ transaction, index }, visibleIndex) => {
+            {topSpacerHeight > 0 && (
+              <tr aria-hidden="true">
+                <td colSpan={8} style={{ height: topSpacerHeight }} />
+              </tr>
+            )}
+            {virtualRows.map((virtualRow) => {
+              const visibleIndex = virtualRow.index;
+              const { transaction, index } = visibleRows[visibleIndex];
               const rowDuplicates = duplicates?.get(index);
               const hasDuplicates = rowDuplicates && rowDuplicates.length > 0;
               const isSelected = selectedIndices?.has(index);
@@ -759,6 +811,8 @@ export function TransactionTable({
               return (
                 <Fragment key={`transaction-${index}`}>
                   <tr
+                    data-index={virtualRow.index}
+                    ref={rowVirtualizer.measureElement}
                     className={`border-b hover:bg-gray-1 dark:hover:bg-dark-3/50 transition-colors group ${
                       hasDuplicates
                         ? "border-2 border-red dark:border-red-light"
@@ -821,7 +875,7 @@ export function TransactionTable({
                       className="py-0 px-0 focus-within:ring-2 focus-within:ring-inset focus-within:ring-primary"
                       style={{ width: columnWidths.description }}
                     >
-                      <div className="relative w-full h-full min-h-[44px] flex items-stretch">
+                      <div className="relative flex w-full min-h-[44px] items-center">
                         {deferCellCommit ? (
                           <DeferredTextarea
                             value={transaction.description}
@@ -832,7 +886,7 @@ export function TransactionTable({
                             disabled={showDuplicatesOnly}
                             dataRow={`${visibleIndex}`}
                             dataCol="description"
-                            className="w-full h-full min-h-[44px] px-3 py-2 text-sm border-0 bg-transparent text-dark dark:text-white outline-none focus:ring-0 resize-none disabled:cursor-not-allowed"
+                            className="block w-full min-h-[44px] overflow-hidden px-3 py-3 pr-10 text-sm leading-5 border-0 bg-transparent text-dark dark:text-white outline-none focus:ring-0 resize-none disabled:cursor-not-allowed"
                           />
                         ) : (
                           <textarea
@@ -849,7 +903,7 @@ export function TransactionTable({
                             rows={1}
                             data-row={`${visibleIndex}`}
                             data-col="description"
-                            className="w-full h-full min-h-[44px] px-3 py-2 text-sm border-0 bg-transparent text-dark dark:text-white outline-none focus:ring-0 resize-none disabled:cursor-not-allowed"
+                            className="block w-full min-h-[44px] overflow-hidden px-3 py-3 pr-10 text-sm leading-5 border-0 bg-transparent text-dark dark:text-white outline-none focus:ring-0 resize-none disabled:cursor-not-allowed"
                           />
                         )}
                         {!showDuplicatesOnly && (
@@ -868,7 +922,7 @@ export function TransactionTable({
                       className="py-0 px-0 focus-within:ring-2 focus-within:ring-inset focus-within:ring-primary"
                       style={{ width: columnWidths.label }}
                     >
-                      <div className="relative w-full flex items-stretch h-full min-h-[44px]">
+                      <div className="relative flex w-full min-h-[44px] items-center">
                         {deferCellCommit ? (
                           <DeferredTextInput
                             value={transaction.label || ""}
@@ -879,7 +933,7 @@ export function TransactionTable({
                             disabled={showDuplicatesOnly}
                             dataRow={`${visibleIndex}`}
                             dataCol="label"
-                            className={`flex-1 h-full min-h-[44px] px-3 py-2 text-sm border-0 bg-transparent text-dark dark:text-white outline-none focus:ring-0 disabled:cursor-not-allowed ${
+                            className={`flex-1 h-auto min-h-[44px] px-3 py-3 text-sm leading-5 border-0 bg-transparent text-dark dark:text-white outline-none focus:ring-0 disabled:cursor-not-allowed ${
                               labelMatchesSuggestion ? "pr-8" : ""
                             }`}
                           />
@@ -894,7 +948,7 @@ export function TransactionTable({
                             disabled={showDuplicatesOnly}
                             data-row={`${visibleIndex}`}
                             data-col="label"
-                            className={`flex-1 h-full min-h-[44px] px-3 py-2 text-sm border-0 bg-transparent text-dark dark:text-white outline-none focus:ring-0 disabled:cursor-not-allowed ${
+                            className={`flex-1 h-auto min-h-[44px] px-3 py-3 text-sm leading-5 border-0 bg-transparent text-dark dark:text-white outline-none focus:ring-0 disabled:cursor-not-allowed ${
                               labelMatchesSuggestion ? "pr-8" : ""
                             }`}
                           />
@@ -1123,9 +1177,19 @@ export function TransactionTable({
                 </Fragment>
               );
             })}
+            {bottomSpacerHeight > 0 && (
+              <tr aria-hidden="true">
+                <td colSpan={8} style={{ height: bottomSpacerHeight }} />
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
     </div>
   );
 }
+
+export const TransactionTable = memo(
+  TransactionTableComponent,
+  areTransactionTablePropsEqual,
+);

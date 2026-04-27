@@ -46,6 +46,8 @@ export function DatePicker({
   const [viewYear, setViewYear] = useState(selectedDate.getFullYear());
 
   useEffect(() => {
+    if (!isOpen) return;
+
     function handleClickOutside(event: MouseEvent) {
       if (
         containerRef.current &&
@@ -57,7 +59,7 @@ export function DatePicker({
 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  }, [isOpen]);
 
   // Reset view to selected date when opening
   useEffect(() => {

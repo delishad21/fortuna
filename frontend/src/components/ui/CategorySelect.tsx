@@ -88,6 +88,8 @@ export function CategorySelect({
   };
 
   useEffect(() => {
+    if (!isOpen) return;
+
     function handleClickOutside(event: MouseEvent) {
       if (
         containerRef.current &&
@@ -101,7 +103,7 @@ export function CategorySelect({
 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen) {
