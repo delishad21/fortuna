@@ -75,7 +75,7 @@ interface TransactionTableProps {
   onSelectAll?: () => void;
   onDeselectAll?: () => void;
   onToggleSelection?: (index: number) => void;
-  onAddCategoryClick: () => void;
+  onAddCategoryClick: (rowIndex?: number) => void;
   onBack?: () => void;
 }
 
@@ -552,7 +552,7 @@ export function TransactionTable({
                           onChange={(categoryId) =>
                             onUpdateTransaction(index, "categoryId", categoryId)
                           }
-                          onAddClick={onAddCategoryClick}
+                          onAddClick={() => onAddCategoryClick(index)}
                           disabled={showDuplicatesOnly}
                         />
                       </td>
