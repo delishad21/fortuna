@@ -72,10 +72,6 @@ export function TransactionTableToolbar({
           </div>
           <div className="h-6 w-px bg-stroke dark:bg-dark-3" />
           <div className="text-sm text-dark-5 dark:text-dark-6">
-            <span className="font-medium text-dark dark:text-white">
-              {parsedData.filename}
-            </span>
-            <span className="mx-2 text-dark-5">•</span>
             <span>{parsedData.parserId}</span>
           </div>
         </div>
