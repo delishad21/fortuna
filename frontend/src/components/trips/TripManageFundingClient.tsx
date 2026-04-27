@@ -4089,8 +4089,7 @@ export function TripManageFundingClient({
                       </div>
                       <div className="flex-1 min-h-0 min-w-0">
                         <FileUploadDropzone
-                          file={selectedFile}
-                          onFileSelect={setSelectedFile}
+                          onFilesAdd={(files) => { if (files[0]) setSelectedFile(files[0]); }}
                           accept=".pdf,.csv"
                         />
                       </div>
@@ -4107,8 +4106,7 @@ export function TripManageFundingClient({
                         </div>
                         <div className="flex-1 min-h-0 min-w-0">
                           <FileUploadDropzone
-                            file={supplementalFile}
-                            onFileSelect={setSupplementalFile}
+                            onFilesAdd={(files) => { if (files[0]) setSupplementalFile(files[0]); }}
                             accept=".csv"
                           />
                         </div>

@@ -4,9 +4,9 @@ import { useState } from "react";
 import { Upload, FileText } from "lucide-react";
 
 interface FileUploadDropzoneProps {
-  file: File | null;
-  onFileSelect: (file: File | null) => void;
+  onFilesAdd: (files: File[]) => void;
   accept?: string;
+  compact?: boolean;
 }
 
 function truncateFileName(name: string, maxLength = 30): string {
@@ -58,14 +58,12 @@ function formatSupportedFormats(accept: string): string {
 }
 
 export function FileUploadDropzone({
-  file,
-  onFileSelect,
+  onFilesAdd,
   accept = ".csv,.pdf",
+  compact = false,
 }: FileUploadDropzoneProps) {
   const [dragActive, setDragActive] = useState(false);
   const supportedFormatsLabel = formatSupportedFormats(accept);
-  const displayFileName = file?.name || "";
-  const shortenedFileName = truncateFileName(displayFileName);
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -82,14 +80,17 @@ export function FileUploadDropzone({
     e.stopPropagation();
     setDragActive(false);
 
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      onFileSelect(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const files = Array.from(e.dataTransfer.files);
+      onFilesAdd(files);
     }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      onFileSelect(e.target.files[0]);
+    if (e.target.files && e.target.files.length > 0) {
+      const files = Array.from(e.target.files);
+      onFilesAdd(files);
+      e.target.value = "";
     }
   };
 
@@ -106,54 +107,32 @@ export function FileUploadDropzone({
           : "border-stroke dark:border-dark-3 hover:border-primary/50"
       }`}
     >
-      {file ? (
-        <div className="flex w-full max-w-full min-w-0 flex-col items-center gap-2 overflow-hidden px-4">
-          <FileText className="h-8 w-8 text-primary" />
-          <div className="w-full min-w-0 text-center">
-            <p
-              className="w-full overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium text-dark dark:text-white"
-              title={displayFileName}
-            >
-              {shortenedFileName}
-            </p>
-            <p className="text-xs text-dark-5 dark:text-dark-6 mt-1">
-              {(file.size / 1024).toFixed(2)} KB
-            </p>
-          </div>
-          <button
-            onClick={() => onFileSelect(null)}
-            className="text-red hover:text-red/80 text-sm font-medium transition-colors"
-          >
-            Remove File
-          </button>
+      <div className="flex w-full max-w-full min-w-0 flex-col items-center gap-2 overflow-hidden px-4">
+        <div className={`${compact ? "p-2" : "p-3"} bg-gray-1 dark:bg-dark-3 rounded-full`}>
+          <Upload className={`${compact ? "h-5 w-5" : "h-6 w-6"} text-primary`} />
         </div>
-      ) : (
-        <div className="flex w-full max-w-full min-w-0 flex-col items-center gap-2 overflow-hidden px-4">
-          <div className="p-3 bg-gray-1 dark:bg-dark-3 rounded-full">
-            <Upload className="h-6 w-6 text-primary" />
-          </div>
-          <div className="w-full min-w-0 text-center">
-            <p className="text-sm font-medium text-dark dark:text-white mb-1">
-              Drop your file here
-            </p>
-            <p className="text-xs text-dark-5 dark:text-dark-6">
-              or{" "}
-              <label className="text-primary cursor-pointer hover:underline font-medium">
-                browse files
-                <input
-                  type="file"
-                  accept={accept}
-                  onChange={handleFileChange}
-                  className="hidden"
-                />
-              </label>
-            </p>
-            <p className="mt-2 truncate text-xs text-dark-5 dark:text-dark-6">
-              Accepted files: {supportedFormatsLabel}
-            </p>
-          </div>
+        <div className="w-full min-w-0 text-center">
+          <p className={`${compact ? "text-xs" : "text-sm"} font-medium text-dark dark:text-white mb-1`}>
+            Drop files here
+          </p>
+          <p className="text-xs text-dark-5 dark:text-dark-6">
+            or{" "}
+            <label className="text-primary cursor-pointer hover:underline font-medium">
+              browse files
+              <input
+                type="file"
+                accept={accept}
+                multiple
+                onChange={handleFileChange}
+                className="hidden"
+              />
+            </label>
+          </p>
+          <p className="mt-2 truncate text-xs text-dark-5 dark:text-dark-6">
+            {supportedFormatsLabel}
+          </p>
         </div>
-      )}
+      </div>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef } from "react";
-import { Upload, XCircle, X, AlertCircle, FileText, Plus } from "lucide-react";
+import { useState } from "react";
+import { Upload, XCircle, AlertCircle, FileText, Check, Loader2 } from "lucide-react";
 import { Select } from "@/components/ui/Select";
 import { Button } from "@/components/ui/Button";
 import { FileUploadDropzone } from "./FileUploadDropzone";
@@ -31,7 +31,7 @@ interface UploadSectionProps {
   onUpload: () => void;
 }
 
-function truncateFileName(name: string, maxLength = 24): string {
+function truncateFileName(name: string, maxLength = 28): string {
   if (!name || name.length <= maxLength) return name;
   const dotIndex = name.lastIndexOf(".");
   const extension = dotIndex > 0 ? name.slice(dotIndex) : "";
@@ -54,37 +54,33 @@ export function UploadSection({
   onParserChange,
   onUpload,
 }: UploadSectionProps) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const firstFile = files[0]?.file ?? null;
+  const [selectedPreviewIndex, setSelectedPreviewIndex] = useState<number>(0);
+
+  const handleFilesAdd = (newFiles: File[]) => {
+    const newFileStates: FileUploadState[] = newFiles.map((file) => ({
+      file,
+      status: "pending" as const,
+    }));
+    const updated = [...files, ...newFileStates];
+    onFilesChange(updated);
+    if (files.length === 0 && updated.length > 0) {
+      setSelectedPreviewIndex(0);
+    }
+  };
+
+  const handleRemoveFile = (index: number) => {
+    const updated = files.filter((_, i) => i !== index);
+    onFilesChange(updated);
+    if (selectedPreviewIndex >= updated.length) {
+      setSelectedPreviewIndex(Math.max(0, updated.length - 1));
+    }
+  };
+
   const pendingOrErrorFiles = files.filter(
     (f) => f.status === "pending" || f.status === "error",
   );
   const canParse = pendingOrErrorFiles.length > 0;
-
-  const handleFileSelect = (file: File | null) => {
-    if (!file) return;
-    const newFile: FileUploadState = { file, status: "pending" };
-    onFilesChange([...files, newFile]);
-  };
-
-  const handleRemoveFile = (index: number) => {
-    onFilesChange(files.filter((_, i) => i !== index));
-  };
-
-  const handleAddMoreClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleAddMoreFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const newFiles = Array.from(e.target.files).map((file) => ({
-        file,
-        status: "pending" as const,
-      }));
-      onFilesChange([...files, ...newFiles]);
-      e.target.value = "";
-    }
-  };
+  const selectedFile = files[selectedPreviewIndex]?.file ?? null;
 
   return (
     <div className="flex gap-6 h-full">
@@ -96,59 +92,106 @@ export function UploadSection({
           </h3>
         </div>
 
-        <div className="flex-1 bg-white dark:bg-dark-2 rounded-lg border border-stroke dark:border-dark-3 p-6 flex flex-col">
-          <div className="flex-1 flex flex-col gap-4">
-            <div className="w-full">
-              <label className="block text-sm font-medium text-dark dark:text-white mb-2">
-                Select Parser
-              </label>
-              <Select
-                value={selectedParser}
-                options={parserOptions}
-                onChange={onParserChange}
-                className="w-full"
-                buttonClassName="w-full min-w-0"
-              />
-            </div>
-
-            <div className="flex-1 min-h-40">
-              <FileUploadDropzone
-                file={firstFile}
-                onFileSelect={handleFileSelect}
-              />
-            </div>
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv,.pdf"
-              multiple
-              className="hidden"
-              onChange={handleAddMoreFiles}
-            />
-
-            <Button
-              onClick={handleAddMoreClick}
-              variant="secondary"
-              className="w-full text-xs"
-              leftIcon={<Plus className="h-3 w-3" />}
-            >
-              Add More Files
-            </Button>
-
-            <Button
-              onClick={onUpload}
-              disabled={!canParse}
-              isLoading={isUploading}
-              leftIcon={<Upload className="h-4 w-4" />}
+        <div className="flex-1 bg-white dark:bg-dark-2 rounded-lg border border-stroke dark:border-dark-3 p-4 flex flex-col gap-4">
+          <div className="w-full">
+            <label className="block text-sm font-medium text-dark dark:text-white mb-2">
+              Select Parser
+            </label>
+            <Select
+              value={selectedParser}
+              options={parserOptions}
+              onChange={onParserChange}
               className="w-full"
-            >
-              {isUploading ? "Parsing..." : `Parse ${pendingOrErrorFiles.length > 1 ? `${pendingOrErrorFiles.length} Files` : "File"}`}
-            </Button>
+              buttonClassName="w-full min-w-0"
+            />
           </div>
 
+          <div className="h-32 min-h-[128px]">
+            <FileUploadDropzone
+              onFilesAdd={handleFilesAdd}
+              compact
+            />
+          </div>
+
+          {files.length > 0 && (
+            <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-hidden">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
+                  Files ({files.length})
+                </h4>
+                {files.some((f) => f.status === "error") && (
+                  <span className="text-xs text-red">
+                    {files.filter((f) => f.status === "error").length} failed
+                  </span>
+                )}
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1.5">
+                {files.map((fileState, index) => (
+                  <button
+                    key={`${fileState.file.name}-${index}`}
+                    onClick={() => setSelectedPreviewIndex(index)}
+                    className={`w-full flex items-center gap-2 p-2 rounded-md border text-left transition-colors ${
+                      selectedPreviewIndex === index
+                        ? "bg-primary/5 border-primary/30 dark:bg-primary/10"
+                        : fileState.status === "error"
+                          ? "bg-red/5 border-red/30 dark:bg-red/10 hover:bg-red/10"
+                          : "bg-gray-1 dark:bg-dark-3 border-stroke dark:border-dark-3 hover:bg-gray-2 dark:hover:bg-dark-3/70"
+                    }`}
+                  >
+                    <FileText className="h-4 w-4 text-primary flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p
+                        className="text-xs font-medium text-dark dark:text-white truncate"
+                        title={fileState.file.name}
+                      >
+                        {truncateFileName(fileState.file.name)}
+                      </p>
+                      <p className="text-[10px] text-dark-5 dark:text-dark-6">
+                        {(fileState.file.size / 1024).toFixed(1)} KB
+                        {fileState.status === "error" && fileState.error && (
+                          <span className="text-red ml-1">— {fileState.error}</span>
+                        )}
+                        {fileState.status === "parsing" && (
+                          <span className="text-primary ml-1 flex items-center gap-1">
+                            <Loader2 className="h-2.5 w-2.5 animate-spin" /> Parsing...
+                          </span>
+                        )}
+                        {fileState.status === "success" && (
+                          <span className="text-green ml-1 flex items-center gap-1">
+                            <Check className="h-2.5 w-2.5" /> Ready
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                    {(fileState.status === "pending" || fileState.status === "error") && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveFile(index);
+                        }}
+                        className="p-1 text-dark-5 hover:text-red transition-colors flex-shrink-0"
+                      >
+                        <XCircle className="h-4 w-4" />
+                      </button>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <Button
+            onClick={onUpload}
+            disabled={!canParse}
+            isLoading={isUploading}
+            leftIcon={<Upload className="h-4 w-4" />}
+            className="w-full"
+          >
+            {isUploading ? "Parsing..." : `Parse ${pendingOrErrorFiles.length > 1 ? `${pendingOrErrorFiles.length} Files` : "File"}`}
+          </Button>
+
           {accountMismatchError && (
-            <div className="mt-4 p-3 bg-warning/10 dark:bg-warning/20 border border-warning/30 dark:border-warning/40 rounded-lg flex items-start gap-2">
+            <div className="p-3 bg-warning/10 dark:bg-warning/20 border border-warning/30 dark:border-warning/40 rounded-lg flex items-start gap-2">
               <AlertCircle className="h-4 w-4 text-warning flex-shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
                 <p className="text-warning text-sm font-medium">
@@ -162,7 +205,7 @@ export function UploadSection({
           )}
 
           {error && (
-            <div className="mt-4 p-3 bg-red/10 dark:bg-red/20 border border-red/30 dark:border-red/40 rounded-lg flex items-center gap-2">
+            <div className="p-3 bg-red/10 dark:bg-red/20 border border-red/30 dark:border-red/40 rounded-lg flex items-center gap-2">
               <XCircle className="h-4 w-4 text-red flex-shrink-0" />
               <p className="text-red text-sm">{error}</p>
             </div>
@@ -170,78 +213,8 @@ export function UploadSection({
         </div>
       </div>
 
-      <div className="flex-1 min-w-0 flex flex-col gap-4 overflow-y-auto">
-        {files.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center text-dark-5 dark:text-dark-6">
-              <FileText className="h-12 w-12 mx-auto mb-3 opacity-50" />
-              <p className="text-sm">Select or drop files to begin</p>
-            </div>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <h4 className="text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                Selected Files ({files.length})
-              </h4>
-              {files.some((f) => f.status === "error") && (
-                <span className="text-xs text-red">
-                  {files.filter((f) => f.status === "error").length} failed
-                </span>
-              )}
-            </div>
-            {files.map((fileState, index) => (
-              <div
-                key={`${fileState.file.name}-${index}`}
-                className={`flex items-center gap-3 p-3 rounded-lg border ${
-                  fileState.status === "error"
-                    ? "bg-red/5 border-red/30 dark:bg-red/10"
-                    : fileState.status === "parsing"
-                      ? "bg-primary/5 border-primary/30 dark:bg-primary/10"
-                      : fileState.status === "success"
-                        ? "bg-green/5 border-green/30 dark:bg-green/10"
-                        : "bg-gray-1 dark:bg-dark-3 border-stroke dark:border-dark-3"
-                }`}
-              >
-                <FileText className="h-5 w-5 text-primary flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p
-                    className="text-sm font-medium text-dark dark:text-white truncate"
-                    title={fileState.file.name}
-                  >
-                    {truncateFileName(fileState.file.name)}
-                  </p>
-                  <p className="text-xs text-dark-5 dark:text-dark-6">
-                    {(fileState.file.size / 1024).toFixed(1)} KB
-                    {fileState.status === "error" && fileState.error && (
-                      <span className="text-red ml-2">— {fileState.error}</span>
-                    )}
-                    {fileState.status === "parsing" && (
-                      <span className="text-primary ml-2">Parsing...</span>
-                    )}
-                    {fileState.status === "success" && (
-                      <span className="text-green ml-2">Ready</span>
-                    )}
-                  </p>
-                </div>
-                {fileState.status === "pending" && (
-                  <button
-                    onClick={() => handleRemoveFile(index)}
-                    className="p-1 text-dark-5 hover:text-red transition-colors"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {files.length > 0 && files[0] && (
-          <div className="flex-1 min-h-0">
-            <FilePreview file={files[0].file} />
-          </div>
-        )}
+      <div className="flex-1 min-w-0">
+        <FilePreview file={selectedFile} />
       </div>
     </div>
   );

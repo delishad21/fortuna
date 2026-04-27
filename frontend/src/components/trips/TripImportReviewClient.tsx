@@ -1322,19 +1322,15 @@ export function TripImportReviewClient({
                         Required
                       </span>
                     </div>
-                    <div className="flex-1 min-h-0 min-w-0">
+                    <div className="h-20 min-h-[80px]">
                       <FileUploadDropzone
-                        file={mainFiles[0] || null}
-                        onFileSelect={(file) => {
-                          if (file) {
-                            setMainFiles([...mainFiles, file]);
-                          }
-                        }}
+                        onFilesAdd={(files) => setMainFiles([...mainFiles, ...files])}
                         accept=".pdf,.csv"
+                        compact
                       />
                     </div>
                     {mainFiles.length > 0 && (
-                      <div className="flex flex-col gap-1 max-h-24 overflow-y-auto">
+                      <div className="flex flex-col gap-1 max-h-28 overflow-y-auto">
                         {mainFiles.map((f, idx) => (
                           <div
                             key={`${f.name}-${idx}`}
@@ -1378,8 +1374,7 @@ export function TripImportReviewClient({
                       </div>
                       <div className="flex-1 min-h-0 min-w-0">
                         <FileUploadDropzone
-                          file={supplementalFile}
-                          onFileSelect={setSupplementalFile}
+                          onFilesAdd={(files) => { if (files[0]) setSupplementalFile(files[0]); }}
                           accept=".csv"
                         />
                       </div>
