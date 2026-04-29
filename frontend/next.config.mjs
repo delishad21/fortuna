@@ -4,6 +4,11 @@ const nextConfig = {
   experimental: {
     serverActions: {
       bodySizeLimit: '10mb',
+      allowedOrigins: [
+        'localhost:3001',
+        '127.0.0.1:3001',
+        '192.168.1.129:3001',
+      ],
     },
   },
   webpack: (config) => {

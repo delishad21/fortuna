@@ -1,6 +1,23 @@
-version: '3.8'
-
 services:
+  # Single LAN/local entrypoint for the dev app
+  edge:
+    image: nginx:1.27-alpine
+    container_name: finance-edge-dev
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:${APP_PORT:-3000}:80"
+    volumes:
+      - ./nginx/dev.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      frontend:
+        condition: service_started
+      file-parser:
+        condition: service_started
+      data-service:
+        condition: service_started
+    networks:
+      - finance-network
+
   # PostgreSQL Database
   postgres:
     image: postgres:16-alpine
@@ -11,9 +28,9 @@ services:
       POSTGRES_PASSWORD: financepass
       POSTGRES_DB: personal_finance
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - ./postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U financeuser -d personal_finance"]
       interval: 10s
@@ -29,11 +46,11 @@ services:
       dockerfile: Dockerfile.dev
     container_name: finance-parser-dev
     restart: unless-stopped
-    ports:
-      - "4000:4000"
+    expose:
+      - "4000"
     environment:
       - PORT=4000
-      - FRONTEND_URL=http://localhost:3000
+      - FRONTEND_URL=${APP_ORIGIN:-http://localhost:3000}
     volumes:
       # Mount source code for hot reload
       - ./services/file-parser/app:/app/app
@@ -47,8 +64,8 @@ services:
       dockerfile: Dockerfile.dev
     container_name: finance-data-dev
     restart: unless-stopped
-    ports:
-      - "4001:4001"
+    expose:
+      - "4001"
     environment:
       - PORT=4001
       - DATABASE_URL=postgresql://financeuser:financepass@postgres:5432/personal_finance?schema=public
@@ -72,12 +89,13 @@ services:
       dockerfile: Dockerfile.frontend.dev
     container_name: finance-frontend-dev
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     environment:
       - DATABASE_URL=postgresql://financeuser:financepass@postgres:5432/personal_finance?schema=public
-      - NEXTAUTH_URL=http://localhost:3000
-      - NEXTAUTH_SECRET=change-this-to-a-random-string-min-32-chars
+      - NEXTAUTH_URL=${APP_ORIGIN:-http://localhost:3000}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-change-this-to-a-random-string-min-32-chars}
+      - AUTH_TRUST_HOST=true
       - PARSER_SERVICE_URL=http://file-parser:4000
       - DATA_SERVICE_URL=http://data-service:4001
       - NODE_ENV=development
@@ -100,10 +118,7 @@ services:
         condition: service_started
     networks:
       - finance-network
-    command: npm run dev
-
-volumes:
-  postgres-data:
+    command: npm run dev -- --hostname 0.0.0.0
 
 networks:
   finance-network:

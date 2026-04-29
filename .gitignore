@@ -62,6 +62,7 @@ docker-compose.override.yml
 *.db
 *.sqlite
 postgres-data/
+postgres/
 redis-data/
 
 # Prisma
