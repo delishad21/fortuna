@@ -1,5 +1,21 @@
 import { Router, Request, Response } from "express";
 import prisma from "../../lib/prisma";
+import {
+  AnalyticsTransaction,
+  buildDailySeries as buildAnalyticsDailySeries,
+  buildMonthSeries,
+  formatDayKey as formatAnalyticsDayKey,
+  formatMonthKey,
+  getCategoryInfo,
+  getCategoryKey,
+  getEffectiveOut as getAnalyticsEffectiveOut,
+  getMonthRange,
+  isImportedMonth,
+  normalizeMerchant,
+  serializeTransaction,
+  summarizeTransactions,
+  toNumber as toAnalyticsNumber,
+} from "./analytics.utils";
 
 export const analyticsRouter = Router();
 
@@ -43,6 +59,102 @@ const buildDailySeries = (start: Date, end: Date) => {
     cursor.setDate(cursor.getDate() + 1);
   }
   return days;
+};
+
+const getImportedMonthGroups = (transactions: AnalyticsTransaction[]) => {
+  const groups = new Map<string, AnalyticsTransaction[]>();
+  for (const tx of transactions) {
+    const month = formatMonthKey(tx.date);
+    const current = groups.get(month) || [];
+    current.push(tx);
+    groups.set(month, current);
+  }
+
+  return Array.from(groups.entries())
+    .filter(([, monthTransactions]) => isImportedMonth(monthTransactions))
+    .sort(([a], [b]) => b.localeCompare(a));
+};
+
+const buildCategoryBreakdown = (transactions: AnalyticsTransaction[]) => {
+  const map = new Map<
+    string,
+    { key: string; name: string; color: string; totalIn: number; totalOut: number; transactionCount: number }
+  >();
+
+  for (const tx of transactions) {
+    const key = getCategoryKey(tx);
+    const category = getCategoryInfo(tx);
+    const current = map.get(key) || {
+      key,
+      name: category.name,
+      color: category.color,
+      totalIn: 0,
+      totalOut: 0,
+      transactionCount: 0,
+    };
+    current.totalIn += toAnalyticsNumber(tx.amountIn);
+    current.totalOut += getAnalyticsEffectiveOut(tx);
+    current.transactionCount += 1;
+    map.set(key, current);
+  }
+
+  return Array.from(map.values()).sort((a, b) => b.totalOut - a.totalOut);
+};
+
+const buildMerchantBreakdown = (transactions: AnalyticsTransaction[]) => {
+  const map = new Map<
+    string,
+    { key: string; name: string; totalIn: number; totalOut: number; transactionCount: number }
+  >();
+
+  for (const tx of transactions) {
+    const merchant = normalizeMerchant(tx);
+    const current = map.get(merchant.key) || {
+      key: merchant.key,
+      name: merchant.name,
+      totalIn: 0,
+      totalOut: 0,
+      transactionCount: 0,
+    };
+    current.totalIn += toAnalyticsNumber(tx.amountIn);
+    current.totalOut += getAnalyticsEffectiveOut(tx);
+    current.transactionCount += 1;
+    map.set(merchant.key, current);
+  }
+
+  return Array.from(map.values()).sort((a, b) => b.totalOut - a.totalOut);
+};
+
+const getRangeForQuery = (range: string, month: string) => {
+  const selected = getMonthRange(month);
+  if (range === "last3") {
+    const start = new Date(selected.start);
+    start.setMonth(start.getMonth() - 2);
+    return { start, end: selected.end };
+  }
+  if (range === "ytd") {
+    return { start: new Date(selected.start.getFullYear(), 0, 1), end: selected.end };
+  }
+  if (range === "last12") {
+    const start = new Date(selected.start);
+    start.setMonth(start.getMonth() - 11);
+    return { start, end: selected.end };
+  }
+  return selected;
+};
+
+const findLatestImportedMonth = async (userId: string) => {
+  const allTransactions = await prisma.transaction.findMany({
+    where: { userId },
+    include: { category: true },
+    orderBy: { date: "desc" },
+  });
+  const importedMonthGroups = getImportedMonthGroups(allTransactions);
+  return {
+    allTransactions,
+    importedMonthGroups,
+    latestMonth: importedMonthGroups[0]?.[0] || null,
+  };
 };
 
 /**
@@ -134,6 +246,409 @@ analyticsRouter.get("/dashboard", async (req: Request, res: Response) => {
       series: Array.from(seriesMap.values()),
       categoryBreakdown,
       recentTransactions,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/analytics/dashboard-overview
+ * Imported-month dashboard summary for the home overview tab
+ */
+analyticsRouter.get("/dashboard-overview", async (req: Request, res: Response) => {
+  try {
+    const { userId, month } = req.query;
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const { allTransactions, importedMonthGroups, latestMonth } =
+      await findLatestImportedMonth(userId as string);
+    const selectedMonth = (month as string | undefined) || latestMonth;
+    const selectedTransactions = selectedMonth
+      ? importedMonthGroups.find(([monthKey]) => monthKey === selectedMonth)?.[1] || []
+      : [];
+
+    const categoryBreakdown = buildCategoryBreakdown(selectedTransactions);
+    const largestTransaction = [...selectedTransactions]
+      .sort((a, b) => getAnalyticsEffectiveOut(b) - getAnalyticsEffectiveOut(a))[0];
+
+    const monthsAscending = [...importedMonthGroups].reverse();
+    const trend = monthsAscending.slice(-6).map(([monthKey, monthTransactions]) => ({
+      month: monthKey,
+      ...summarizeTransactions(monthTransactions),
+    }));
+
+    const previousMonth = selectedMonth
+      ? monthsAscending[monthsAscending.findIndex(([monthKey]) => monthKey === selectedMonth) - 1]
+      : undefined;
+    const currentSummary = summarizeTransactions(selectedTransactions);
+    const previousSummary = previousMonth ? summarizeTransactions(previousMonth[1]) : null;
+
+    const recentTransactions = await prisma.transaction.findMany({
+      where: { userId: userId as string },
+      include: { category: true },
+      orderBy: { date: "desc" },
+      take: 8,
+    });
+
+    res.json({
+      selectedMonth,
+      importedMonths: importedMonthGroups.map(([monthKey, monthTransactions]) => ({
+        month: monthKey,
+        transactionCount: monthTransactions.length,
+      })),
+      summary: {
+        ...currentSummary,
+        topCategory: categoryBreakdown[0] || null,
+        largestTransaction: largestTransaction ? serializeTransaction(largestTransaction) : null,
+        previousMonth: previousMonth
+          ? {
+              month: previousMonth[0],
+              totalOut: previousSummary?.totalOut || 0,
+              spendingDelta: currentSummary.totalOut - (previousSummary?.totalOut || 0),
+            }
+          : null,
+      },
+      trend,
+      recentTransactions: recentTransactions.map(serializeTransaction),
+      hasTransactions: allTransactions.length > 0,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/analytics/dashboard-review
+ * Cleanup and data-health summary for the home review tab
+ */
+analyticsRouter.get("/dashboard-review", async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const transactions = await prisma.transaction.findMany({
+      where: { userId: userId as string },
+      include: { category: true, importBatch: true },
+      orderBy: { date: "desc" },
+    });
+    const importedMonthGroups = getImportedMonthGroups(transactions);
+    const categoryBreakdown = buildCategoryBreakdown(transactions);
+    const merchantBreakdown = buildMerchantBreakdown(transactions);
+
+    const uncategorized = transactions
+      .filter((tx) => !tx.categoryId)
+      .slice(0, 8)
+      .map(serializeTransaction);
+    const averageOut = transactions.length
+      ? transactions.reduce((sum, tx) => sum + getAnalyticsEffectiveOut(tx), 0) / transactions.length
+      : 0;
+    const largeTransactions = transactions
+      .filter((tx) => getAnalyticsEffectiveOut(tx) > Math.max(averageOut * 3, 250))
+      .slice(0, 8)
+      .map(serializeTransaction);
+
+    const firstSeen = new Map<string, Date>();
+    [...transactions].reverse().forEach((tx) => {
+      const merchant = normalizeMerchant(tx);
+      if (!firstSeen.has(merchant.key)) firstSeen.set(merchant.key, tx.date);
+    });
+    const latestMonth = importedMonthGroups[0]?.[0] || null;
+    const newMerchants = latestMonth
+      ? transactions
+          .filter((tx) => formatMonthKey(tx.date) === latestMonth)
+          .map((tx) => normalizeMerchant(tx))
+          .filter((merchant, index, arr) =>
+            arr.findIndex((item) => item.key === merchant.key) === index &&
+            firstSeen.get(merchant.key) &&
+            formatMonthKey(firstSeen.get(merchant.key) as Date) === latestMonth,
+          )
+          .slice(0, 8)
+      : [];
+
+    const importSummaries = importedMonthGroups.slice(0, 6).map(([monthKey, monthTransactions]) => {
+      const monthCategories = buildCategoryBreakdown(monthTransactions);
+      return {
+        month: monthKey,
+        latestTransactionDate: monthTransactions.reduce(
+          (latest, tx) => (tx.date > latest ? tx.date : latest),
+          monthTransactions[0]?.date || new Date(),
+        ),
+        ...summarizeTransactions(monthTransactions),
+        topCategory: monthCategories[0] || null,
+      };
+    });
+
+    const ruleCount = await prisma.importRule.count({ where: { userId: userId as string } });
+    const categorizedCount = transactions.filter((tx) => tx.categoryId).length;
+
+    res.json({
+      reviewQueue: {
+        uncategorized,
+        newMerchants,
+        largeTransactions,
+      },
+      importSummaries,
+      dataHealth: {
+        transactionCount: transactions.length,
+        categorizedCount,
+        uncategorizedCount: transactions.length - categorizedCount,
+        categorizedPercent: transactions.length ? Math.round((categorizedCount / transactions.length) * 100) : 0,
+        ruleCount,
+        merchantCount: merchantBreakdown.length,
+        categoryCount: categoryBreakdown.length,
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/analytics/report
+ * Configurable reporting data for the analytics reports tab
+ */
+analyticsRouter.get("/report", async (req: Request, res: Response) => {
+  try {
+    const {
+      userId,
+      month,
+      range = "month",
+      metric = "inOut",
+      groupBy = "month",
+      categoryId,
+      merchantKey,
+    } = req.query;
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const { latestMonth, importedMonthGroups } = await findLatestImportedMonth(userId as string);
+    const selectedMonth = (month as string | undefined) || latestMonth || formatMonthKey(new Date());
+    const { start, end } = getRangeForQuery(range as string, selectedMonth);
+
+    const baseTransactions = await prisma.transaction.findMany({
+      where: {
+        userId: userId as string,
+        date: { gte: start, lte: end },
+      },
+      include: { category: true },
+      orderBy: { date: "asc" },
+    });
+
+    let transactions = await prisma.transaction.findMany({
+      where: {
+        userId: userId as string,
+        date: { gte: start, lte: end },
+        ...(categoryId
+          ? categoryId === "uncategorized"
+            ? { categoryId: null }
+            : { categoryId: categoryId as string }
+          : {}),
+      },
+      include: { category: true },
+      orderBy: { date: "asc" },
+    });
+
+    if (merchantKey) {
+      transactions = transactions.filter((tx) => normalizeMerchant(tx).key === merchantKey);
+    }
+
+    const summary = summarizeTransactions(transactions);
+    const monthSeries = buildMonthSeries(start, end).map((monthKey) => ({
+      key: monthKey,
+      label: monthKey,
+      totalIn: 0,
+      totalOut: 0,
+      net: 0,
+      transactionCount: 0,
+    }));
+    const daySeries = buildAnalyticsDailySeries(start, end).map((day) => ({
+      key: day,
+      label: day,
+      totalIn: 0,
+      totalOut: 0,
+      net: 0,
+      transactionCount: 0,
+    }));
+    const timeSeries = groupBy === "day" ? daySeries : monthSeries;
+    const timeSeriesMap = new Map(timeSeries.map((item) => [item.key, item]));
+
+    for (const tx of transactions) {
+      const key = groupBy === "day" ? formatAnalyticsDayKey(tx.date) : formatMonthKey(tx.date);
+      const item = timeSeriesMap.get(key);
+      if (!item) continue;
+      item.totalIn += toAnalyticsNumber(tx.amountIn);
+      item.totalOut += getAnalyticsEffectiveOut(tx);
+      item.net = item.totalIn - item.totalOut;
+      item.transactionCount += 1;
+    }
+
+    const categoryBreakdown = buildCategoryBreakdown(transactions);
+    const merchantBreakdown = buildMerchantBreakdown(transactions);
+    const availableCategories = buildCategoryBreakdown(baseTransactions);
+    const availableMerchants = buildMerchantBreakdown(baseTransactions);
+    const breakdown = groupBy === "merchant" ? merchantBreakdown : categoryBreakdown;
+    const getMetricValue = (item: { totalIn: number; totalOut: number }) => {
+      if (metric === "income") return item.totalIn;
+      if (metric === "net") return item.totalIn - item.totalOut;
+      return item.totalOut;
+    };
+    const totalForPercent = breakdown.reduce(
+      (sum, item) => sum + Math.abs(getMetricValue(item)),
+      0,
+    );
+
+    res.json({
+      selectedMonth,
+      importedMonths: importedMonthGroups.map(([monthKey]) => monthKey),
+      controls: { range, metric, groupBy, categoryId: categoryId || null, merchantKey: merchantKey || null },
+      period: { start, end },
+      summary,
+      chartSeries: groupBy === "category" || groupBy === "merchant"
+        ? breakdown.map((item: any) => ({
+            key: item.key,
+            label: item.name,
+            totalIn: item.totalIn,
+            totalOut: item.totalOut,
+            net: item.totalIn - item.totalOut,
+            metricValue: getMetricValue(item),
+            transactionCount: item.transactionCount,
+            color: item.color || "#5750F1",
+          }))
+        : timeSeries,
+      breakdown: breakdown.map((item: any) => ({
+        ...item,
+        metricValue: getMetricValue(item),
+        percentOfTotal: totalForPercent ? Math.round((Math.abs(getMetricValue(item)) / totalForPercent) * 1000) / 10 : 0,
+      })),
+      transactions: [...transactions].reverse().map(serializeTransaction),
+      categories: availableCategories.map((item) => ({ id: item.key, name: item.name, color: item.color })),
+      merchants: availableMerchants.map((item) => ({ key: item.key, name: item.name })),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/analytics/insights
+ * Opinionated insights for imported statement data
+ */
+analyticsRouter.get("/insights", async (req: Request, res: Response) => {
+  try {
+    const { userId, month } = req.query;
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const { allTransactions, importedMonthGroups, latestMonth } =
+      await findLatestImportedMonth(userId as string);
+    const selectedMonth = (month as string | undefined) || latestMonth;
+    const selectedTransactions = selectedMonth
+      ? importedMonthGroups.find(([monthKey]) => monthKey === selectedMonth)?.[1] || []
+      : [];
+    const monthsAscending = [...importedMonthGroups].reverse();
+    const selectedIndex = monthsAscending.findIndex(([monthKey]) => monthKey === selectedMonth);
+    const previousMonth = selectedIndex > 0 ? monthsAscending[selectedIndex - 1] : null;
+    const priorThree = selectedIndex > 0 ? monthsAscending.slice(Math.max(0, selectedIndex - 3), selectedIndex) : [];
+    const currentSummary = summarizeTransactions(selectedTransactions);
+    const previousSummary = previousMonth ? summarizeTransactions(previousMonth[1]) : null;
+    const threeMonthAverage = priorThree.length
+      ? priorThree.reduce((sum, [, monthTransactions]) => sum + summarizeTransactions(monthTransactions).totalOut, 0) / priorThree.length
+      : null;
+
+    const currentCategories = buildCategoryBreakdown(selectedTransactions);
+    const previousCategories = previousMonth ? buildCategoryBreakdown(previousMonth[1]) : [];
+    const previousCategoryMap = new Map(previousCategories.map((item) => [item.key, item]));
+    const categoryChanges = currentCategories
+      .map((item) => {
+        const previous = previousCategoryMap.get(item.key);
+        const delta = item.totalOut - (previous?.totalOut || 0);
+        return {
+          ...item,
+          previousTotalOut: previous?.totalOut || 0,
+          delta,
+          percentDelta: previous?.totalOut ? Math.round((delta / previous.totalOut) * 1000) / 10 : null,
+        };
+      })
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+      .slice(0, 8);
+
+    const merchantByMonth = new Map<string, Map<string, { name: string; months: Set<string>; totalOut: number; amounts: number[] }>>();
+    for (const [monthKey, monthTransactions] of importedMonthGroups) {
+      for (const tx of monthTransactions) {
+        const amountOut = getAnalyticsEffectiveOut(tx);
+        if (amountOut <= 0) continue;
+        const merchant = normalizeMerchant(tx);
+        const monthMap = merchantByMonth.get(merchant.key) || new Map();
+        const current = monthMap.get(monthKey) || { name: merchant.name, months: new Set<string>(), totalOut: 0, amounts: [] };
+        current.months.add(monthKey);
+        current.totalOut += amountOut;
+        current.amounts.push(amountOut);
+        monthMap.set(monthKey, current);
+        merchantByMonth.set(merchant.key, monthMap);
+      }
+    }
+
+    const recurringMerchants = Array.from(merchantByMonth.entries())
+      .map(([key, monthMap]) => {
+        const entries = Array.from(monthMap.values());
+        const monthsSeen = entries.length;
+        const amounts = entries.flatMap((entry) => entry.amounts);
+        const averageAmount = amounts.reduce((sum, amount) => sum + amount, 0) / Math.max(amounts.length, 1);
+        const minAmount = Math.min(...amounts);
+        const maxAmount = Math.max(...amounts);
+        return {
+          key,
+          name: entries[0]?.name || key,
+          monthsSeen,
+          totalOut: entries.reduce((sum, entry) => sum + entry.totalOut, 0),
+          averageAmount,
+          frequency: monthsSeen >= 3 ? "monthly" : monthsSeen === 2 ? "recurring" : "one-off",
+          stability: maxAmount - minAmount <= Math.max(5, averageAmount * 0.1) ? "fixed" : "variable",
+        };
+      })
+      .filter((item) => item.monthsSeen >= 2)
+      .sort((a, b) => b.totalOut - a.totalOut)
+      .slice(0, 8);
+
+    const merchantBreakdown = buildMerchantBreakdown(selectedTransactions);
+    const previousMerchantKeys = new Set(previousMonth ? buildMerchantBreakdown(previousMonth[1]).map((item) => item.key) : []);
+    const newMerchants = merchantBreakdown.filter((item) => !previousMerchantKeys.has(item.key)).slice(0, 8);
+    const averageSelectedOut = selectedTransactions.length
+      ? selectedTransactions.reduce((sum, tx) => sum + getAnalyticsEffectiveOut(tx), 0) / selectedTransactions.length
+      : 0;
+    const anomalies = selectedTransactions
+      .filter((tx) => getAnalyticsEffectiveOut(tx) > Math.max(averageSelectedOut * 3, 250))
+      .sort((a, b) => getAnalyticsEffectiveOut(b) - getAnalyticsEffectiveOut(a))
+      .slice(0, 8)
+      .map(serializeTransaction);
+
+    res.json({
+      selectedMonth,
+      importedMonths: importedMonthGroups.map(([monthKey]) => monthKey),
+      monthlySummary: {
+        ...currentSummary,
+        previousMonth: previousMonth ? previousMonth[0] : null,
+        previousTotalOut: previousSummary?.totalOut || null,
+        spendingDelta: previousSummary ? currentSummary.totalOut - previousSummary.totalOut : null,
+        threeMonthAverage,
+        threeMonthDelta: threeMonthAverage !== null ? currentSummary.totalOut - threeMonthAverage : null,
+        mainDrivers: categoryChanges.slice(0, 3),
+      },
+      recurringMerchants,
+      merchantInsights: {
+        topMerchants: merchantBreakdown.slice(0, 8),
+        newMerchants,
+      },
+      categoryChanges,
+      anomalies,
+      hasTransactions: allTransactions.length > 0,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

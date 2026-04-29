@@ -1,45 +1,75 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
+import { format, parseISO } from "date-fns";
 import {
-  Area,
-  AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
-  Cell,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
-import { format, parseISO } from "date-fns";
+import { AlertCircle, CheckCircle2, FileText, Upload } from "lucide-react";
+import { getDashboardOverview } from "@/app/actions/analytics";
+import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Select";
-import { getDashboardAnalytics } from "@/app/actions/analytics";
 
-type Category = { id: string; name: string; color: string };
+type Transaction = {
+  id: string;
+  date: string;
+  description: string;
+  label?: string | null;
+  amountIn: number;
+  amountOut: number;
+  category?: { id: string; name: string; color: string } | null;
+  merchant?: string;
+};
 
-interface DashboardData {
-  timeframeDays: number;
-  totals: { totalIn: number; totalOut: number; net: number };
-  series: Array<{ date: string; in: number; out: number }>;
-  categoryBreakdown: Array<{ category: Category | null; totalOut: number }>;
-  recentTransactions: Array<{
-    id: string;
-    date: string;
-    description: string;
-    label?: string | null;
-    amountIn?: number | string | null;
-    amountOut?: number | string | null;
-    category?: Category | null;
+type OverviewData = {
+  selectedMonth: string | null;
+  importedMonths: Array<{ month: string; transactionCount: number }>;
+  summary: {
+    totalIn: number;
+    totalOut: number;
+    net: number;
+    transactionCount: number;
+    topCategory: { name: string; color: string; totalOut: number } | null;
+    largestTransaction: Transaction | null;
+    previousMonth: { month: string; totalOut: number; spendingDelta: number } | null;
+  };
+  trend: Array<{ month: string; totalIn: number; totalOut: number; net: number }>;
+  recentTransactions: Transaction[];
+  hasTransactions: boolean;
+};
+
+type ReviewData = {
+  reviewQueue: {
+    uncategorized: Transaction[];
+    newMerchants: Array<{ key: string; name: string }>;
+    largeTransactions: Transaction[];
+  };
+  importSummaries: Array<{
+    month: string;
+    latestTransactionDate: string;
+    totalIn: number;
+    totalOut: number;
+    net: number;
+    transactionCount: number;
+    topCategory: { name: string; color: string; totalOut: number } | null;
   }>;
-}
-
-const toNumber = (value: number | string | null | undefined) => {
-  if (value === null || value === undefined) return 0;
-  if (typeof value === "number") return value;
-  return Number(value);
+  dataHealth: {
+    transactionCount: number;
+    categorizedCount: number;
+    uncategorizedCount: number;
+    categorizedPercent: number;
+    ruleCount: number;
+    merchantCount: number;
+    categoryCount: number;
+  };
 };
 
 const formatCurrency = (value: number) =>
@@ -47,294 +77,300 @@ const formatCurrency = (value: number) =>
     style: "currency",
     currency: "SGD",
     maximumFractionDigits: 2,
-  }).format(value);
+  }).format(value || 0);
 
-const timeframeOptions = [
-  { value: "7", label: "Last 7 days" },
-  { value: "30", label: "Last 30 days" },
-  { value: "90", label: "Last 90 days" },
-  { value: "365", label: "Last 12 months" },
-];
+const formatMonth = (month: string | null) => {
+  if (!month) return "No imported month";
+  return format(parseISO(`${month}-01`), "MMM yyyy");
+};
 
-export function DashboardClient({ initialData }: { initialData: DashboardData }) {
-  const [data, setData] = useState<DashboardData>(initialData);
-  const [loading, setLoading] = useState(false);
+function MetricCard({ title, value, hint, tone = "default" }: { title: string; value: string; hint: string; tone?: "default" | "good" | "bad" }) {
+  const toneClass = tone === "good" ? "text-green" : tone === "bad" ? "text-red" : "text-dark dark:text-white";
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-semibold text-dark-5 dark:text-dark-6">{title}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className={`text-2xl font-bold ${toneClass}`}>{value}</div>
+        <p className="mt-2 text-xs text-dark-5 dark:text-dark-6">{hint}</p>
+      </CardContent>
+    </Card>
+  );
+}
 
-  const series = useMemo(
-    () =>
-      data.series.map((item) => ({
-        ...item,
-        in: toNumber(item.in),
-        out: toNumber(item.out),
-        label: format(parseISO(item.date), "dd MMM"),
-      })),
-    [data.series],
+function EmptyState({ title, description, action }: { title: string; description: string; action?: React.ReactNode }) {
+  return (
+    <Card>
+      <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
+        <FileText className="size-10 text-dark-4" />
+        <div>
+          <h3 className="font-semibold text-dark dark:text-white">{title}</h3>
+          <p className="mt-1 text-sm text-dark-5 dark:text-dark-6">{description}</p>
+        </div>
+        {action}
+      </CardContent>
+    </Card>
+  );
+}
+
+export function DashboardClient({ initialOverview, initialReview }: { initialOverview: OverviewData; initialReview: ReviewData }) {
+  const [activeTab, setActiveTab] = useState<"overview" | "review">("overview");
+  const [overview, setOverview] = useState(initialOverview);
+  const [loadingMonth, setLoadingMonth] = useState(false);
+
+  const monthOptions = overview.importedMonths.map((item) => ({
+    value: item.month,
+    label: formatMonth(item.month),
+    description: `${item.transactionCount} transactions`,
+  }));
+
+  const trend = useMemo(
+    () => overview.trend.map((item) => ({ ...item, label: formatMonth(item.month) })),
+    [overview.trend],
   );
 
-  const pieData = useMemo(() => {
-    const top = data.categoryBreakdown.slice(0, 6);
-    const rest = data.categoryBreakdown.slice(6);
-    const restTotal = rest.reduce((acc, item) => acc + item.totalOut, 0);
-    const result = top.map((item) => ({
-      name: item.category?.name || "Uncategorized",
-      value: item.totalOut,
-      color: item.category?.color || "#9ca3af",
-    }));
-    if (restTotal > 0) {
-      result.push({ name: "Others", value: restTotal, color: "#CBD5E1" });
-    }
-    return result;
-  }, [data.categoryBreakdown]);
+  const reviewCount =
+    initialReview.reviewQueue.uncategorized.length +
+    initialReview.reviewQueue.newMerchants.length +
+    initialReview.reviewQueue.largeTransactions.length;
 
-  const recentTransactions = useMemo(
-    () =>
-      data.recentTransactions.map((tx) => ({
-        ...tx,
-        amountIn: toNumber(tx.amountIn),
-        amountOut: toNumber(tx.amountOut),
-      })),
-    [data.recentTransactions],
-  );
-
-  const handleTimeframeChange = async (value: string) => {
-    setLoading(true);
+  const handleMonthChange = async (month: string) => {
+    setLoadingMonth(true);
     try {
-      const json = await getDashboardAnalytics(Number(value));
-      setData(json);
+      setOverview(await getDashboardOverview(month));
     } finally {
-      setLoading(false);
+      setLoadingMonth(false);
     }
   };
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold text-dark dark:text-white">
-            Overview
-          </h2>
-          <p className="text-sm text-dark-5 dark:text-dark-6">
-            A quick look at your income and spending.
-          </p>
-        </div>
-        <div className="w-full max-w-xs">
-          <Select
-            value={String(data.timeframeDays)}
-            options={timeframeOptions}
-            onChange={handleTimeframeChange}
-            buttonClassName="w-full"
-          />
-        </div>
+      <div className="flex flex-wrap gap-2 rounded-xl border border-stroke bg-white p-1 dark:border-stroke-dark dark:bg-gray-dark">
+        {[
+          { key: "overview", label: "Overview" },
+          { key: "review", label: `Review${reviewCount ? ` (${reviewCount})` : ""}` },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key as "overview" | "review")}
+            className={`rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+              activeTab === tab.key
+                ? "bg-primary text-white"
+                : "text-dark-5 hover:bg-gray-2 dark:text-dark-6 dark:hover:bg-dark-2"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-semibold text-dark-5 dark:text-dark-6">
-              Total In
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green">
-              {formatCurrency(data.totals.totalIn)}
+      {activeTab === "overview" ? (
+        <div className="flex flex-col gap-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h2 className="text-2xl font-semibold text-dark dark:text-white">Imported Month Overview</h2>
+              <p className="text-sm text-dark-5 dark:text-dark-6">
+                Quick analytics from completed statement periods, not live current-month data.
+              </p>
             </div>
-            <p className="text-xs text-dark-5 dark:text-dark-6 mt-2">
-              Inflow over the selected period
-            </p>
-          </CardContent>
-        </Card>
+            <div className="w-full max-w-xs">
+              <Select
+                value={overview.selectedMonth || ""}
+                options={monthOptions}
+                onChange={handleMonthChange}
+                buttonClassName="w-full"
+                placeholder="Select imported month"
+              />
+            </div>
+          </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-semibold text-dark-5 dark:text-dark-6">
-              Total Out
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-red">
-              {formatCurrency(data.totals.totalOut)}
-            </div>
-            <p className="text-xs text-dark-5 dark:text-dark-6 mt-2">
-              Spending over the selected period
-            </p>
-          </CardContent>
-        </Card>
+          {!overview.hasTransactions ? (
+            <EmptyState
+              title="No transactions imported yet"
+              description="Import a statement to unlock dashboard analytics and review queues."
+              action={<Link href="/import"><Button leftIcon={<Upload className="size-4" />}>Import Statement</Button></Link>}
+            />
+          ) : !overview.selectedMonth ? (
+            <EmptyState
+              title="No completed statement month detected"
+              description="A month appears here after it has at least one transaction dated after the 15th."
+              action={<Link href="/import"><Button>Import Another Statement</Button></Link>}
+            />
+          ) : (
+            <>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <MetricCard title="Spending" value={formatCurrency(overview.summary.totalOut)} hint={formatMonth(overview.selectedMonth)} tone="bad" />
+                <MetricCard title="Income" value={formatCurrency(overview.summary.totalIn)} hint={`${overview.summary.transactionCount} transactions`} tone="good" />
+                <MetricCard title="Net Flow" value={formatCurrency(overview.summary.net)} hint="Income minus spending" tone={overview.summary.net >= 0 ? "good" : "bad"} />
+                <MetricCard title="Top Category" value={overview.summary.topCategory?.name || "None"} hint={overview.summary.topCategory ? formatCurrency(overview.summary.topCategory.totalOut) : "No spending categories"} />
+              </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-semibold text-dark-5 dark:text-dark-6">
-              Net Flow
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div
-              className={`text-2xl font-bold ${
-                data.totals.net >= 0 ? "text-green" : "text-red"
-              }`}
-            >
-              {formatCurrency(data.totals.net)}
+              <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
+                <Card className="min-h-[360px]">
+                  <CardHeader className="flex items-center justify-between">
+                    <CardTitle>Spending and Income Trend</CardTitle>
+                    {loadingMonth && <span className="text-xs text-dark-5 dark:text-dark-6">Updating...</span>}
+                  </CardHeader>
+                  <CardContent className="h-[300px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={trend}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--color-stroke)" />
+                        <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--color-dark-5)" }} />
+                        <YAxis tick={{ fontSize: 12, fill: "var(--color-dark-5)" }} />
+                        <Tooltip formatter={(value: number) => formatCurrency(Number(value))} />
+                        <Bar dataKey="totalOut" name="Spending" fill="#F23030" radius={[6, 6, 0, 0]} />
+                        <Bar dataKey="totalIn" name="Income" fill="#22AD5C" radius={[6, 6, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader><CardTitle>Quick Actions</CardTitle></CardHeader>
+                  <CardContent className="flex flex-col gap-3">
+                    <Link href="/import"><Button className="w-full" leftIcon={<Upload className="size-4" />}>Import Statement</Button></Link>
+                    <Link href="/analytics"><Button className="w-full" variant="secondary">Open Analytics</Button></Link>
+                    <Link href="/transactions"><Button className="w-full" variant="secondary">Review Transactions</Button></Link>
+                    <Link href="/settings"><Button className="w-full" variant="secondary">Manage Categories</Button></Link>
+                    {overview.summary.largestTransaction && (
+                      <div className="mt-3 rounded-lg bg-gray-2 p-4 dark:bg-dark-2">
+                        <p className="text-xs font-semibold uppercase text-dark-5 dark:text-dark-6">Largest transaction</p>
+                        <p className="mt-2 truncate text-sm font-semibold text-dark dark:text-white">
+                          {overview.summary.largestTransaction.label || overview.summary.largestTransaction.description}
+                        </p>
+                        <p className="text-sm text-red">{formatCurrency(overview.summary.largestTransaction.amountOut)}</p>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              <Card>
+                <CardHeader><CardTitle>Recent Transactions</CardTitle></CardHeader>
+                <CardContent>
+                  <TransactionList transactions={overview.recentTransactions} />
+                </CardContent>
+              </Card>
+            </>
+          )}
+        </div>
+      ) : (
+        <ReviewTab data={initialReview} />
+      )}
+    </div>
+  );
+}
+
+function TransactionList({ transactions }: { transactions: Transaction[] }) {
+  if (transactions.length === 0) {
+    return <div className="py-8 text-center text-sm text-dark-5 dark:text-dark-6">No transactions to show.</div>;
+  }
+  return (
+    <div className="divide-y divide-stroke dark:divide-dark-3">
+      {transactions.map((tx) => (
+        <div key={tx.id} className="flex items-center justify-between gap-4 py-3">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-dark dark:text-white">{tx.label || tx.description}</div>
+            <div className="text-xs text-dark-5 dark:text-dark-6">
+              {format(parseISO(String(tx.date)), "dd MMM yyyy")} - {tx.category?.name || "Uncategorized"}
             </div>
-            <p className="text-xs text-dark-5 dark:text-dark-6 mt-2">
-              Income minus expenses
-            </p>
-          </CardContent>
-        </Card>
+          </div>
+          <div className={`shrink-0 text-sm font-semibold ${tx.amountIn > 0 ? "text-green" : "text-red"}`}>
+            {tx.amountIn > 0 ? `+${formatCurrency(tx.amountIn)}` : `-${formatCurrency(tx.amountOut)}`}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ReviewTab({ data }: { data: ReviewData }) {
+  const queueEmpty =
+    data.reviewQueue.uncategorized.length === 0 &&
+    data.reviewQueue.newMerchants.length === 0 &&
+    data.reviewQueue.largeTransactions.length === 0;
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div>
+        <h2 className="text-2xl font-semibold text-dark dark:text-white">Review Queue</h2>
+        <p className="text-sm text-dark-5 dark:text-dark-6">Cleanup and data quality signals from imported statements.</p>
       </div>
+
+      {queueEmpty ? (
+        <Card>
+          <CardContent className="flex items-center gap-3 py-8">
+            <CheckCircle2 className="size-8 text-green" />
+            <div>
+              <h3 className="font-semibold text-dark dark:text-white">No urgent review items</h3>
+              <p className="text-sm text-dark-5 dark:text-dark-6">Your imported transaction data looks clean.</p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid gap-6 xl:grid-cols-3">
+          <QueueCard title="Uncategorized" count={data.reviewQueue.uncategorized.length} transactions={data.reviewQueue.uncategorized} />
+          <Card>
+            <CardHeader><CardTitle>New Merchants</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              {data.reviewQueue.newMerchants.length === 0 ? <p className="text-sm text-dark-5 dark:text-dark-6">No new merchants detected.</p> : data.reviewQueue.newMerchants.map((merchant) => (
+                <div key={merchant.key} className="rounded-lg bg-gray-2 px-3 py-2 text-sm text-dark dark:bg-dark-2 dark:text-white">{merchant.name}</div>
+              ))}
+            </CardContent>
+          </Card>
+          <QueueCard title="Large Transactions" count={data.reviewQueue.largeTransactions.length} transactions={data.reviewQueue.largeTransactions} />
+        </div>
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
-        <Card className="min-h-[360px]">
-          <CardHeader className="flex items-center justify-between">
-            <CardTitle>Cash Flow</CardTitle>
-            {loading && (
-              <span className="text-xs text-dark-5 dark:text-dark-6">
-                Updating...
-              </span>
-            )}
-          </CardHeader>
-          <CardContent className="h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={series} margin={{ left: 8, right: 16 }}>
-                <defs>
-                  <linearGradient id="inGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#22AD5C" stopOpacity={0.35} />
-                    <stop offset="95%" stopColor="#22AD5C" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="outGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#F23030" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#F23030" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  stroke="var(--color-stroke)"
-                />
-                <XAxis
-                  dataKey="label"
-                  tick={{ fontSize: 12, fill: "var(--color-dark-5)" }}
-                />
-                <YAxis tick={{ fontSize: 12, fill: "var(--color-dark-5)" }} />
-                <Tooltip
-                  formatter={(value: number) => formatCurrency(Number(value))}
-                  labelFormatter={(label) => `Day ${label}`}
-                  contentStyle={{
-                    backgroundColor: "var(--color-white)",
-                    border: "1px solid var(--color-stroke)",
-                    borderRadius: 8,
-                  }}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="in"
-                  stroke="#22AD5C"
-                  fill="url(#inGradient)"
-                  strokeWidth={2}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="out"
-                  stroke="#F23030"
-                  fill="url(#outGradient)"
-                  strokeWidth={2}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+        <Card>
+          <CardHeader><CardTitle>Recent Import Summaries</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            {data.importSummaries.length === 0 ? <p className="text-sm text-dark-5 dark:text-dark-6">No imported months detected yet.</p> : data.importSummaries.map((item) => (
+              <div key={item.month} className="grid gap-3 rounded-lg border border-stroke p-4 dark:border-stroke-dark md:grid-cols-4">
+                <div><p className="text-sm font-semibold text-dark dark:text-white">{formatMonth(item.month)}</p><p className="text-xs text-dark-5 dark:text-dark-6">{item.transactionCount} transactions</p></div>
+                <div><p className="text-xs text-dark-5 dark:text-dark-6">Spending</p><p className="font-semibold text-red">{formatCurrency(item.totalOut)}</p></div>
+                <div><p className="text-xs text-dark-5 dark:text-dark-6">Income</p><p className="font-semibold text-green">{formatCurrency(item.totalIn)}</p></div>
+                <div><p className="text-xs text-dark-5 dark:text-dark-6">Top category</p><p className="font-semibold text-dark dark:text-white">{item.topCategory?.name || "None"}</p></div>
+              </div>
+            ))}
           </CardContent>
         </Card>
 
-        <Card className="min-h-[360px]">
-          <CardHeader>
-            <CardTitle>Top Categories</CardTitle>
-          </CardHeader>
-          <CardContent className="h-[300px] flex flex-col gap-4">
-            <div className="h-[180px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    dataKey="value"
-                    nameKey="name"
-                    innerRadius={50}
-                    outerRadius={80}
-                    paddingAngle={4}
-                  >
-                    {pieData.map((entry) => (
-                      <Cell key={entry.name} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    formatter={(value: number) =>
-                      formatCurrency(Number(value))
-                    }
-                    contentStyle={{
-                      backgroundColor: "var(--color-white)",
-                      border: "1px solid var(--color-stroke)",
-                      borderRadius: 8,
-                    }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
+        <Card>
+          <CardHeader><CardTitle>Data Health</CardTitle></CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <div className="flex items-center justify-between text-sm"><span className="text-dark-5 dark:text-dark-6">Categorized</span><span className="font-semibold text-dark dark:text-white">{data.dataHealth.categorizedPercent}%</span></div>
+              <div className="mt-2 h-2 rounded-full bg-gray-2 dark:bg-dark-2"><div className="h-2 rounded-full bg-primary" style={{ width: `${data.dataHealth.categorizedPercent}%` }} /></div>
             </div>
-            <div className="space-y-2">
-              {pieData.slice(0, 4).map((item) => (
-                <div key={item.name} className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: item.color }}
-                    />
-                    <span className="text-sm text-dark dark:text-white">
-                      {item.name}
-                    </span>
-                  </div>
-                  <span className="text-sm text-dark-5 dark:text-dark-6">
-                    {formatCurrency(item.value)}
-                  </span>
-                </div>
-              ))}
-            </div>
+            <HealthRow label="Transactions" value={data.dataHealth.transactionCount} />
+            <HealthRow label="Uncategorized" value={data.dataHealth.uncategorizedCount} warning={data.dataHealth.uncategorizedCount > 0} />
+            <HealthRow label="Rules" value={data.dataHealth.ruleCount} />
+            <HealthRow label="Merchants" value={data.dataHealth.merchantCount} />
+            {data.dataHealth.uncategorizedCount > 0 && <div className="flex gap-2 rounded-lg bg-red/10 p-3 text-sm text-red"><AlertCircle className="size-4 shrink-0" />Review uncategorized transactions to improve analytics accuracy.</div>}
           </CardContent>
         </Card>
       </div>
+    </div>
+  );
+}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent Transactions</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="divide-y divide-stroke dark:divide-dark-3">
-            {recentTransactions.map((tx) => (
-              <div
-                key={tx.id}
-                className="flex items-center justify-between py-3"
-              >
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-dark dark:text-white truncate">
-                    {tx.label || tx.description}
-                  </div>
-                  <div className="text-xs text-dark-5 dark:text-dark-6">
-                    {format(parseISO(String(tx.date)), "dd MMM yyyy")} •{" "}
-                    {tx.category?.name || "Uncategorized"}
-                  </div>
-                </div>
-                <div
-                  className={`text-sm font-semibold ${
-                    tx.amountIn && tx.amountIn > 0 ? "text-green" : "text-red"
-                  }`}
-                >
-                  {tx.amountIn && tx.amountIn > 0
-                    ? `+${formatCurrency(tx.amountIn)}`
-                    : `-${formatCurrency(tx.amountOut || 0)}`}
-                </div>
-              </div>
-            ))}
-            {recentTransactions.length === 0 && (
-              <div className="py-10 text-center text-sm text-dark-5 dark:text-dark-6">
-                No recent transactions yet.
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+function QueueCard({ title, count, transactions }: { title: string; count: number; transactions: Transaction[] }) {
+  return (
+    <Card>
+      <CardHeader><CardTitle>{title} ({count})</CardTitle></CardHeader>
+      <CardContent><TransactionList transactions={transactions.slice(0, 5)} /></CardContent>
+    </Card>
+  );
+}
+
+function HealthRow({ label, value, warning = false }: { label: string; value: number; warning?: boolean }) {
+  return (
+    <div className="flex items-center justify-between text-sm">
+      <span className="text-dark-5 dark:text-dark-6">{label}</span>
+      <span className={`font-semibold ${warning ? "text-red" : "text-dark dark:text-white"}`}>{value}</span>
     </div>
   );
 }

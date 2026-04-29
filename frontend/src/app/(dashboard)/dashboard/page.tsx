@@ -1,10 +1,11 @@
-import { getDashboardAnalytics } from "@/app/actions/analytics";
+import { getDashboardOverview, getDashboardReview } from "@/app/actions/analytics";
 import { DashboardClient } from "@/components/analytics/DashboardClient";
 
 export default async function DashboardPage() {
-  const initialData = await getDashboardAnalytics(30);
+  const [overview, review] = await Promise.all([
+    getDashboardOverview(),
+    getDashboardReview(),
+  ]);
 
-  return (
-    <DashboardClient initialData={initialData} />
-  );
+  return <DashboardClient initialOverview={overview} initialReview={review} />;
 }

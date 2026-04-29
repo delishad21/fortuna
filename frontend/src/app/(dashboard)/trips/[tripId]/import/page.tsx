@@ -9,11 +9,11 @@ import { TripImportReviewClient } from "@/components/trips/TripImportReviewClien
 import { getParserOptions } from "@/lib/parsers";
 
 interface TripImportPageProps {
-  params: { tripId: string };
+  params: Promise<{ tripId: string }>;
 }
 
 export default async function TripImportPage({ params }: TripImportPageProps) {
-  const tripId = params.tripId;
+  const { tripId } = await params;
   const [trip, wallets, categories, tripParsers, allTrips, fundings] =
     await Promise.all([
       getTrip(tripId),

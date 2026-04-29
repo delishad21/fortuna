@@ -2,11 +2,11 @@ import { getTrip } from "@/app/actions/trips";
 import { TripDetailsClient } from "@/components/trips/TripDetailsClient";
 
 interface TripDetailsPageProps {
-  params: { tripId: string };
+  params: Promise<{ tripId: string }>;
 }
 
 export default async function TripDetailsPage({ params }: TripDetailsPageProps) {
-  const trip = await getTrip(params.tripId);
+  const { tripId } = await params;
+  const trip = await getTrip(tripId);
   return <TripDetailsClient trip={trip} />;
 }
-

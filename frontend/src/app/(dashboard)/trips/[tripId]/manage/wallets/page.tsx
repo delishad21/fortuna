@@ -8,13 +8,13 @@ import {
 import { TripWalletsManagementClient } from "@/components/trips/TripWalletsManagementClient";
 
 interface TripManageWalletsPageProps {
-  params: { tripId: string };
+  params: Promise<{ tripId: string }>;
 }
 
 export default async function TripManageWalletsPage({
   params,
 }: TripManageWalletsPageProps) {
-  const tripId = params.tripId;
+  const { tripId } = await params;
   const [trip, wallets, walletSummaries, fundings, sourceCandidates] =
     await Promise.all([
       getTrip(tripId),
@@ -34,4 +34,3 @@ export default async function TripManageWalletsPage({
     />
   );
 }
-

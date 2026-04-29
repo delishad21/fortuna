@@ -27,6 +27,10 @@ const pageConfig: Record<
     title: "Trips",
     subtitle: "Create and manage your trip spending workspaces",
   },
+  "/analytics": {
+    title: "Analytics",
+    subtitle: "Reports and insights from imported statements",
+  },
   "/categories": {
     title: "Categories",
     subtitle: "Organize your spending categories",

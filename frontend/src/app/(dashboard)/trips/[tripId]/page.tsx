@@ -6,11 +6,11 @@ import {
 import { TripOverviewClient } from "@/components/trips/TripOverviewClient";
 
 interface TripFundingPageProps {
-  params: { tripId: string };
+  params: Promise<{ tripId: string }>;
 }
 
 export default async function TripFundingPage({ params }: TripFundingPageProps) {
-  const tripId = params.tripId;
+  const { tripId } = await params;
   const [trip, analytics, walletSummaries] = await Promise.all([
     getTrip(tripId),
     getTripAnalytics(tripId),

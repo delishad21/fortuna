@@ -12,11 +12,11 @@ import { TripTransactionsClient } from "@/components/trips/TripTransactionsClien
 import { getParserOptions } from "@/lib/parsers";
 
 interface TripManagePageProps {
-  params: { tripId: string };
+  params: Promise<{ tripId: string }>;
 }
 
 export default async function TripManagePage({ params }: TripManagePageProps) {
-  const tripId = params.tripId;
+  const { tripId } = await params;
   const [
     trip,
     fundings,

@@ -2,13 +2,13 @@ import { getFundingCandidates, getTrip, getTripFundings } from "@/app/actions/tr
 import { TripFundingMatchReviewClient } from "@/components/trips/TripFundingMatchReviewClient";
 
 interface TripFundingReviewPageProps {
-  params: { tripId: string };
+  params: Promise<{ tripId: string }>;
 }
 
 export default async function TripFundingReviewPage({
   params,
 }: TripFundingReviewPageProps) {
-  const tripId = params.tripId;
+  const { tripId } = await params;
   const [trip, fundings, fundingCandidates] = await Promise.all([
     getTrip(tripId),
     getTripFundings(tripId),

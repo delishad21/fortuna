@@ -5,6 +5,58 @@ import { auth } from "@/lib/auth";
 const DATA_SERVICE_URL =
   process.env.DATA_SERVICE_URL || "http://localhost:4001";
 
+async function fetchAnalytics(path: string) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    throw new Error("Unauthorized");
+  }
+
+  const separator = path.includes("?") ? "&" : "?";
+  const response = await fetch(
+    `${DATA_SERVICE_URL}${path}${separator}userId=${session.user.id}`,
+    { cache: "no-store" },
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error || "Failed to fetch analytics");
+  }
+
+  return response.json();
+}
+
+export async function getDashboardOverview(month?: string) {
+  const query = month ? `?month=${encodeURIComponent(month)}` : "";
+  return fetchAnalytics(`/api/analytics/dashboard-overview${query}`);
+}
+
+export async function getDashboardReview() {
+  return fetchAnalytics("/api/analytics/dashboard-review");
+}
+
+export interface AnalyticsReportParams {
+  month?: string;
+  range?: string;
+  metric?: string;
+  groupBy?: string;
+  categoryId?: string;
+  merchantKey?: string;
+}
+
+export async function getAnalyticsReport(params: AnalyticsReportParams = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) query.set(key, value);
+  });
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return fetchAnalytics(`/api/analytics/report${suffix}`);
+}
+
+export async function getAnalyticsInsights(month?: string) {
+  const query = month ? `?month=${encodeURIComponent(month)}` : "";
+  return fetchAnalytics(`/api/analytics/insights${query}`);
+}
+
 export async function getDashboardAnalytics(timeframeDays: number = 30) {
   const session = await auth();
   if (!session?.user?.id) {
