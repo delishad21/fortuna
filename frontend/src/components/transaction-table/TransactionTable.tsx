@@ -25,7 +25,10 @@ import { DuplicateMatchList } from "./DuplicateMatchList";
 import { useColumnResize } from "./hooks/useColumnResize";
 import { DEFAULT_COLUMN_WIDTHS, MIN_COLUMN_WIDTHS } from "./config/columns";
 import { areTransactionTablePropsEqual } from "./memo";
-import { shouldShowTablePreparingState } from "./virtualization";
+import {
+  resizeTextareaToContent,
+  shouldShowTablePreparingState,
+} from "./virtualization";
 import type { TransactionTableProps } from "./types";
 
 interface DeferredTextInputProps {
@@ -122,6 +125,7 @@ interface DeferredTextareaProps {
   className: string;
   dataRow: string;
   dataCol: string;
+  textareaRef?: (textarea: HTMLTextAreaElement | null) => void;
   onInput?: (event: FormEvent<HTMLTextAreaElement>) => void;
   onCommit: (value: string) => void;
 }
@@ -132,6 +136,7 @@ const DeferredTextarea = memo(function DeferredTextarea({
   className,
   dataRow,
   dataCol,
+  textareaRef,
   onInput,
   onCommit,
 }: DeferredTextareaProps) {
@@ -153,6 +158,7 @@ const DeferredTextarea = memo(function DeferredTextarea({
       rows={1}
       data-row={dataRow}
       data-col={dataCol}
+      ref={textareaRef}
       className={className}
     />
   );
@@ -272,10 +278,17 @@ function TransactionTableComponent({
 
   const autoResizeTextarea = useCallback(
     (event: FormEvent<HTMLTextAreaElement>) => {
-      const el = event.currentTarget;
-      el.style.height = "auto";
-      el.style.height = `${el.scrollHeight}px`;
-      rowVirtualizerMeasureRef.current?.();
+      if (resizeTextareaToContent(event.currentTarget)) {
+        rowVirtualizerMeasureRef.current?.();
+      }
+    },
+    [],
+  );
+
+  const autoResizeTextareaRef = useCallback(
+    (el: HTMLTextAreaElement | null) => {
+      if (!el) return;
+      resizeTextareaToContent(el);
     },
     [],
   );
@@ -287,8 +300,7 @@ function TransactionTableComponent({
       'textarea[data-col="description"]',
     );
     textareas.forEach((el) => {
-      el.style.height = "auto";
-      el.style.height = `${el.scrollHeight}px`;
+      resizeTextareaToContent(el);
     });
     rowVirtualizerMeasureRef.current?.();
   }, []);
@@ -883,6 +895,7 @@ function TransactionTableComponent({
                               onUpdateTransaction(index, "description", nextValue)
                             }
                             onInput={autoResizeTextarea}
+                            textareaRef={autoResizeTextareaRef}
                             disabled={showDuplicatesOnly}
                             dataRow={`${visibleIndex}`}
                             dataCol="description"
@@ -903,6 +916,7 @@ function TransactionTableComponent({
                             rows={1}
                             data-row={`${visibleIndex}`}
                             data-col="description"
+                            ref={autoResizeTextareaRef}
                             className="block w-full min-h-[44px] overflow-hidden px-3 py-3 pr-10 text-sm leading-5 border-0 bg-transparent text-dark dark:text-white outline-none focus:ring-0 resize-none disabled:cursor-not-allowed"
                           />
                         )}
