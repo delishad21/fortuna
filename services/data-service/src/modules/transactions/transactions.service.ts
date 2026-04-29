@@ -57,8 +57,10 @@ export class TransactionService {
   private static readonly PAYLAH_INTERNAL_RULE_NAMES = [
     "PayLah top-up from account is Internal",
     "DBS/POSB top-up to PayLah is Internal",
+    "DBS/POSB legacy top-up to PayLah is Internal",
     "PayLah send back to bank is Internal",
     "DBS/POSB receive back from PayLah is Internal",
+    "DBS/POSB legacy receive back from PayLah is Internal",
   ] as const;
 
   private static readonly DBS_PAYLAH_INTERNAL_PATTERNS = [
@@ -92,6 +94,18 @@ export class TransactionService {
       sortOrder: 20,
     },
     {
+      name: "DBS/POSB legacy top-up to PayLah is Internal",
+      parserId: "dbs_posb_consolidated_legacy",
+      matchType: "description_contains",
+      matchValue: "TOP-UP TO PAYLAH!",
+      caseSensitive: false,
+      enabled: false,
+      setLabel: null,
+      setCategoryName: null,
+      markInternal: true,
+      sortOrder: 21,
+    },
+    {
       name: "PayLah send back to bank is Internal",
       parserId: "dbs_paylah_statement",
       matchType: "description_contains",
@@ -114,6 +128,18 @@ export class TransactionService {
       setCategoryName: null,
       markInternal: true,
       sortOrder: 40,
+    },
+    {
+      name: "DBS/POSB legacy receive back from PayLah is Internal",
+      parserId: "dbs_posb_consolidated_legacy",
+      matchType: "description_contains",
+      matchValue: "SEND BACK FROM PAYLAH!",
+      caseSensitive: false,
+      enabled: false,
+      setLabel: null,
+      setCategoryName: null,
+      markInternal: true,
+      sortOrder: 41,
     },
     {
       name: "BUS/MRT transactions are Transportation",
@@ -999,7 +1025,11 @@ export class TransactionService {
       where: {
         userId,
         importBatch: {
-          is: { parserId: "dbs_posb_consolidated" },
+          is: {
+            parserId: {
+              in: ["dbs_posb_consolidated", "dbs_posb_consolidated_legacy"],
+            },
+          },
         },
         OR: this.DBS_PAYLAH_INTERNAL_PATTERNS.map((pattern) => ({
           description: {

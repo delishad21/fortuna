@@ -101,6 +101,13 @@ def get_parsers():
             "mode": "bank",
         },
         {
+            "id": "dbs_posb_consolidated_legacy",
+            "name": "DBS/POSB Consolidated Statement (Jan 2021 and earlier)",
+            "fileType": "pdf",
+            "description": "Parser for the legacy DBS/POSB consolidated statement layout",
+            "mode": "bank",
+        },
+        {
             "id": "ocbc_frank_statement",
             "name": "OCBC FRANK Account Statement",
             "fileType": "pdf",
