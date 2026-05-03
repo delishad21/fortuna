@@ -21,6 +21,11 @@ import { UploadSection, type FileUploadState } from "./UploadSection";
 import { TransactionTable } from "@/components/transaction-table/TransactionTable";
 import { ReimbursementSelectorModal } from "./ReimbursementSelectorModal";
 import type { TransactionLinkage } from "@/components/transaction-table/types";
+import {
+  formatImportValidationErrors,
+  validateImportSelection,
+  type ImportValidationError,
+} from "./importValidation";
 
 const PRESET_COLORS = [
   "#ef4444",
@@ -128,6 +133,7 @@ export function ImportClient({
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(
     new Set(),
   );
+  const [validationErrors, setValidationErrors] = useState<ImportValidationError[]>([]);
 
   const [duplicates, setDuplicates] = useState<Map<number, DuplicateMatch[]>>(
     new Map(),
@@ -157,6 +163,25 @@ export function ImportClient({
 
   const showModal = (type: ModalType, title: string, message: string) => {
     setModalState({ isOpen: true, type, title, message });
+  };
+
+  const showValidationErrors = (errors: ImportValidationError[]) => {
+    setValidationErrors(errors);
+    showModal(
+      "error",
+      "Resolve Import Errors",
+      formatImportValidationErrors(errors),
+    );
+  };
+
+  const validateSelectionOrShowErrors = (indices: Set<number>) => {
+    const result = validateImportSelection(editedTransactions, indices);
+    if (!result.valid) {
+      showValidationErrors(result.errors);
+      return false;
+    }
+    setValidationErrors([]);
+    return true;
   };
 
   const closeModal = () => {
@@ -202,6 +227,7 @@ export function ImportClient({
     }
 
     setEditedTransactions(updated);
+    setValidationErrors([]);
   };
 
   const handleOpenReimbursementSelector = (index: number) => {
@@ -464,6 +490,7 @@ export function ImportClient({
       updated[index] = nextRow;
       return updated;
     });
+    setValidationErrors([]);
   };
 
   const handleAddCategory = async (name: string, color: string) => {
@@ -483,12 +510,15 @@ export function ImportClient({
   const handleImportTransactions = async () => {
     if (parseResults.length === 0 || selectedIndices.size === 0) return;
 
+    const selectedIndexList = Array.from(selectedIndices).sort((a, b) => a - b);
+    const normalizedSelection = new Set(selectedIndexList);
+    if (!validateSelectionOrShowErrors(normalizedSelection)) return;
+
     setIsCheckingDuplicates(true);
     setError(null);
 
     try {
-      const selectedTransactions = Array.from(selectedIndices)
-        .sort((a, b) => a - b)
+      const selectedTransactions = selectedIndexList
         .map((index) => ({
           ...editedTransactions[index],
           date: new Date(editedTransactions[index].date),
@@ -499,18 +529,18 @@ export function ImportClient({
       if (result.duplicates.length > 0) {
         const duplicateMap = new Map<number, DuplicateMatch[]>();
         result.duplicates.forEach(({ index, matches }) => {
-          const originalIndex = Array.from(selectedIndices)[index];
+          const originalIndex = selectedIndexList[index];
           duplicateMap.set(originalIndex, matches);
         });
         setDuplicates(duplicateMap);
 
         const duplicateOriginalIndices = new Set(
           result.duplicates.map(
-            ({ index }) => Array.from(selectedIndices)[index],
+            ({ index }) => selectedIndexList[index],
           ),
         );
         const nonDups = new Set(
-          Array.from(selectedIndices).filter(
+          selectedIndexList.filter(
             (i) => !duplicateOriginalIndices.has(i),
           ),
         );
@@ -520,7 +550,7 @@ export function ImportClient({
 
         setStage("duplicates");
       } else {
-        await performImport(selectedIndices);
+        await performImport(normalizedSelection);
       }
     } catch (err) {
       setError(
@@ -533,6 +563,7 @@ export function ImportClient({
 
   const performImport = async (indices: Set<number>) => {
     if (parseResults.length === 0 || indices.size === 0) return;
+    if (!validateSelectionOrShowErrors(indices)) return;
 
     setIsImporting(true);
     setError(null);
@@ -583,16 +614,19 @@ export function ImportClient({
 
   const handleSelectAll = () => {
     setSelectedIndices(new Set(editedTransactions.map((_, i) => i)));
+    setValidationErrors([]);
   };
 
   const handleDeselectAll = () => {
     setSelectedIndices(new Set());
+    setValidationErrors([]);
   };
 
   const handleSelectVisible = (indices: number[]) => {
     setSelectedIndices((prev) => {
       const next = new Set(prev);
       indices.forEach((index) => next.add(index));
+      setValidationErrors([]);
       return next;
     });
   };
@@ -601,6 +635,16 @@ export function ImportClient({
     setSelectedIndices((prev) => {
       const next = new Set(prev);
       indices.forEach((index) => next.delete(index));
+      const validationSelection =
+        stage === "duplicates"
+          ? new Set([...next, ...nonDuplicateIndices])
+          : next;
+      const result = validateImportSelection(editedTransactions, validationSelection);
+      if (!result.valid) {
+        showValidationErrors(result.errors);
+        return prev;
+      }
+      setValidationErrors([]);
       return next;
     });
   };
@@ -612,6 +656,16 @@ export function ImportClient({
     } else {
       newSelection.add(index);
     }
+    const validationSelection =
+      stage === "duplicates"
+        ? new Set([...newSelection, ...nonDuplicateIndices])
+        : newSelection;
+    const result = validateImportSelection(editedTransactions, validationSelection);
+    if (!result.valid) {
+      showValidationErrors(result.errors);
+      return;
+    }
+    setValidationErrors([]);
     setSelectedIndices(newSelection);
   };
 
@@ -620,6 +674,7 @@ export function ImportClient({
       ...selectedIndices,
       ...nonDuplicateIndices,
     ]);
+    if (!validateSelectionOrShowErrors(allIndicesToImport)) return;
     await performImport(allIndicesToImport);
   };
 
@@ -640,6 +695,7 @@ export function ImportClient({
     setIsNewAccount(false);
     setShowNewAccountModal(false);
     setAccountMismatchError(null);
+    setValidationErrors([]);
   };
 
   const handleBackFromDuplicates = () => {
@@ -701,6 +757,15 @@ export function ImportClient({
         count: editedTransactions.length,
       }
     : null;
+  const rowValidationErrors = new Map<number, string[]>();
+  validationErrors.forEach((validationError) => {
+    validationError.indices.forEach((index) => {
+      rowValidationErrors.set(index, [
+        ...(rowValidationErrors.get(index) || []),
+        validationError.message,
+      ]);
+    });
+  });
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -732,6 +797,7 @@ export function ImportClient({
           duplicates={stage === "duplicates" ? duplicates : undefined}
           selectedIndices={selectedIndices}
           nonDuplicateIndices={nonDuplicateIndices}
+          rowValidationErrors={rowValidationErrors}
           isCheckingDuplicates={isCheckingDuplicates}
           isImporting={isImporting}
           showDuplicatesOnly={stage === "duplicates"}

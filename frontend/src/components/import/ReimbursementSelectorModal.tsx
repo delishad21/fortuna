@@ -53,9 +53,14 @@ interface ReimbursementSelectorModalProps {
   excludeTransactionId?: string;
   categories?: Category[];
   currentReimbursementId?: string;
+  initialSelectedDbTransactions?: DatabaseTransaction[];
 }
 
 const PAGE_SIZE = 20;
+const DEFAULT_INITIAL_SELECTED_DB_TRANSACTIONS: DatabaseTransaction[] = [];
+
+export const getDefaultInitialSelectedDbTransactions = () =>
+  DEFAULT_INITIAL_SELECTED_DB_TRANSACTIONS;
 
 type SelectorTab = "current" | "existing";
 type AmountType = "all" | "in" | "out";
@@ -100,6 +105,7 @@ export function ReimbursementSelectorModal({
   excludeTransactionId,
   categories = [],
   currentReimbursementId,
+  initialSelectedDbTransactions = getDefaultInitialSelectedDbTransactions(),
 }: ReimbursementSelectorModalProps) {
   const currentImportListRef = useRef<HTMLDivElement>(null);
   const reimbursementAmount = toAbsTransactionAmount(
@@ -195,7 +201,14 @@ export function ReimbursementSelectorModal({
 
     setSelectedBatchIndices(initialBatch);
     setSelectedDbIds(initialDb);
-    setSelectedDbCache({});
+    setSelectedDbCache(
+      Object.fromEntries(
+        initialSelectedDbTransactions.map((transaction) => [
+          transaction.id,
+          transaction,
+        ]),
+      ),
+    );
     setAllocationByTarget(initialAllocations);
     setLeftoverCategoryId(currentLinkage?.leftoverCategoryId || "");
 
@@ -216,7 +229,7 @@ export function ReimbursementSelectorModal({
     setDbDateTo("");
     setDbSameAmountOnly(false);
     setDbPage(1);
-  }, [isOpen, currentLinkage, includeCurrentImport]);
+  }, [isOpen, currentLinkage, includeCurrentImport, initialSelectedDbTransactions]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -628,9 +641,34 @@ export function ReimbursementSelectorModal({
         const amount = Math.min(toNumber(allocationByTarget[item.key]), maxAllowed);
         if (amount <= 0) return null;
         if (item.key.startsWith("db:")) {
+          const target = selectedDbItems.find(
+            (dbItem) => dbItem.id === item.key.slice(3),
+          );
+          const alreadyCommitted = Number(
+            (
+              (target?.linkage?.reimbursedByAllocations || [])
+                .filter(
+                  (allocation) => allocation.transactionId !== currentReimbursementId,
+                )
+                .reduce(
+                  (sum, allocation) => sum + Number(allocation.amount || 0),
+                  0,
+                )
+            ).toFixed(2),
+          );
+          const committedRemaining = Number(
+            Math.max(
+              toAbsTransactionAmount(target?.amountIn, target?.amountOut) -
+                alreadyCommitted,
+              0,
+            ).toFixed(2),
+          );
           return {
             transactionId: item.key.slice(3),
             amount,
+            targetDescription: target?.label?.trim() || target?.description,
+            targetDate: target?.date,
+            targetRemainingReimbursable: committedRemaining,
           };
         }
         return {

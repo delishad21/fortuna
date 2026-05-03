@@ -12,6 +12,7 @@ import {
   ClassificationPatternStatus,
   ClassificationPatternType,
 } from "./classification-patterns";
+import { validatePendingReimbursementLinks } from "./transactions.import-validation";
 
 // Reserved category names and colors
 const RESERVED_CATEGORIES = {
@@ -26,6 +27,52 @@ export interface ImportResult {
   duplicatesDetected?: Map<number, DuplicateMatch[]>;
   batchId?: string;
   error?: string;
+}
+
+const IMPORT_ORIGINAL_INDEX_KEY = "__importOriginalIndex";
+
+export function stripImportOrderMetadata(metadata: unknown) {
+  if (!metadata || typeof metadata !== "object") return {};
+  const { [IMPORT_ORIGINAL_INDEX_KEY]: _marker, ...rest } = metadata as Record<
+    string,
+    unknown
+  >;
+  return rest;
+}
+
+export function orderCreatedTransactionsForImport<
+  T extends { metadata: unknown },
+>(createdTransactions: T[], selectedIndices: number[]): T[] {
+  const selectedIndexSet = new Set<number>();
+  for (const index of selectedIndices) {
+    if (selectedIndexSet.has(index)) {
+      throw new Error("Duplicate selected import transaction index");
+    }
+    selectedIndexSet.add(index);
+  }
+
+  const byOriginalIndex = new Map<number, T>();
+  for (const transaction of createdTransactions) {
+    const metadata =
+      transaction.metadata && typeof transaction.metadata === "object"
+        ? (transaction.metadata as Record<string, unknown>)
+        : {};
+    const originalIndex = Number(metadata[IMPORT_ORIGINAL_INDEX_KEY]);
+    if (Number.isInteger(originalIndex)) {
+      if (byOriginalIndex.has(originalIndex)) {
+        throw new Error("Duplicate created import transaction marker");
+      }
+      byOriginalIndex.set(originalIndex, transaction);
+    }
+  }
+
+  return selectedIndices.map((index) => {
+    const transaction = byOriginalIndex.get(index);
+    if (!transaction) {
+      throw new Error("Created import transaction order could not be resolved");
+    }
+    return transaction;
+  });
 }
 
 export interface ImportRulePayload {
@@ -300,11 +347,24 @@ export class TransactionService {
     ].join("::");
   }
 
+  private static normalizeClassificationPatternStatus(
+    status: string | null | undefined,
+  ): ClassificationPatternStatus {
+    if (
+      status === "auto_apply" ||
+      status === "disabled" ||
+      status === "unresolved"
+    ) {
+      return status;
+    }
+    return "disabled";
+  }
+
   static async getClassificationPatterns(
     userId: string,
     filters: ClassificationPatternFilters = {},
   ) {
-    return prisma.classificationPattern.findMany({
+    const patterns = await prisma.classificationPattern.findMany({
       where: {
         userId,
         ...(filters.status ? { status: filters.status } : {}),
@@ -320,6 +380,11 @@ export class TransactionService {
         { updatedAt: "desc" },
       ],
     });
+
+    return patterns.map((pattern) => ({
+      ...pattern,
+      status: this.normalizeClassificationPatternStatus(pattern.status),
+    }));
   }
 
   static async rebuildClassificationPatterns(userId: string) {
@@ -379,6 +444,9 @@ export class TransactionService {
               ? (existing.metadata as Record<string, any>)
               : {};
           const userStatusOverride = existingMetadata.userStatusOverride === true;
+          const existingStatus = this.normalizeClassificationPatternStatus(
+            existing?.status,
+          );
 
           return {
             userId,
@@ -394,7 +462,7 @@ export class TransactionService {
             matchCount: pattern.matchCount,
             conflictCount: pattern.conflictCount,
             appliedCount: existing?.appliedCount || 0,
-            status: userStatusOverride && existing ? existing.status : pattern.status,
+            status: userStatusOverride && existing ? existingStatus : pattern.status,
             lastSeenAt: pattern.lastSeenAt,
             metadata: {
               ...pattern.metadata,
@@ -1234,6 +1302,8 @@ export class TransactionService {
       const { uncategorized, internal, reimbursement } =
         await this.ensureReservedCategories(userId);
 
+      validatePendingReimbursementLinks(transactions, selectedIndices);
+
       let importBatchId: string | undefined;
 
       // Create import batch if info provided
@@ -1273,7 +1343,7 @@ export class TransactionService {
       );
 
       // Filter transactions by selected indices and assign categories based on linkage
-      const selectedTransactions = ruleAppliedTransactions.map((transaction) => {
+      const selectedTransactions = ruleAppliedTransactions.map((transaction, index) => {
           let linkage = transaction.linkage as TransactionLinkage | null;
           let categoryId = transaction.categoryId;
           const amountIn =
@@ -1353,6 +1423,10 @@ export class TransactionService {
             ...transaction,
             categoryId,
             currency: resolvedCurrency || "SGD",
+            metadata: {
+              ...stripImportOrderMetadata(transaction.metadata),
+              [IMPORT_ORIGINAL_INDEX_KEY]: selectedIndices[index],
+            },
             linkage: cleanLinkage,
           };
         });
@@ -1366,10 +1440,27 @@ export class TransactionService {
 
       // Get the created transactions to resolve batch indices
       if (importBatchId) {
-        const createdTransactions = await prisma.transaction.findMany({
+        const createdTransactionsRaw = await prisma.transaction.findMany({
           where: { importBatchId },
           orderBy: { createdAt: "asc" },
         });
+        const createdTransactions = orderCreatedTransactionsForImport(
+          createdTransactionsRaw,
+          selectedIndices,
+        );
+
+        await Promise.all(
+          createdTransactions.map((transaction) =>
+            prisma.transaction.update({
+              where: { id: transaction.id },
+              data: {
+                metadata: stripImportOrderMetadata(
+                  transaction.metadata,
+                ) as Prisma.InputJsonValue,
+              },
+            }),
+          ),
+        );
 
         // Resolve pending batch indices to actual IDs
         for (let i = 0; i < selectedTransactions.length; i++) {
@@ -1445,9 +1536,10 @@ export class TransactionService {
 
       try {
         const appliedPatternIds = selectedTransactions
-          .map((transaction) =>
-            String(transaction.metadata?.classificationPatternId || ""),
-          )
+          .map((transaction) => {
+            const metadata = transaction.metadata as Record<string, any> | undefined;
+            return String(metadata?.classificationPatternId || "");
+          })
           .filter(Boolean);
         await this.incrementClassificationPatternAppliedCounts(userId, appliedPatternIds);
         await this.rebuildClassificationPatterns(userId);

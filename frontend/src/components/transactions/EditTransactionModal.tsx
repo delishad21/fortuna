@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { X, ArrowLeftRight, Receipt } from "lucide-react";
 import { TextInput } from "@/components/ui/TextInput";
 import { DatePicker } from "@/components/ui/DatePicker";
@@ -41,6 +41,26 @@ interface Transaction {
     autoDetected?: boolean;
     detectionReason?: string;
   } | null;
+  linkedTransactions?: {
+    reimburses: Array<{
+      id: string;
+      date: string;
+      label?: string | null;
+      description: string;
+      amountIn: number | null;
+      amountOut: number | null;
+      reimbursementAmount?: number | null;
+    }>;
+    reimbursedBy: Array<{
+      id: string;
+      date: string;
+      label?: string | null;
+      description: string;
+      amountIn: number | null;
+      amountOut: number | null;
+      reimbursementAmount?: number | null;
+    }>;
+  };
 }
 
 interface Category {
@@ -150,6 +170,19 @@ export function EditTransactionModal({
     );
     setIsReimbursementSelectorOpen(false);
   }, [transaction]);
+
+  const initialSelectedDbTransactions = useMemo(
+    () =>
+      transaction.linkedTransactions?.reimburses.map((linked) => ({
+        id: linked.id,
+        date: linked.date,
+        description: linked.description,
+        label: linked.label,
+        amountIn: linked.amountIn,
+        amountOut: linked.amountOut,
+      })) || [],
+    [transaction.linkedTransactions?.reimburses],
+  );
 
   if (!isOpen) return null;
 
@@ -550,6 +583,7 @@ export function EditTransactionModal({
         }}
         categories={categories}
         currentReimbursementId={transaction.id}
+        initialSelectedDbTransactions={initialSelectedDbTransactions}
       />
     </div>
   );

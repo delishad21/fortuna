@@ -9,6 +9,9 @@ export interface TransactionLinkage {
     amountBase?: number;
     reimbursingFxRate?: number;
     reimbursementBaseAmount?: number;
+    targetDescription?: string;
+    targetDate?: string;
+    targetRemainingReimbursable?: number;
   }>;
   reimbursedByAllocations?: Array<{
     transactionId: string;
@@ -96,6 +99,7 @@ export interface TransactionTableProps {
   duplicates?: Map<number, DuplicateMatch[]>;
   selectedIndices?: Set<number>;
   nonDuplicateIndices?: Set<number>;
+  rowValidationErrors?: Map<number, string[]>;
   isCheckingDuplicates?: boolean;
   isImporting?: boolean;
   showDuplicatesOnly?: boolean;
