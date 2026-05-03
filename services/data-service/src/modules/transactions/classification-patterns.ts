@@ -6,7 +6,6 @@ export type ClassificationPatternType =
 
 export type ClassificationPatternStatus =
   | "auto_apply"
-  | "suggest"
   | "disabled"
   | "unresolved";
 
@@ -281,11 +280,8 @@ export function buildClassificationPatternsFromTransactions({
       const outcome = parseOutcome(topKey);
       const conflictCount = Math.max(0, rankedOutcomes.length - 1);
       const confidence = confidenceFor(matchCount, supportCount);
-      const status: ClassificationPatternStatus = conflictCount > 0 && confidence < 0.75
-        ? "suggest"
-        : confidence >= 0.5
-          ? "auto_apply"
-          : "suggest";
+      const status: ClassificationPatternStatus =
+        conflictCount === 0 && confidence >= 0.5 ? "auto_apply" : "disabled";
 
       return {
         patternType: first.patternType,

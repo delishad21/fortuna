@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { TextInput } from "@/components/ui/TextInput";
 import { Button } from "@/components/ui/Button";
+import { PageTabs } from "@/components/ui/PageTabs";
 import { Modal, type ModalType } from "@/components/ui/Modal";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { NumberInput } from "@/components/ui/NumberInput";
@@ -438,13 +439,10 @@ export function SettingsClient({
   const rulePreview = importRules.slice(0, PREVIEW_CHIP_LIMIT);
   const ruleRemaining = Math.max(importRules.length - PREVIEW_CHIP_LIMIT, 0);
   const learnedPatterns = classificationPatterns.filter(
-    (pattern) =>
-      pattern.status !== "unresolved" &&
-      pattern.status !== "suggest" &&
-      pattern.conflictCount === 0,
+    (pattern) => pattern.status !== "unresolved",
   );
   const ambiguousPatterns = classificationPatterns.filter(
-    (pattern) => pattern.status === "suggest" || pattern.conflictCount > 0,
+    (pattern) => pattern.status !== "unresolved" && pattern.conflictCount > 0,
   );
   const unresolvedPatterns = classificationPatterns.filter(
     (pattern) => pattern.status === "unresolved",
@@ -456,39 +454,14 @@ export function SettingsClient({
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h2 className="text-2xl font-semibold text-dark dark:text-white">
-          Settings
-        </h2>
-        <p className="text-sm text-dark-5 dark:text-dark-6">
-          Manage preferences and classification rules.
-        </p>
-      </div>
-
-      <div className="inline-flex w-fit rounded-lg border border-stroke bg-white p-1 dark:border-dark-3 dark:bg-dark-2">
-        <button
-          type="button"
-          onClick={() => setActiveTab("profile")}
-          className={`rounded-md px-4 py-2 text-sm font-medium transition ${
-            activeTab === "profile"
-              ? "bg-primary text-white"
-              : "text-dark-5 hover:text-dark dark:text-dark-6 dark:hover:text-white"
-          }`}
-        >
-          Profile & Preferences
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("rules")}
-          className={`rounded-md px-4 py-2 text-sm font-medium transition ${
-            activeTab === "rules"
-              ? "bg-primary text-white"
-              : "text-dark-5 hover:text-dark dark:text-dark-6 dark:hover:text-white"
-          }`}
-        >
-          Rules
-        </button>
-      </div>
+      <PageTabs
+        tabs={[
+          { key: "profile", label: "Profile & Preferences" },
+          { key: "rules", label: "Rules" },
+        ]}
+        activeTab={activeTab}
+        onChange={setActiveTab}
+      />
 
       {activeTab === "profile" ? (
       <>
@@ -808,9 +781,9 @@ export function SettingsClient({
               </p>
             </div>
             <div className="rounded-lg border border-stroke p-3 dark:border-dark-3">
-              <p className="text-xs text-dark-5 dark:text-dark-6">Ambiguous</p>
+              <p className="text-xs text-dark-5 dark:text-dark-6">Disabled</p>
               <p className="text-2xl font-semibold text-dark dark:text-white">
-                {ambiguousPatterns.length}
+                {classificationPatterns.filter((pattern) => pattern.status === "disabled").length}
               </p>
             </div>
             <div className="rounded-lg border border-stroke p-3 dark:border-dark-3">
@@ -871,13 +844,6 @@ export function SettingsClient({
                           Auto
                         </Button>
                         <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => handlePatternStatusChange(pattern.id, "suggest")}
-                        >
-                          Suggest
-                        </Button>
-                        <Button
                           variant="danger"
                           size="sm"
                           onClick={() => handlePatternStatusChange(pattern.id, "disabled")}
@@ -902,7 +868,7 @@ export function SettingsClient({
           <div className="grid gap-4 xl:grid-cols-3">
             <div className="rounded-lg border border-stroke p-4 dark:border-dark-3">
               <h4 className="text-sm font-semibold text-dark dark:text-white">
-                Ambiguous Suggestions
+                Ambiguous Disabled Rules
               </h4>
               <div className="mt-3 space-y-2 text-sm text-dark-5 dark:text-dark-6">
                 {ambiguousPatterns.slice(0, 5).map((pattern) => (
@@ -910,7 +876,7 @@ export function SettingsClient({
                     {pattern.patternValue} · {formatConfidence(pattern.confidence)} · {pattern.conflictCount} conflicts
                   </div>
                 ))}
-                {ambiguousPatterns.length === 0 && <p>No ambiguous learned rules.</p>}
+                {ambiguousPatterns.length === 0 && <p>No ambiguous disabled rules.</p>}
               </div>
             </div>
             <div className="rounded-lg border border-stroke p-4 dark:border-dark-3">

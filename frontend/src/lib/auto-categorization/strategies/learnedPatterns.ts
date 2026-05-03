@@ -32,7 +32,7 @@ function patternAppliesToScope(
   context: AutoCategorizationContext,
   direction: "in" | "out" | "none",
 ) {
-  if (pattern.status === "disabled" || pattern.status === "unresolved") return false;
+  if (pattern.status !== "auto_apply") return false;
   const parserId = normalizedParserId(pattern.parserId);
   if (parserId && parserId !== normalizedParserId(context.parserId)) return false;
   if (pattern.direction && pattern.direction !== direction) return false;
@@ -75,7 +75,7 @@ async function defaultPatternLoader(context: AutoCategorizationContext) {
   const rows = await prisma.classificationPattern.findMany({
     where: {
       userId: context.userId,
-      status: { in: ["auto_apply", "suggest"] },
+      status: "auto_apply",
     },
     select: {
       id: true,

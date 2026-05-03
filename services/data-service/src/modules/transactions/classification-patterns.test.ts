@@ -41,7 +41,7 @@ describe("buildClassificationPatternsFromTransactions", () => {
     assert.ok(merchant.confidence >= 0.5);
   });
 
-  it("keeps ambiguous learned patterns as suggestions", () => {
+  it("keeps ambiguous learned patterns disabled until they are safe to auto-apply", () => {
     const patterns = buildClassificationPatternsFromTransactions({
       ignoredCategoryIds: new Set(["uncategorized"]),
       transactions: [
@@ -67,7 +67,7 @@ describe("buildClassificationPatternsFromTransactions", () => {
     );
 
     assert.ok(exact);
-    assert.equal(exact.status, "suggest");
+    assert.equal(exact.status, "disabled");
     assert.equal(exact.supportCount, 2);
     assert.equal(exact.conflictCount, 1);
     assert.ok(exact.confidence < 0.75);

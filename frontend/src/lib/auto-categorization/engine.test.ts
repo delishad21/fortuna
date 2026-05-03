@@ -50,7 +50,7 @@ describe("runAutoCategorization", () => {
     assert.equal(typeof transaction.metadata?.classificationAppliedAt, "string");
   });
 
-  it("keeps suggest-only learned patterns as suggestions even above threshold", async () => {
+  it("ignores disabled learned patterns instead of surfacing suggestions", async () => {
     const strategy: AutoCategorizationStrategy = {
       id: "learned_pattern",
       async suggest() {
@@ -90,8 +90,49 @@ describe("runAutoCategorization", () => {
 
     assert.equal(transaction.label, undefined);
     assert.equal(transaction.categoryId, undefined);
-    assert.equal(transaction.suggestionApplied, false);
-    assert.equal(transaction.suggestedLabel, "Amazon");
-    assert.equal(transaction.suggestedCategoryId, "shopping");
+    assert.equal(transaction.suggestionApplied, undefined);
+    assert.equal(transaction.suggestedLabel, undefined);
+    assert.equal(transaction.suggestedCategoryId, undefined);
+  });
+
+  it("does not surface below-threshold suggestions without applying them", async () => {
+    const strategy: AutoCategorizationStrategy = {
+      id: "history",
+      async suggest() {
+        return [
+          {
+            source: "history",
+            confidence: 0.4,
+            reason: "weak historical match",
+            label: "Coffee",
+            categoryId: "dining",
+          },
+        ];
+      },
+    };
+
+    const [transaction] = await runAutoCategorization(
+      {
+        userId: "user-1",
+        parserId: "dbs",
+        categoryByName: new Map(),
+        transactions: [
+          {
+            date: "2026-04-01",
+            description: "CAFE RANDOM",
+            amountOut: 5,
+          },
+        ],
+      },
+      [strategy],
+      { enabled: true, threshold: 0.5 },
+    );
+
+    assert.equal(transaction.label, undefined);
+    assert.equal(transaction.categoryId, undefined);
+    assert.equal(transaction.suggestionSource, undefined);
+    assert.equal(transaction.suggestionApplied, undefined);
+    assert.equal(transaction.suggestedLabel, undefined);
+    assert.equal(transaction.suggestedCategoryId, undefined);
   });
 });

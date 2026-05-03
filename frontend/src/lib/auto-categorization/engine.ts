@@ -7,7 +7,10 @@ import {
 } from "./types";
 
 function bestSuggestion(candidates: Array<AutoSuggestion | null>) {
-  const usable = candidates.filter(Boolean) as AutoSuggestion[];
+  const usable = candidates.filter(
+    (candidate): candidate is AutoSuggestion =>
+      !!candidate && candidate.autoApply !== false,
+  );
   if (usable.length === 0) return null;
   usable.sort((a, b) => b.confidence - a.confidence);
   return usable[0];
@@ -87,7 +90,7 @@ export async function runAutoCategorization(
       candidate.confidence < settings.threshold ||
       candidate.autoApply === false
     ) {
-      return next;
+      return transaction;
     }
 
     let applied = false;

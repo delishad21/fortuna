@@ -7,7 +7,6 @@ const DATA_SERVICE_URL =
 
 export type ClassificationPatternStatus =
   | "auto_apply"
-  | "suggest"
   | "disabled"
   | "unresolved";
 

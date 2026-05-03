@@ -175,6 +175,7 @@ function TransactionTableComponent({
   duplicates,
   selectedIndices,
   nonDuplicateIndices = new Set(),
+  rowValidationErrors,
   isCheckingDuplicates,
   isImporting,
   showDuplicatesOnly = false,
@@ -210,7 +211,7 @@ function TransactionTableComponent({
     "all" | "in" | "out"
   >("all");
   const [tableSuggestionFilter, setTableSuggestionFilter] = useState<
-    "all" | "suggested" | "auto" | "unresolved"
+    "all" | "auto" | "unresolved"
   >("all");
   const [tableDateFrom, setTableDateFrom] = useState("");
   const [tableDateTo, setTableDateTo] = useState("");
@@ -363,13 +364,9 @@ function TransactionTableComponent({
       (tableTypeFilter === "in" && amountIn > 0) ||
       (tableTypeFilter === "out" && amountOut > 0);
 
-    const hasSuggestion =
-      !!transaction.suggestionSource &&
-      Number(transaction.suggestionConfidence || 0) > 0;
     const isAutoApplied = transaction.suggestionApplied === true;
     const matchesSuggestion =
       tableSuggestionFilter === "all" ||
-      (tableSuggestionFilter === "suggested" && hasSuggestion) ||
       (tableSuggestionFilter === "auto" && isAutoApplied) ||
       (tableSuggestionFilter === "unresolved" &&
         !isAutoApplied &&
@@ -621,12 +618,11 @@ function TransactionTableComponent({
                         value={tableSuggestionFilter}
                         onChange={(value) =>
                           setTableSuggestionFilter(
-                            value as "all" | "suggested" | "auto" | "unresolved",
+                            value as "all" | "auto" | "unresolved",
                           )
                         }
                         options={[
-                          { value: "all", label: "All suggestion states" },
-                          { value: "suggested", label: "Suggested" },
+                          { value: "all", label: "All rule states" },
                           { value: "auto", label: "Auto-applied" },
                           { value: "unresolved", label: "Unresolved" },
                         ]}
@@ -724,6 +720,8 @@ function TransactionTableComponent({
               const { transaction, index } = visibleRows[visibleIndex];
               const rowDuplicates = duplicates?.get(index);
               const hasDuplicates = rowDuplicates && rowDuplicates.length > 0;
+              const validationMessages = rowValidationErrors?.get(index) || [];
+              const hasValidationErrors = validationMessages.length > 0;
               const isSelected = selectedIndices?.has(index);
 
               const internalCategoryId = internalCategory?.id ?? "__internal__";
@@ -779,7 +777,7 @@ function TransactionTableComponent({
               ) => (
                 <div className="space-y-1">
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-primary">
-                    Suggested
+                    Applied Rule
                   </div>
                   {hasSuggestionMetadata && (
                     <>
@@ -800,7 +798,7 @@ function TransactionTableComponent({
                         <span className="font-medium text-white">
                           {transaction.suggestionApplied
                             ? "Auto-applied"
-                            : "Suggested only"}
+                            : "Not applied"}
                         </span>
                       </div>
                     </>
@@ -825,9 +823,12 @@ function TransactionTableComponent({
                   <tr
                     data-index={virtualRow.index}
                     ref={rowVirtualizer.measureElement}
+                    title={hasValidationErrors ? validationMessages.join("\n") : undefined}
                     className={`border-b hover:bg-gray-1 dark:hover:bg-dark-3/50 transition-colors group ${
-                      hasDuplicates
-                        ? "border-2 border-red dark:border-red-light"
+                      hasValidationErrors
+                        ? "border-2 border-red bg-red/5 dark:border-red-light dark:bg-red/10"
+                        : hasDuplicates
+                          ? "border-2 border-red dark:border-red-light"
                         : "border-stroke dark:border-dark-3"
                     }`}
                   >

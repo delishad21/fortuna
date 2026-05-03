@@ -59,7 +59,7 @@ const ImportRuleSchema = z.object({
 });
 
 const ClassificationPatternUpdateSchema = z.object({
-  status: z.enum(["auto_apply", "suggest", "disabled", "unresolved"]).optional(),
+  status: z.enum(["auto_apply", "disabled", "unresolved"]).optional(),
   label: z.string().nullable().optional(),
   categoryId: z.string().nullable().optional(),
   markInternal: z.boolean().optional(),
