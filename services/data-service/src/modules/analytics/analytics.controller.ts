@@ -2,19 +2,20 @@ import { Router, Request, Response } from "express";
 import prisma from "../../lib/prisma";
 import {
   AnalyticsTransaction,
+  buildCategoryBreakdown as buildAnalyticsCategoryBreakdown,
   buildDailySeries as buildAnalyticsDailySeries,
   buildMonthSeries,
   formatDayKey as formatAnalyticsDayKey,
   formatMonthKey,
-  getCategoryInfo,
-  getCategoryKey,
+  getEffectiveIn as getAnalyticsEffectiveIn,
   getEffectiveOut as getAnalyticsEffectiveOut,
+  getReimbursementLeftover,
   getMonthRange,
   isImportedMonth,
   normalizeMerchant,
+  REIMBURSEMENT_LEFTOVER_CATEGORY,
   serializeTransaction,
   summarizeTransactions,
-  toNumber as toAnalyticsNumber,
 } from "./analytics.utils";
 
 export const analyticsRouter = Router();
@@ -46,6 +47,9 @@ const getEffectiveOut = (tx: { amountOut: any; linkage?: any }) => {
   return Number(Math.max(rawOut - reimbursed, 0).toFixed(2));
 };
 
+const getEffectiveIn = (tx: { amountIn: any; linkage?: any }) =>
+  getAnalyticsEffectiveIn(tx);
+
 const formatDayKey = (date: Date) => date.toISOString().slice(0, 10);
 
 const buildDailySeries = (start: Date, end: Date) => {
@@ -75,32 +79,6 @@ const getImportedMonthGroups = (transactions: AnalyticsTransaction[]) => {
     .sort(([a], [b]) => b.localeCompare(a));
 };
 
-const buildCategoryBreakdown = (transactions: AnalyticsTransaction[]) => {
-  const map = new Map<
-    string,
-    { key: string; name: string; color: string; totalIn: number; totalOut: number; transactionCount: number }
-  >();
-
-  for (const tx of transactions) {
-    const key = getCategoryKey(tx);
-    const category = getCategoryInfo(tx);
-    const current = map.get(key) || {
-      key,
-      name: category.name,
-      color: category.color,
-      totalIn: 0,
-      totalOut: 0,
-      transactionCount: 0,
-    };
-    current.totalIn += toAnalyticsNumber(tx.amountIn);
-    current.totalOut += getAnalyticsEffectiveOut(tx);
-    current.transactionCount += 1;
-    map.set(key, current);
-  }
-
-  return Array.from(map.values()).sort((a, b) => b.totalOut - a.totalOut);
-};
-
 const buildMerchantBreakdown = (transactions: AnalyticsTransaction[]) => {
   const map = new Map<
     string,
@@ -116,7 +94,7 @@ const buildMerchantBreakdown = (transactions: AnalyticsTransaction[]) => {
       totalOut: 0,
       transactionCount: 0,
     };
-    current.totalIn += toAnalyticsNumber(tx.amountIn);
+    current.totalIn += getAnalyticsEffectiveIn(tx);
     current.totalOut += getAnalyticsEffectiveOut(tx);
     current.transactionCount += 1;
     map.set(merchant.key, current);
@@ -188,7 +166,7 @@ analyticsRouter.get("/dashboard", async (req: Request, res: Response) => {
 
     const totals = transactions.reduce(
       (acc, tx) => ({
-        totalIn: acc.totalIn + toNumber(tx.amountIn),
+        totalIn: acc.totalIn + getEffectiveIn(tx),
         totalOut: acc.totalOut + getEffectiveOut(tx),
       }),
       { totalIn: 0, totalOut: 0 },
@@ -208,7 +186,7 @@ analyticsRouter.get("/dashboard", async (req: Request, res: Response) => {
       const dayKey = formatDayKey(tx.date);
       const entry = seriesMap.get(dayKey);
       if (entry) {
-        entry.in += toNumber(tx.amountIn);
+        entry.in += getEffectiveIn(tx);
         entry.out += getEffectiveOut(tx);
       }
 
@@ -270,7 +248,7 @@ analyticsRouter.get("/dashboard-overview", async (req: Request, res: Response) =
       ? importedMonthGroups.find(([monthKey]) => monthKey === selectedMonth)?.[1] || []
       : [];
 
-    const categoryBreakdown = buildCategoryBreakdown(selectedTransactions);
+    const categoryBreakdown = buildAnalyticsCategoryBreakdown(selectedTransactions);
     const largestTransaction = [...selectedTransactions]
       .sort((a, b) => getAnalyticsEffectiveOut(b) - getAnalyticsEffectiveOut(a))[0];
 
@@ -337,7 +315,7 @@ analyticsRouter.get("/dashboard-review", async (req: Request, res: Response) => 
       orderBy: { date: "desc" },
     });
     const importedMonthGroups = getImportedMonthGroups(transactions);
-    const categoryBreakdown = buildCategoryBreakdown(transactions);
+    const categoryBreakdown = buildAnalyticsCategoryBreakdown(transactions);
     const merchantBreakdown = buildMerchantBreakdown(transactions);
 
     const uncategorized = transactions
@@ -371,7 +349,7 @@ analyticsRouter.get("/dashboard-review", async (req: Request, res: Response) => 
       : [];
 
     const importSummaries = importedMonthGroups.slice(0, 6).map(([monthKey, monthTransactions]) => {
-      const monthCategories = buildCategoryBreakdown(monthTransactions);
+      const monthCategories = buildAnalyticsCategoryBreakdown(monthTransactions);
       return {
         month: monthKey,
         latestTransactionDate: monthTransactions.reduce(
@@ -482,15 +460,15 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
       const key = groupBy === "day" ? formatAnalyticsDayKey(tx.date) : formatMonthKey(tx.date);
       const item = timeSeriesMap.get(key);
       if (!item) continue;
-      item.totalIn += toAnalyticsNumber(tx.amountIn);
+      item.totalIn += getAnalyticsEffectiveIn(tx);
       item.totalOut += getAnalyticsEffectiveOut(tx);
       item.net = item.totalIn - item.totalOut;
       item.transactionCount += 1;
     }
 
-    const categoryBreakdown = buildCategoryBreakdown(transactions);
+    const categoryBreakdown = buildAnalyticsCategoryBreakdown(transactions);
     const merchantBreakdown = buildMerchantBreakdown(transactions);
-    const availableCategories = buildCategoryBreakdown(baseTransactions);
+    const availableCategories = buildAnalyticsCategoryBreakdown(baseTransactions);
     const availableMerchants = buildMerchantBreakdown(baseTransactions);
     const breakdown = groupBy === "merchant" ? merchantBreakdown : categoryBreakdown;
     const getMetricValue = (item: { totalIn: number; totalOut: number }) => {
@@ -562,8 +540,8 @@ analyticsRouter.get("/insights", async (req: Request, res: Response) => {
       ? priorThree.reduce((sum, [, monthTransactions]) => sum + summarizeTransactions(monthTransactions).totalOut, 0) / priorThree.length
       : null;
 
-    const currentCategories = buildCategoryBreakdown(selectedTransactions);
-    const previousCategories = previousMonth ? buildCategoryBreakdown(previousMonth[1]) : [];
+    const currentCategories = buildAnalyticsCategoryBreakdown(selectedTransactions);
+    const previousCategories = previousMonth ? buildAnalyticsCategoryBreakdown(previousMonth[1]) : [];
     const previousCategoryMap = new Map(previousCategories.map((item) => [item.key, item]));
     const categoryChanges = currentCategories
       .map((item) => {
@@ -685,7 +663,7 @@ analyticsRouter.get("/monthly", async (req: Request, res: Response) => {
 
     const totals = transactions.reduce(
       (acc, tx) => ({
-        totalIn: acc.totalIn + toNumber(tx.amountIn),
+        totalIn: acc.totalIn + getEffectiveIn(tx),
         totalOut: acc.totalOut + getEffectiveOut(tx),
       }),
       { totalIn: 0, totalOut: 0 },
@@ -705,7 +683,7 @@ analyticsRouter.get("/monthly", async (req: Request, res: Response) => {
       const dayKey = formatDayKey(tx.date);
       const entry = seriesMap.get(dayKey);
       if (entry) {
-        entry.in += toNumber(tx.amountIn);
+        entry.in += getEffectiveIn(tx);
         entry.out += getEffectiveOut(tx);
       }
 
@@ -720,9 +698,20 @@ analyticsRouter.get("/monthly", async (req: Request, res: Response) => {
         totalIn: 0,
         totalOut: 0,
       };
-      current.totalIn += toNumber(tx.amountIn);
+      current.totalIn += getEffectiveIn(tx);
       current.totalOut += getEffectiveOut(tx);
       categoryMap.set(categoryId, current);
+
+      const reimbursementLeftover = getReimbursementLeftover(tx);
+      if (reimbursementLeftover > 0) {
+        const leftoverCurrent = categoryMap.get(REIMBURSEMENT_LEFTOVER_CATEGORY.id) || {
+          category: REIMBURSEMENT_LEFTOVER_CATEGORY,
+          totalIn: 0,
+          totalOut: 0,
+        };
+        leftoverCurrent.totalIn += reimbursementLeftover;
+        categoryMap.set(REIMBURSEMENT_LEFTOVER_CATEGORY.id, leftoverCurrent);
+      }
     });
 
     const categoryBreakdown = Array.from(categoryMap.values()).sort(
@@ -774,7 +763,7 @@ analyticsRouter.get("/monthly", async (req: Request, res: Response) => {
         date: tx.date,
         description: tx.description,
         label: tx.label,
-        amountIn: toNumber(tx.amountIn),
+        amountIn: getEffectiveIn(tx),
         amountOut: getEffectiveOut(tx),
         category: tx.category
           ? { id: tx.category.id, name: tx.category.name, color: tx.category.color }
@@ -869,9 +858,27 @@ analyticsRouter.get("/monthly-summary", async (req: Request, res: Response) => {
     for (const tx of monthlyTransactions) {
       const key = tx.categoryId ?? null;
       const current = adjustedByCategory.get(key) || { totalIn: 0, totalOut: 0 };
-      current.totalIn += toNumber(tx.amountIn);
+      current.totalIn += getEffectiveIn(tx);
       current.totalOut += getEffectiveOut(tx);
       adjustedByCategory.set(key, current);
+
+      const reimbursementLeftover = getReimbursementLeftover(tx);
+      if (reimbursementLeftover > 0) {
+        const leftover = adjustedByCategory.get(REIMBURSEMENT_LEFTOVER_CATEGORY.id) || {
+          totalIn: 0,
+          totalOut: 0,
+        };
+        leftover.totalIn += reimbursementLeftover;
+        adjustedByCategory.set(REIMBURSEMENT_LEFTOVER_CATEGORY.id, leftover);
+      }
+    }
+
+    if (adjustedByCategory.has(REIMBURSEMENT_LEFTOVER_CATEGORY.id)) {
+      breakdown.push({
+        category: REIMBURSEMENT_LEFTOVER_CATEGORY,
+        totalIn: 0,
+        totalOut: 0,
+      });
     }
 
     for (const item of breakdown) {
