@@ -16,6 +16,7 @@ import { AlertCircle, CheckCircle2, FileText, Upload } from "lucide-react";
 import { getDashboardOverview } from "@/app/actions/analytics";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
+import { PageTabs } from "@/components/ui/PageTabs";
 import { Select } from "@/components/ui/Select";
 
 type Transaction = {
@@ -146,24 +147,14 @@ export function DashboardClient({ initialOverview, initialReview }: { initialOve
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap gap-2 rounded-xl border border-stroke bg-white p-1 dark:border-stroke-dark dark:bg-gray-dark">
-        {[
+      <PageTabs
+        tabs={[
           { key: "overview", label: "Overview" },
           { key: "review", label: `Review${reviewCount ? ` (${reviewCount})` : ""}` },
-        ].map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key as "overview" | "review")}
-            className={`rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
-              activeTab === tab.key
-                ? "bg-primary text-white"
-                : "text-dark-5 hover:bg-gray-2 dark:text-dark-6 dark:hover:bg-dark-2"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+        ]}
+        activeTab={activeTab}
+        onChange={setActiveTab}
+      />
 
       {activeTab === "overview" ? (
         <div className="flex flex-col gap-6">

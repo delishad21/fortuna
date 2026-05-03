@@ -88,6 +88,17 @@ interface TransactionCardProps {
   };
 }
 
+export type TransactionCardPrimaryClickAction =
+  | "toggle-selection"
+  | "toggle-expansion";
+
+export const getTransactionCardPrimaryClickAction = ({
+  hasSelectionToggle,
+}: {
+  hasSelectionToggle: boolean;
+}): TransactionCardPrimaryClickAction =>
+  hasSelectionToggle ? "toggle-selection" : "toggle-expansion";
+
 export function TransactionCard({
   transaction,
   accountColor,
@@ -102,6 +113,9 @@ export function TransactionCard({
   linkedTransactions,
 }: TransactionCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const primaryClickAction = getTransactionCardPrimaryClickAction({
+    hasSelectionToggle: Boolean(onToggleSelect),
+  });
 
   const linkageType = transaction.linkage?.type;
   const isInternal = linkageType === "internal";
@@ -157,7 +171,14 @@ export function TransactionCard({
     >
       {/* Main Content */}
       <div
-        onClick={() => setIsExpanded((prev) => !prev)}
+        onClick={() => {
+          if (primaryClickAction === "toggle-selection") {
+            onToggleSelect?.();
+            return;
+          }
+
+          setIsExpanded((prev) => !prev);
+        }}
         className="relative p-4 pl-6 cursor-pointer hover:bg-gray-1 dark:hover:bg-dark-3/50"
       >
         {(accentColor || accountColor || isReimbursement || isInternal) && (
@@ -308,7 +329,10 @@ export function TransactionCard({
                 </button>
               )}
               <button
-                onClick={() => setIsExpanded(!isExpanded)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setIsExpanded((prev) => !prev);
+                }}
                 className="p-1.5 text-dark-5 hover:text-dark dark:text-dark-6 dark:hover:text-white hover:bg-gray-2 dark:hover:bg-dark-3 rounded transition-colors"
                 title={isExpanded ? "Collapse" : "Expand"}
               >
