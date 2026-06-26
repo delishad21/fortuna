@@ -17,6 +17,7 @@ import { Checkbox } from "@/components/ui/Checkbox";
 import { SearchBar } from "@/components/ui/SearchBar";
 import { Select } from "@/components/ui/Select";
 import { HoverTooltip } from "@/components/ui/HoverTooltip";
+import { resolveTransactionAccountColor } from "@/components/import/importAccountMapping";
 import { ResizableHeader } from "./ResizableHeader";
 import { TransactionTableToolbar } from "./TransactionTableToolbar";
 import { DuplicateWarningBanner } from "./DuplicateWarningBanner";
@@ -180,10 +181,12 @@ function TransactionTableComponent({
   isImporting,
   showDuplicatesOnly = false,
   showAccountSelector = true,
+  pendingAccountColors = new Map(),
   onUpdateTransaction,
   onAccountIdentifierChange,
   onAccountColorChange,
   onAddAccountIdentifier,
+  onTransactionAccountIdentifierChange,
   onImport,
   onConfirmImport,
   onSelectAll,
@@ -723,6 +726,15 @@ function TransactionTableComponent({
               const validationMessages = rowValidationErrors?.get(index) || [];
               const hasValidationErrors = validationMessages.length > 0;
               const isSelected = selectedIndices?.has(index);
+              const rowAccountColor = resolveTransactionAccountColor(
+                transaction.accountIdentifier,
+                accountIdentifiers,
+                pendingAccountColors,
+              );
+              const isNewRowAccount = !!(
+                transaction.accountIdentifier &&
+                pendingAccountColors.has(transaction.accountIdentifier)
+              );
 
               const internalCategoryId = internalCategory?.id ?? "__internal__";
               const reimbursementCategoryId =
@@ -834,9 +846,13 @@ function TransactionTableComponent({
                   >
                     {/* Checkbox column */}
                     <td
-                      className="py-0 px-4"
+                      className="relative py-0 px-4"
                       style={{ width: columnWidths.checkbox }}
                     >
+                      <div
+                        className="absolute left-0 top-0 h-full w-1"
+                        style={{ backgroundColor: rowAccountColor }}
+                      />
                       <div className="flex items-center justify-center">
                         <Checkbox
                           checked={isSelected || false}
@@ -1168,11 +1184,23 @@ function TransactionTableComponent({
                       linkedCount={
                         transaction.linkage?.reimbursesAllocations?.length || 0
                       }
+                      accountIdentifiers={accountIdentifiers}
+                      isNewAccount={isNewRowAccount}
                       renderExpandedActions={
                         renderExpandedActions
                           ? () => renderExpandedActions(index, transaction)
                           : undefined
                       }
+                      onAccountIdentifierChange={
+                        onTransactionAccountIdentifierChange && !showDuplicatesOnly
+                          ? (accountIdentifier) =>
+                              onTransactionAccountIdentifierChange(
+                                index,
+                                accountIdentifier,
+                              )
+                          : undefined
+                      }
+                      onAddAccountIdentifier={onAddAccountIdentifier}
                       onLinkageChange={
                         onLinkageChange
                           ? (linkage) => onLinkageChange(index, linkage)

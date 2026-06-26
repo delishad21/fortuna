@@ -94,6 +94,23 @@ type TargetKey = string;
 const toDbKey = (id: string) => `db:${id}`;
 const toBatchKey = (index: number) => `batch:${index}`;
 
+export function buildCurrentImportReimbursementItems(
+  transactions: Transaction[],
+  currentIndex: number,
+) {
+  return transactions
+    .map((transaction, index) => ({
+      ...transaction,
+      index,
+      dateLabel: formatDate(transaction.date),
+    }))
+    .filter(
+      (transaction) =>
+        transaction.index !== currentIndex &&
+        transaction.linkage?.type !== "reimbursement",
+    );
+}
+
 export function ReimbursementSelectorModal({
   isOpen,
   onClose,
@@ -108,6 +125,7 @@ export function ReimbursementSelectorModal({
   initialSelectedDbTransactions = getDefaultInitialSelectedDbTransactions(),
 }: ReimbursementSelectorModalProps) {
   const currentImportListRef = useRef<HTMLDivElement>(null);
+  const positionedCurrentImportRef = useRef(false);
   const reimbursementAmount = toAbsTransactionAmount(
     transactions[currentIndex]?.amountIn,
     transactions[currentIndex]?.amountOut,
@@ -184,6 +202,7 @@ export function ReimbursementSelectorModal({
 
   useEffect(() => {
     if (!isOpen) return;
+    positionedCurrentImportRef.current = false;
 
     const initialBatch = new Set<number>();
     const initialDb = new Set<string>();
@@ -267,16 +286,7 @@ export function ReimbursementSelectorModal({
   );
 
   const selectableBatchTransactions = useMemo(() => {
-    const rows = transactions
-      .map((transaction, index) => ({ ...transaction, index }))
-      .filter(
-        (transaction) =>
-          transaction.index !== currentIndex &&
-          transaction.linkage?.type !== "reimbursement",
-      );
-    const afterCurrent = rows.filter((item) => item.index > currentIndex);
-    const beforeCurrent = rows.filter((item) => item.index < currentIndex);
-    return [...afterCurrent, ...beforeCurrent];
+    return buildCurrentImportReimbursementItems(transactions, currentIndex);
   }, [transactions, currentIndex]);
 
   const filteredCurrentImportItems = useMemo(() => {
@@ -341,6 +351,30 @@ export function ReimbursementSelectorModal({
           0,
         )
       : 0;
+
+  useEffect(() => {
+    if (!isOpen || selectorTab !== "current") return;
+    if (positionedCurrentImportRef.current) return;
+    const firstAfterCurrentIndex = filteredCurrentImportItems.findIndex(
+      (item) => item.index > currentIndex,
+    );
+    if (firstAfterCurrentIndex < 0) return;
+
+    const frame = requestAnimationFrame(() => {
+      currentImportVirtualizer.scrollToIndex(firstAfterCurrentIndex, {
+        align: "start",
+      });
+      positionedCurrentImportRef.current = true;
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [
+    isOpen,
+    selectorTab,
+    currentIndex,
+    filteredCurrentImportItems,
+    currentImportVirtualizer,
+  ]);
 
   const stagedAllocatedByBatchIndex = useMemo(() => {
     const map = new Map<number, number>();
@@ -821,47 +855,56 @@ export function ReimbursementSelectorModal({
                   </Button>
                 </div>
 
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
-                  <Select
-                    value={selectorTab === "current" ? currentTypeFilter : dbTypeFilter}
-                    onChange={(value) => {
-                      if (selectorTab === "current") {
-                        setCurrentTypeFilter(value as AmountType);
-                      } else {
-                        setDbTypeFilter(value as AmountType);
-                      }
-                    }}
-                    options={[
-                      { value: "all", label: "All types" },
-                      { value: "in", label: "In only" },
-                      { value: "out", label: "Out only" },
-                    ]}
-                  />
+                <div className="grid grid-cols-1 overflow-hidden rounded-lg border border-stroke bg-white dark:border-dark-3 dark:bg-dark-2 md:grid-cols-4 md:divide-x md:divide-stroke md:dark:divide-dark-3">
+                  <div className="border-b border-stroke dark:border-dark-3 md:border-b-0">
+                    <Select
+                      value={selectorTab === "current" ? currentTypeFilter : dbTypeFilter}
+                      onChange={(value) => {
+                        if (selectorTab === "current") {
+                          setCurrentTypeFilter(value as AmountType);
+                        } else {
+                          setDbTypeFilter(value as AmountType);
+                        }
+                      }}
+                      options={[
+                        { value: "all", label: "All types" },
+                        { value: "in", label: "In only" },
+                        { value: "out", label: "Out only" },
+                      ]}
+                      buttonClassName="rounded-none border-0"
+                    />
+                  </div>
 
-                  <Select
-                    value={
-                      selectorTab === "current" ? currentCategoryFilter : dbCategoryFilter
-                    }
-                    onChange={(value) => {
-                      if (selectorTab === "current") {
-                        setCurrentCategoryFilter(value);
-                      } else {
-                        setDbCategoryFilter(value);
+                  <div className="border-b border-stroke dark:border-dark-3 md:border-b-0">
+                    <Select
+                      value={
+                        selectorTab === "current" ? currentCategoryFilter : dbCategoryFilter
                       }
-                    }}
-                    options={categoryOptions}
-                  />
+                      onChange={(value) => {
+                        if (selectorTab === "current") {
+                          setCurrentCategoryFilter(value);
+                        } else {
+                          setDbCategoryFilter(value);
+                        }
+                      }}
+                      options={categoryOptions}
+                      buttonClassName="rounded-none border-0"
+                    />
+                  </div>
 
-                  <DatePicker
-                    value={selectorTab === "current" ? currentDateFrom : dbDateFrom}
-                    onChange={(value) => {
-                      if (selectorTab === "current") {
-                        setCurrentDateFrom(value);
-                      } else {
-                        setDbDateFrom(value);
-                      }
-                    }}
-                  />
+                  <div className="border-b border-stroke dark:border-dark-3 md:border-b-0">
+                    <DatePicker
+                      value={selectorTab === "current" ? currentDateFrom : dbDateFrom}
+                      onChange={(value) => {
+                        if (selectorTab === "current") {
+                          setCurrentDateFrom(value);
+                        } else {
+                          setDbDateFrom(value);
+                        }
+                      }}
+                      triggerProps={{ className: "rounded-none" }}
+                    />
+                  </div>
                   <DatePicker
                     value={selectorTab === "current" ? currentDateTo : dbDateTo}
                     onChange={(value) => {
@@ -871,6 +914,7 @@ export function ReimbursementSelectorModal({
                         setDbDateTo(value);
                       }
                     }}
+                    triggerProps={{ className: "rounded-none" }}
                   />
                 </div>
               </div>
@@ -912,6 +956,7 @@ export function ReimbursementSelectorModal({
                               handleToggleBatch(item.index, selectableAmount)
                             }
                             wrapText
+                            showDate
                           />
                         );
                       })}
@@ -937,6 +982,7 @@ export function ReimbursementSelectorModal({
                       selectionTone="success"
                       onToggleSelect={() => handleToggleDb(item)}
                       wrapText
+                      showDate
                     />
                   ))
                 )}

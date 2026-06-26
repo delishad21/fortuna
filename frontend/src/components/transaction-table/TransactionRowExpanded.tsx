@@ -1,7 +1,14 @@
 import { ArrowLeftRight, Receipt, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
+import { AccountIdentifierSelect } from "@/components/ui/AccountIdentifierSelect";
 import { Transaction, TransactionLinkage } from "./types";
+
+interface AccountIdentifier {
+  id: string;
+  accountIdentifier: string;
+  color: string;
+}
 
 interface TransactionRowExpandedProps {
   transaction: Transaction;
@@ -10,7 +17,11 @@ interface TransactionRowExpandedProps {
   showOptions?: boolean;
   disabled?: boolean;
   linkedCount?: number;
+  accountIdentifiers?: AccountIdentifier[];
+  isNewAccount?: boolean;
   renderExpandedActions?: () => ReactNode;
+  onAccountIdentifierChange?: (accountIdentifier: string) => void;
+  onAddAccountIdentifier?: () => void;
   onLinkageChange?: (linkage: TransactionLinkage | null) => void;
   onSelectReimbursement?: () => void;
 }
@@ -22,7 +33,11 @@ export function TransactionRowExpanded({
   showOptions = false,
   disabled = false,
   linkedCount = 0,
+  accountIdentifiers = [],
+  isNewAccount = false,
   renderExpandedActions,
+  onAccountIdentifierChange,
+  onAddAccountIdentifier,
   onLinkageChange,
   onSelectReimbursement,
 }: TransactionRowExpandedProps) {
@@ -56,6 +71,27 @@ export function TransactionRowExpanded({
     <tr className="border-b border-stroke dark:border-dark-3 bg-gray-1 dark:bg-dark-3/30">
       <td colSpan={colSpan} className="py-3 px-4">
         <div className="text-sm pl-8">
+          {onAccountIdentifierChange && (
+            <div className="mb-4">
+              <div className="mb-2 font-medium text-dark dark:text-white">
+                Account
+              </div>
+              <div className="max-w-sm">
+                <AccountIdentifierSelect
+                  value={transaction.accountIdentifier || ""}
+                  accountIdentifiers={accountIdentifiers}
+                  onChange={onAccountIdentifierChange}
+                  onAddClick={onAddAccountIdentifier || (() => {})}
+                  disabled={disabled}
+                  newAccountBadge={isNewAccount}
+                />
+              </div>
+              <p className="mt-2 text-xs text-dark-5 dark:text-dark-6">
+                Changing this account only updates this transaction row.
+              </p>
+            </div>
+          )}
+
           {showOptions && (
             <div className="mb-4">
               <div className="flex flex-wrap items-center gap-3">

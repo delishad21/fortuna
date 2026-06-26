@@ -82,6 +82,7 @@ interface TransactionCardProps {
   selected?: boolean;
   selectionTone?: "primary" | "success";
   onToggleSelect?: () => void;
+  showDate?: boolean;
   linkedTransactions?: {
     reimburses: LinkedTransaction[];
     reimbursedBy: LinkedTransaction[];
@@ -110,6 +111,7 @@ export function TransactionCard({
   selected = false,
   selectionTone = "primary",
   onToggleSelect,
+  showDate = false,
   linkedTransactions,
 }: TransactionCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -195,6 +197,11 @@ export function TransactionCard({
           )}
           {/* Left: Description */}
           <div className="flex-1 min-w-0">
+            {showDate && (
+              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">
+                {formatDate(transaction.date)}
+              </div>
+            )}
             <div
               className={`font-medium text-dark dark:text-white ${
                 wrapText ? "break-words whitespace-normal" : "truncate"

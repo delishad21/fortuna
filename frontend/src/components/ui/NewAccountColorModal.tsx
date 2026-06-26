@@ -1,28 +1,42 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { Button } from "./Button";
 import { ColorSelect } from "./ColorSelect";
 
 interface NewAccountColorModalProps {
   isOpen: boolean;
-  accountIdentifier: string;
-  defaultColor: string;
-  onConfirm: (color: string) => void;
+  accounts: Array<{ accountIdentifier: string; defaultColor: string }>;
+  onConfirm: (colorsByAccount: Record<string, string>) => void;
   onCancel: () => void;
 }
 
 export function NewAccountColorModal({
   isOpen,
-  accountIdentifier,
-  defaultColor,
+  accounts,
   onConfirm,
   onCancel,
 }: NewAccountColorModalProps) {
-  const [selectedColor, setSelectedColor] = useState(defaultColor);
+  const [selectedColors, setSelectedColors] = useState<Record<string, string>>({});
+  const accountsKey = accounts
+    .map((account) => `${account.accountIdentifier}:${account.defaultColor}`)
+    .join("|");
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setSelectedColors(
+      Object.fromEntries(
+        accounts.map((account) => [account.accountIdentifier, account.defaultColor]),
+      ),
+    );
+  }, [accountsKey, isOpen]);
 
   if (!isOpen) return null;
+
+  const handleColorChange = (accountIdentifier: string, color: string) => {
+    setSelectedColors((prev) => ({ ...prev, [accountIdentifier]: color }));
+  };
 
   return (
     <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50 p-4">
@@ -35,44 +49,51 @@ export function NewAccountColorModal({
             </div>
             <div>
               <h2 className="text-lg font-semibold text-dark dark:text-white">
-                New Account Detected
+                New Accounts Detected
               </h2>
               <p className="text-sm text-dark-5 dark:text-dark-6 mt-0.5">
-                Choose a color for this account
+                Choose colors for imported accounts
               </p>
             </div>
           </div>
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-4">
-          {/* Account Identifier Display */}
-          <div className="flex items-center gap-3 p-4 bg-gray-2 dark:bg-dark-3 rounded-lg">
-            <div
-              className="h-8 w-8 rounded-full border-2 border-white/70 shrink-0"
-              style={{ backgroundColor: selectedColor }}
-            />
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium text-dark-5 dark:text-dark-6 uppercase tracking-wide">
-                Account Identifier
-              </p>
-              <p className="text-sm font-semibold text-dark dark:text-white truncate mt-0.5">
-                {accountIdentifier}
-              </p>
-            </div>
-          </div>
+        <div className="p-6 space-y-3 max-h-[60vh] overflow-y-auto">
+          {accounts.map((account) => {
+            const selectedColor =
+              selectedColors[account.accountIdentifier] || account.defaultColor;
 
-          {/* Color Picker */}
-          <div>
-            <label className="block text-sm font-medium text-dark dark:text-white mb-3">
-              Select Color
-            </label>
-            <ColorSelect value={selectedColor} onChange={setSelectedColor} />
-          </div>
+            return (
+              <div
+                key={account.accountIdentifier}
+                className="flex items-center gap-3 p-4 bg-gray-2 dark:bg-dark-3 rounded-lg"
+              >
+                <div
+                  className="h-8 w-8 rounded-full border-2 border-white/70 shrink-0"
+                  style={{ backgroundColor: selectedColor }}
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-dark-5 dark:text-dark-6 uppercase tracking-wide">
+                    Account Identifier
+                  </p>
+                  <p className="text-sm font-semibold text-dark dark:text-white truncate mt-0.5">
+                    {account.accountIdentifier}
+                  </p>
+                </div>
+                <ColorSelect
+                  value={selectedColor}
+                  onChange={(color) =>
+                    handleColorChange(account.accountIdentifier, color)
+                  }
+                />
+              </div>
+            );
+          })}
 
           {/* Preview Text */}
           <p className="text-xs text-dark-5 dark:text-dark-6 text-center">
-            This color will help you identify transactions from this account
+            These colors will help you identify transactions from each account
           </p>
         </div>
 
@@ -81,8 +102,8 @@ export function NewAccountColorModal({
           <Button variant="secondary" onClick={onCancel}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={() => onConfirm(selectedColor)}>
-            Confirm Color
+          <Button variant="primary" onClick={() => onConfirm(selectedColors)}>
+            Save Accounts
           </Button>
         </div>
       </div>

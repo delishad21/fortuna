@@ -27,9 +27,24 @@ interface ColorSelectProps {
   onChange: (color: string) => void;
 }
 
+export function getColorSelectMenuPosition(rect: DOMRect) {
+  return {
+    left: rect.left,
+    top: rect.bottom + 8,
+  };
+}
+
 export function ColorSelect({ value, onChange }: ColorSelectProps) {
   const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({ left: 0, top: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const updateMenuPosition = () => {
+    if (!containerRef.current) return;
+    setMenuPosition(
+      getColorSelectMenuPosition(containerRef.current.getBoundingClientRect()),
+    );
+  };
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -44,6 +59,19 @@ export function ColorSelect({ value, onChange }: ColorSelectProps) {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updateMenuPosition();
+
+    window.addEventListener("scroll", updateMenuPosition, true);
+    window.addEventListener("resize", updateMenuPosition);
+
+    return () => {
+      window.removeEventListener("scroll", updateMenuPosition, true);
+      window.removeEventListener("resize", updateMenuPosition);
+    };
+  }, [open]);
 
   return (
     <div ref={containerRef} className="relative">
@@ -60,7 +88,10 @@ export function ColorSelect({ value, onChange }: ColorSelectProps) {
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-30 mt-2 w-44 rounded-lg border border-stroke dark:border-dark-3 bg-white dark:bg-dark-2 p-2 shadow-dropdown">
+        <div
+          className="fixed z-[60] w-44 rounded-lg border border-stroke dark:border-dark-3 bg-white dark:bg-dark-2 p-2 shadow-dropdown"
+          style={{ left: menuPosition.left, top: menuPosition.top }}
+        >
           <div className="grid grid-cols-4 gap-2">
             {PRESET_COLORS.map((color) => (
               <button

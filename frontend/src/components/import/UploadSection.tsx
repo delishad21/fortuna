@@ -16,6 +16,7 @@ interface ParserOption {
 export interface FileUploadState {
   file: File;
   status: "pending" | "parsing" | "success" | "error";
+  parserId?: string;
   error?: string;
 }
 
@@ -72,6 +73,7 @@ export function UploadSection({
     const newFileStates: FileUploadState[] = uniqueFiles.map((file) => ({
       file,
       status: "pending" as const,
+      parserId: selectedParser,
     }));
     const updated = [...files, ...newFileStates];
     onFilesChange(updated);
@@ -91,8 +93,26 @@ export function UploadSection({
   const pendingOrErrorFiles = files.filter(
     (f) => f.status === "pending" || f.status === "error",
   );
-  const canParse = pendingOrErrorFiles.length > 0;
+  const canParse =
+    pendingOrErrorFiles.length > 0 &&
+    pendingOrErrorFiles.every((fileState) => !!fileState.parserId);
   const selectedFile = files[selectedPreviewIndex]?.file ?? null;
+
+  const handleFileParserChange = (index: number, parserId: string) => {
+    onFilesChange(
+      files.map((fileState, fileIndex) =>
+        fileIndex === index
+          ? {
+              ...fileState,
+              parserId,
+              error: undefined,
+              status:
+                fileState.status === "success" ? "pending" : fileState.status,
+            }
+          : fileState,
+      ),
+    );
+  };
 
   return (
     <div className="flex gap-6 h-full overflow-hidden">
@@ -107,7 +127,7 @@ export function UploadSection({
         <div className="flex-1 bg-white dark:bg-dark-2 rounded-lg border border-stroke dark:border-dark-3 p-4 flex flex-col gap-4 overflow-hidden">
           <div className="w-full flex-shrink-0">
             <label className="block text-sm font-medium text-dark dark:text-white mb-2">
-              Select Parser
+              Parser for New Files
             </label>
             <Select
               value={selectedParser}
@@ -139,7 +159,7 @@ export function UploadSection({
               </div>
               <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1.5">
                 {files.map((fileState, index) => (
-                  <button
+                  <div
                     key={`${fileState.file.name}-${index}`}
                     onClick={() => setSelectedPreviewIndex(index)}
                     className={`w-full flex items-center gap-2 p-2 rounded-md border text-left transition-colors ${
@@ -175,6 +195,19 @@ export function UploadSection({
                         )}
                       </p>
                     </div>
+                    <div
+                      className="w-40 flex-shrink-0"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <Select
+                        value={fileState.parserId || selectedParser}
+                        options={parserOptions}
+                        onChange={(parserId) => handleFileParserChange(index, parserId)}
+                        disabled={fileState.status === "parsing"}
+                        className="w-full"
+                        buttonClassName="w-full min-w-0 !py-1.5 !px-2 !text-xs"
+                      />
+                    </div>
                     {(fileState.status === "pending" || fileState.status === "error") && (
                       <button
                         onClick={(e) => {
@@ -186,7 +219,7 @@ export function UploadSection({
                         <XCircle className="h-4 w-4" />
                       </button>
                     )}
-                  </button>
+                  </div>
                 ))}
               </div>
             </div>

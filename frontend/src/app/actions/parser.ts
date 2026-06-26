@@ -300,9 +300,15 @@ export async function parseMultipleFiles(
   files: File[],
   parserId: string,
 ): Promise<MultiFileParseResult[]> {
+  return parseFilesWithParsers(files.map((file) => ({ file, parserId })));
+}
+
+export async function parseFilesWithParsers(
+  items: Array<{ file: File; parserId: string }>,
+): Promise<MultiFileParseResult[]> {
   const results: MultiFileParseResult[] = [];
 
-  for (const file of files) {
+  for (const { file, parserId } of items) {
     try {
       const formData = new FormData();
       formData.append("file", file);

@@ -18,6 +18,9 @@ export function areTransactionTablePropsEqual(
     previous.isImporting === next.isImporting &&
     previous.showDuplicatesOnly === next.showDuplicatesOnly &&
     previous.showAccountSelector === next.showAccountSelector &&
+    previous.pendingAccountColors === next.pendingAccountColors &&
+    previous.onTransactionAccountIdentifierChange ===
+      next.onTransactionAccountIdentifierChange &&
     previous.amountInHeader === next.amountInHeader &&
     previous.amountOutHeader === next.amountOutHeader &&
     previous.deferCellCommit === next.deferCellCommit &&

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { parseMultipleFiles, type MultiFileParseResult } from "@/app/actions/parser";
+import { parseFilesWithParsers, type MultiFileParseResult } from "@/app/actions/parser";
 import { createCategory } from "@/app/actions/categories";
 import { upsertAccountNumber } from "@/app/actions/accountNumbers";
 import {
@@ -26,6 +26,11 @@ import {
   validateImportSelection,
   type ImportValidationError,
 } from "./importValidation";
+import {
+  buildSourceAwareTransactions,
+  detectNewAccountIdentifiers,
+  mergeFileParseStatuses,
+} from "./importAccountMapping";
 
 const PRESET_COLORS = [
   "#ef4444",
@@ -123,6 +128,9 @@ export function ImportClient({
   const [error, setError] = useState<string | null>(null);
   const [accountMismatchError, setAccountMismatchError] = useState<string | null>(null);
   const [isAddAccountModalOpen, setIsAddAccountModalOpen] = useState(false);
+  const [pendingAccountColors, setPendingAccountColors] = useState<Map<string, string>>(
+    new Map(),
+  );
   const [isPaylahPromptOpen, setIsPaylahPromptOpen] = useState(false);
   const [isPaylahPromptConfirming, setIsPaylahPromptConfirming] =
     useState(false);
@@ -271,28 +279,6 @@ export function ImportClient({
     setReimbursementTargetIndex(null);
   };
 
-  const validateSameAccount = (
-    results: MultiFileParseResult[],
-  ): { valid: boolean; mismatches: Array<{ filename: string; account: string }> } => {
-    const accountsWithFilename = results
-      .filter((r) => r.success && r.accountIdentifier)
-      .map((r) => ({ filename: r.filename, account: r.accountIdentifier! }));
-
-    if (accountsWithFilename.length <= 1) {
-      return { valid: true, mismatches: [] };
-    }
-
-    const firstAccount = accountsWithFilename[0].account;
-    const mismatches = accountsWithFilename.filter(
-      (a) => a.account !== firstAccount,
-    );
-
-    return {
-      valid: mismatches.length === 0,
-      mismatches,
-    };
-  };
-
   const performUpload = async () => {
     const pendingFiles = files.filter(
       (f) => f.status === "pending" || f.status === "error",
@@ -316,18 +302,14 @@ export function ImportClient({
     );
 
     try {
-      const fileList = pendingFiles.map((f) => f.file);
-      const results = await parseMultipleFiles(fileList, selectedParser);
+      const results = await parseFilesWithParsers(
+        pendingFiles.map((fileState) => ({
+          file: fileState.file,
+          parserId: fileState.parserId || selectedParser,
+        })),
+      );
 
-      const updatedFiles = files.map((f) => {
-        if (f.status !== "parsing") return f;
-        const result = results.find((r) => r.filename === f.file.name);
-        if (!result) return { ...f, status: "error" as const, error: "Not found in results" };
-        if (!result.success) {
-          return { ...f, status: "error" as const, error: result.error };
-        }
-        return { ...f, status: "success" as const };
-      });
+      const updatedFiles = mergeFileParseStatuses(files, pendingFiles, results);
       setFiles(updatedFiles);
       setParseResults(results);
 
@@ -337,61 +319,32 @@ export function ImportClient({
         return;
       }
 
-      const accountValidation = validateSameAccount(successfulResults);
-      if (!accountValidation.valid) {
-        const mismatchList = accountValidation.mismatches
-          .map((m) => `${m.filename} → ${m.account}`)
-          .join(", ");
-        setAccountMismatchError(
-          `Files resolved to different accounts (${mismatchList}). Please import separately.`,
-        );
-        setStage("upload");
-        return;
-      }
-
-      const allTransactions: Transaction[] = successfulResults.flatMap(
-        (result) => result.transactions,
-      );
-
-      const sortedTransactions = allTransactions.sort(
-        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-      );
-
-      const initialTransactions = sortedTransactions.map((t) => ({
+      const initialTransactions = buildSourceAwareTransactions(successfulResults).map((t) => ({
         ...t,
         label: t.label && t.label.trim().length > 0 ? t.label : undefined,
-      }));
+      })) as Transaction[];
       setEditedTransactions(initialTransactions);
 
       setSelectedIndices(
         new Set(initialTransactions.map((_, index) => index)),
       );
 
-      const firstResult = successfulResults[0];
-      const detectedAccount =
-        firstResult.accountIdentifier ||
-        firstResult.transactions[0]?.accountIdentifier ||
-        firstResult.transactions[0]?.accountNumber ||
-        firstResult.transactions[0]?.metadata?.accountIdentifier ||
-        firstResult.transactions[0]?.metadata?.accountNumber;
-
-      if (detectedAccount) {
-        const existingAccount = accountIdentifiers.find(
-          (acc) => acc.accountIdentifier === detectedAccount,
+      const newAccounts = detectNewAccountIdentifiers(
+        initialTransactions,
+        accountIdentifiers,
+      );
+      if (newAccounts.length > 0) {
+        setPendingAccountColors(
+          new Map(
+            newAccounts.map((newAccount, index) => [
+              newAccount,
+              PRESET_COLORS[index % PRESET_COLORS.length],
+            ]),
+          ),
         );
-
-        if (existingAccount) {
-          setAccountIdentifier(existingAccount.accountIdentifier);
-          setAccountColor(existingAccount.color);
-          setIsNewAccount(false);
-        } else {
-          const randomColor =
-            PRESET_COLORS[Math.floor(Math.random() * PRESET_COLORS.length)];
-          setAccountIdentifier(detectedAccount);
-          setAccountColor(randomColor);
-          setIsNewAccount(true);
-          setShowNewAccountModal(true);
-        }
+        setShowNewAccountModal(true);
+      } else {
+        setPendingAccountColors(new Map());
       }
 
       setStage("review");
@@ -450,7 +403,7 @@ export function ImportClient({
       return;
     }
 
-    if (selectedParser === PAYLAH_PARSER_ID) {
+    if (pendingFiles.some((fileState) => fileState.parserId === PAYLAH_PARSER_ID)) {
       try {
         const state = await getPaylahInternalPreferenceState();
         if (state.shouldPrompt) {
@@ -569,14 +522,16 @@ export function ImportClient({
     setError(null);
 
     try {
-      const firstParseResult = parseResults[0];
+      const uniqueParserIds = new Set(
+        parseResults.filter((result) => result.success).map((result) => result.parserId),
+      );
       const result = await commitImport(
         editedTransactions.map((t) => ({
           ...t,
           date: new Date(t.date),
           accountIdentifier:
-            accountIdentifier.trim().length > 0
-              ? accountIdentifier.trim()
+            t.accountIdentifier && t.accountIdentifier.trim().length > 0
+              ? t.accountIdentifier.trim()
               : undefined,
           label:
             t.label && t.label.trim().length > 0
@@ -587,7 +542,10 @@ export function ImportClient({
         {
           filename: parseResults.map((r) => r.filename).join("; "),
           fileType: "multiple",
-          parserId: firstParseResult.parserId,
+          parserId:
+            uniqueParserIds.size === 1
+              ? Array.from(uniqueParserIds)[0]
+              : "multiple",
         },
       );
 
@@ -694,6 +652,7 @@ export function ImportClient({
     setAccountColor("#6366f1");
     setIsNewAccount(false);
     setShowNewAccountModal(false);
+    setPendingAccountColors(new Map());
     setAccountMismatchError(null);
     setValidationErrors([]);
   };
@@ -738,21 +697,75 @@ export function ImportClient({
     }
   };
 
-  const handleConfirmAccountColor = async (color: string) => {
-    if (!accountIdentifier) return;
-    await handleSaveAccountIdentifier(accountIdentifier, color);
-    setShowNewAccountModal(false);
+  const handleConfirmAccountColors = async (
+    colorsByAccount: Record<string, string>,
+  ) => {
+    const accountsToSave = Array.from(pendingAccountColors.keys());
+    try {
+      const savedAccounts = await Promise.all(
+        accountsToSave.map((accountIdentifier) =>
+          upsertAccountNumber(
+            accountIdentifier,
+            colorsByAccount[accountIdentifier] ||
+              pendingAccountColors.get(accountIdentifier) ||
+              PRESET_COLORS[0],
+          ),
+        ),
+      );
+
+      setAccountIdentifiers((prev) => {
+        const byIdentifier = new Map(
+          prev.map((account) => [account.accountIdentifier, account]),
+        );
+        savedAccounts.forEach((account) => {
+          byIdentifier.set(account.accountIdentifier, account);
+        });
+        return Array.from(byIdentifier.values());
+      });
+      setPendingAccountColors(new Map());
+      setShowNewAccountModal(false);
+    } catch (err) {
+      showModal(
+        "error",
+        "Failed to Save Accounts",
+        err instanceof Error ? err.message : "Failed to save accounts",
+      );
+    }
   };
 
   const handleAddAccountIdentifier = () => {
     setIsAddAccountModalOpen(true);
   };
 
+  const handleTransactionAccountIdentifierChange = (
+    index: number,
+    nextAccountIdentifier: string,
+  ) => {
+    const updated = [...editedTransactions];
+    updated[index] = {
+      ...updated[index],
+      accountIdentifier: nextAccountIdentifier || undefined,
+      metadata: {
+        ...(updated[index].metadata || {}),
+        ...(nextAccountIdentifier
+          ? { accountIdentifier: nextAccountIdentifier }
+          : { accountIdentifier: undefined }),
+      },
+    };
+    setEditedTransactions(updated);
+  };
+
+  const uniqueParsedParserIds = new Set(
+    parseResults.filter((result) => result.success).map((result) => result.parserId),
+  );
   const aggregatedParsedData = parseResults.length > 0
     ? {
         success: true,
         filename: parseResults.map((r) => r.filename).join("; "),
-        parserId: parseResults[0]?.parserId || selectedParser,
+        parserId:
+          uniqueParsedParserIds.size === 1
+            ? Array.from(uniqueParsedParserIds)[0]
+            : "multiple",
         transactions: editedTransactions,
         count: editedTransactions.length,
       }
@@ -801,10 +814,15 @@ export function ImportClient({
           isCheckingDuplicates={isCheckingDuplicates}
           isImporting={isImporting}
           showDuplicatesOnly={stage === "duplicates"}
+          showAccountSelector={false}
+          pendingAccountColors={pendingAccountColors}
           onUpdateTransaction={handleUpdateTransaction}
           onAccountIdentifierChange={setAccountIdentifier}
           onAccountColorChange={setAccountColor}
           onAddAccountIdentifier={handleAddAccountIdentifier}
+          onTransactionAccountIdentifierChange={
+            handleTransactionAccountIdentifierChange
+          }
           onImport={handleImportTransactions}
           onConfirmImport={handleConfirmImport}
           onSelectAll={handleSelectAll}
@@ -834,9 +852,13 @@ export function ImportClient({
 
       <NewAccountColorModal
         isOpen={showNewAccountModal}
-        accountIdentifier={accountIdentifier}
-        defaultColor={accountColor}
-        onConfirm={handleConfirmAccountColor}
+        accounts={Array.from(pendingAccountColors.entries()).map(
+          ([accountIdentifier, defaultColor]) => ({
+            accountIdentifier,
+            defaultColor,
+          }),
+        )}
+        onConfirm={handleConfirmAccountColors}
         onCancel={resetImportFlow}
       />
 
