@@ -18,6 +18,8 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { PageTabs } from "@/components/ui/PageTabs";
 import { Select } from "@/components/ui/Select";
+import { ExpandableTransactionList } from "@/components/transactions/ExpandableTransactionList";
+import type { TransactionCardTransaction } from "@/components/transactions/TransactionCard";
 
 type Transaction = {
   id: string;
@@ -54,7 +56,10 @@ type ReviewData = {
     largeTransactions: Transaction[];
   };
   importSummaries: Array<{
-    month: string;
+    key: string;
+    filename: string;
+    parserId: string | null;
+    importedAt: string | null;
     latestTransactionDate: string;
     totalIn: number;
     totalOut: number;
@@ -84,6 +89,13 @@ const formatMonth = (month: string | null) => {
   if (!month) return "No imported month";
   return format(parseISO(`${month}-01`), "MMM yyyy");
 };
+
+const formatDateLabel = (date: string | null | undefined) => {
+  if (!date) return "Unknown date";
+  return format(parseISO(date), "dd MMM yyyy");
+};
+
+const dashboardBarSize = 42;
 
 function MetricCard({ title, value, hint, tone = "default" }: { title: string; value: string; hint: string; tone?: "default" | "good" | "bad" }) {
   const toneClass = tone === "good" ? "text-green" : tone === "bad" ? "text-red" : "text-dark dark:text-white";
@@ -133,7 +145,6 @@ export function DashboardClient({ initialOverview, initialReview }: { initialOve
 
   const reviewCount =
     initialReview.reviewQueue.uncategorized.length +
-    initialReview.reviewQueue.newMerchants.length +
     initialReview.reviewQueue.largeTransactions.length;
 
   const handleMonthChange = async (month: string) => {
@@ -160,7 +171,7 @@ export function DashboardClient({ initialOverview, initialReview }: { initialOve
         <div className="flex flex-col gap-6">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h2 className="text-2xl font-semibold text-dark dark:text-white">Imported Month Overview</h2>
+              <h2 className="font-display text-3xl font-bold text-dark dark:text-white">Imported Month Overview</h2>
               <p className="text-sm text-dark-5 dark:text-dark-6">
                 Quick analytics from completed statement periods, not live current-month data.
               </p>
@@ -205,13 +216,13 @@ export function DashboardClient({ initialOverview, initialReview }: { initialOve
                   </CardHeader>
                   <CardContent className="h-[300px]">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={trend}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--color-stroke)" />
-                        <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--color-dark-5)" }} />
-                        <YAxis tick={{ fontSize: 12, fill: "var(--color-dark-5)" }} />
+                      <BarChart data={trend} barGap={6} barCategoryGap="32%">
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
+                        <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--chart-muted)" }} />
+                        <YAxis tick={{ fontSize: 12, fill: "var(--chart-muted)" }} />
                         <Tooltip formatter={(value: number) => formatCurrency(Number(value))} />
-                        <Bar dataKey="totalOut" name="Spending" fill="#F23030" radius={[6, 6, 0, 0]} />
-                        <Bar dataKey="totalIn" name="Income" fill="#22AD5C" radius={[6, 6, 0, 0]} />
+                        <Bar dataKey="totalOut" name="Spending" fill="#F23030" barSize={dashboardBarSize} radius={[6, 6, 0, 0]} />
+                        <Bar dataKey="totalIn" name="Income" fill="#22AD5C" barSize={dashboardBarSize} radius={[6, 6, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                   </CardContent>
@@ -224,25 +235,16 @@ export function DashboardClient({ initialOverview, initialReview }: { initialOve
                     <Link href="/analytics"><Button className="w-full" variant="secondary">Open Analytics</Button></Link>
                     <Link href="/transactions"><Button className="w-full" variant="secondary">Review Transactions</Button></Link>
                     <Link href="/settings"><Button className="w-full" variant="secondary">Manage Categories</Button></Link>
-                    {overview.summary.largestTransaction && (
-                      <div className="mt-3 rounded-lg bg-gray-2 p-4 dark:bg-dark-2">
-                        <p className="text-xs font-semibold uppercase text-dark-5 dark:text-dark-6">Largest transaction</p>
-                        <p className="mt-2 truncate text-sm font-semibold text-dark dark:text-white">
-                          {overview.summary.largestTransaction.label || overview.summary.largestTransaction.description}
-                        </p>
-                        <p className="text-sm text-red">{formatCurrency(overview.summary.largestTransaction.amountOut)}</p>
-                      </div>
-                    )}
                   </CardContent>
                 </Card>
               </div>
 
-              <Card>
-                <CardHeader><CardTitle>Recent Transactions</CardTitle></CardHeader>
-                <CardContent>
-                  <TransactionList transactions={overview.recentTransactions} />
-                </CardContent>
-              </Card>
+                <Card>
+                  <CardHeader><CardTitle>Recent Transactions</CardTitle></CardHeader>
+                  <CardContent>
+                  <RecentTransactionCards transactions={overview.recentTransactions} />
+                  </CardContent>
+                </Card>
             </>
           )}
         </div>
@@ -276,16 +278,34 @@ function TransactionList({ transactions }: { transactions: Transaction[] }) {
   );
 }
 
+function RecentTransactionCards({ transactions }: { transactions: Transaction[] }) {
+  if (transactions.length === 0) {
+    return <div className="py-8 text-center text-sm text-dark-5 dark:text-dark-6">No transactions to show.</div>;
+  }
+
+  const cardTransactions: TransactionCardTransaction[] = transactions.map((tx) => ({
+    id: tx.id,
+    date: String(tx.date),
+    description: tx.description,
+    label: tx.label || undefined,
+    amountIn: tx.amountIn > 0 ? tx.amountIn : null,
+    amountOut: tx.amountOut > 0 ? tx.amountOut : null,
+    balance: null,
+    category: tx.category || undefined,
+  }));
+
+  return <ExpandableTransactionList transactions={cardTransactions} />;
+}
+
 function ReviewTab({ data }: { data: ReviewData }) {
   const queueEmpty =
     data.reviewQueue.uncategorized.length === 0 &&
-    data.reviewQueue.newMerchants.length === 0 &&
     data.reviewQueue.largeTransactions.length === 0;
 
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-2xl font-semibold text-dark dark:text-white">Review Queue</h2>
+        <h2 className="font-display text-3xl font-bold text-dark dark:text-white">Review Queue</h2>
         <p className="text-sm text-dark-5 dark:text-dark-6">Cleanup and data quality signals from imported statements.</p>
       </div>
 
@@ -300,27 +320,19 @@ function ReviewTab({ data }: { data: ReviewData }) {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-6 xl:grid-cols-3">
+        <div className="grid gap-6 xl:grid-cols-2">
           <QueueCard title="Uncategorized" count={data.reviewQueue.uncategorized.length} transactions={data.reviewQueue.uncategorized} />
-          <Card>
-            <CardHeader><CardTitle>New Merchants</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
-              {data.reviewQueue.newMerchants.length === 0 ? <p className="text-sm text-dark-5 dark:text-dark-6">No new merchants detected.</p> : data.reviewQueue.newMerchants.map((merchant) => (
-                <div key={merchant.key} className="rounded-lg bg-gray-2 px-3 py-2 text-sm text-dark dark:bg-dark-2 dark:text-white">{merchant.name}</div>
-              ))}
-            </CardContent>
-          </Card>
-          <QueueCard title="Large Transactions" count={data.reviewQueue.largeTransactions.length} transactions={data.reviewQueue.largeTransactions} />
+          <DataHealthCard data={data} />
         </div>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
+      <div className="flex flex-col gap-6">
         <Card>
           <CardHeader><CardTitle>Recent Import Summaries</CardTitle></CardHeader>
           <CardContent className="space-y-3">
-            {data.importSummaries.length === 0 ? <p className="text-sm text-dark-5 dark:text-dark-6">No imported months detected yet.</p> : data.importSummaries.map((item) => (
-              <div key={item.month} className="grid gap-3 rounded-lg border border-stroke p-4 dark:border-stroke-dark md:grid-cols-4">
-                <div><p className="text-sm font-semibold text-dark dark:text-white">{formatMonth(item.month)}</p><p className="text-xs text-dark-5 dark:text-dark-6">{item.transactionCount} transactions</p></div>
+            {data.importSummaries.length === 0 ? <p className="text-sm text-dark-5 dark:text-dark-6">No imported files detected yet.</p> : data.importSummaries.map((item) => (
+              <div key={item.key} className="grid gap-3 rounded-lg border border-stroke p-4 dark:border-stroke-dark md:grid-cols-[minmax(0,1.6fr)_repeat(3,minmax(0,1fr))]">
+                <div className="min-w-0"><p className="break-words text-sm font-semibold text-dark dark:text-white">{item.filename}</p><p className="mt-1 text-xs text-dark-5 dark:text-dark-6">{item.transactionCount} transactions · {item.parserId || "Unknown parser"} · Imported {formatDateLabel(item.importedAt)}</p></div>
                 <div><p className="text-xs text-dark-5 dark:text-dark-6">Spending</p><p className="font-semibold text-red">{formatCurrency(item.totalOut)}</p></div>
                 <div><p className="text-xs text-dark-5 dark:text-dark-6">Income</p><p className="font-semibold text-green">{formatCurrency(item.totalIn)}</p></div>
                 <div><p className="text-xs text-dark-5 dark:text-dark-6">Top category</p><p className="font-semibold text-dark dark:text-white">{item.topCategory?.name || "None"}</p></div>
@@ -329,30 +341,52 @@ function ReviewTab({ data }: { data: ReviewData }) {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader><CardTitle>Data Health</CardTitle></CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <div className="flex items-center justify-between text-sm"><span className="text-dark-5 dark:text-dark-6">Categorized</span><span className="font-semibold text-dark dark:text-white">{data.dataHealth.categorizedPercent}%</span></div>
-              <div className="mt-2 h-2 rounded-full bg-gray-2 dark:bg-dark-2"><div className="h-2 rounded-full bg-primary" style={{ width: `${data.dataHealth.categorizedPercent}%` }} /></div>
-            </div>
-            <HealthRow label="Transactions" value={data.dataHealth.transactionCount} />
-            <HealthRow label="Uncategorized" value={data.dataHealth.uncategorizedCount} warning={data.dataHealth.uncategorizedCount > 0} />
-            <HealthRow label="Rules" value={data.dataHealth.ruleCount} />
-            <HealthRow label="Merchants" value={data.dataHealth.merchantCount} />
-            {data.dataHealth.uncategorizedCount > 0 && <div className="flex gap-2 rounded-lg bg-red/10 p-3 text-sm text-red"><AlertCircle className="size-4 shrink-0" />Review uncategorized transactions to improve analytics accuracy.</div>}
-          </CardContent>
-        </Card>
+        <QueueCard title="Large Transactions" count={data.reviewQueue.largeTransactions.length} transactions={data.reviewQueue.largeTransactions} useTransactionCards />
       </div>
     </div>
   );
 }
 
-function QueueCard({ title, count, transactions }: { title: string; count: number; transactions: Transaction[] }) {
+function DataHealthCard({ data }: { data: ReviewData }) {
+  return (
+    <Card>
+      <CardHeader><CardTitle>Data Health</CardTitle></CardHeader>
+      <CardContent className="space-y-4">
+        <div>
+          <div className="flex items-center justify-between text-sm"><span className="text-dark-5 dark:text-dark-6">Categorized</span><span className="font-semibold text-dark dark:text-white">{data.dataHealth.categorizedPercent}%</span></div>
+          <div className="mt-2 h-2 rounded-full bg-gray-2 dark:bg-dark-2"><div className="h-2 rounded-full bg-primary" style={{ width: `${data.dataHealth.categorizedPercent}%` }} /></div>
+        </div>
+        <HealthRow label="Transactions" value={data.dataHealth.transactionCount} />
+        <HealthRow label="Uncategorized" value={data.dataHealth.uncategorizedCount} warning={data.dataHealth.uncategorizedCount > 0} />
+        <HealthRow label="Rules" value={data.dataHealth.ruleCount} />
+        <HealthRow label="Merchants" value={data.dataHealth.merchantCount} />
+        {data.dataHealth.uncategorizedCount > 0 && <div className="flex gap-2 rounded-lg bg-red/10 p-3 text-sm text-red"><AlertCircle className="size-4 shrink-0" />Review uncategorized transactions to improve analytics accuracy.</div>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function QueueCard({
+  title,
+  count,
+  transactions,
+  useTransactionCards = false,
+}: {
+  title: string;
+  count: number;
+  transactions: Transaction[];
+  useTransactionCards?: boolean;
+}) {
   return (
     <Card>
       <CardHeader><CardTitle>{title} ({count})</CardTitle></CardHeader>
-      <CardContent><TransactionList transactions={transactions.slice(0, 5)} /></CardContent>
+      <CardContent>
+        {useTransactionCards ? (
+          <RecentTransactionCards transactions={transactions.slice(0, 5)} />
+        ) : (
+          <TransactionList transactions={transactions.slice(0, 5)} />
+        )}
+      </CardContent>
     </Card>
   );
 }

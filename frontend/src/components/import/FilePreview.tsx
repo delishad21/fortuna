@@ -46,7 +46,7 @@ export function FilePreview({ file }: FilePreviewProps) {
       <div className="flex flex-col h-full">
         <div className="flex items-center gap-2 mb-4">
           <FileText className="h-4 w-4 text-primary" />
-          <h4 className="text-sm font-semibold text-dark dark:text-white uppercase tracking-wide">
+          <h4 className="font-sans text-sm font-semibold text-dark dark:text-white uppercase tracking-wide">
             File Preview
           </h4>
         </div>
@@ -73,7 +73,7 @@ export function FilePreview({ file }: FilePreviewProps) {
         ) : (
           <Table className="h-4 w-4 text-primary" />
         )}
-        <h4 className="text-sm font-semibold text-dark dark:text-white uppercase tracking-wide">
+        <h4 className="font-sans text-sm font-semibold text-dark dark:text-white uppercase tracking-wide">
           File Preview
         </h4>
       </div>

@@ -63,7 +63,7 @@ export function Header({
               </button>
             )}
             <div>
-              <h1 className="mb-0.5 text-heading-5 font-bold text-dark dark:text-white">
+              <h1 className="mb-0.5 font-display text-heading-5 font-bold text-dark dark:text-white">
                 {resolvedTitle}
               </h1>
               <p className="font-medium text-dark-5 dark:text-dark-6">

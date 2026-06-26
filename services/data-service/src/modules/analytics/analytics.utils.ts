@@ -45,6 +45,15 @@ const getReimbursedAmount = (linkage: unknown) => {
 const isReimbursementLinkage = (linkage: unknown) =>
   !!linkage && typeof linkage === "object" && (linkage as any).type === "reimbursement";
 
+const isInternalLinkage = (linkage: unknown) =>
+  !!linkage && typeof linkage === "object" && (linkage as any).type === "internal";
+
+const isInternalCategory = (category: AnalyticsTransaction["category"] | undefined) =>
+  category?.name?.trim().toLowerCase() === "internal";
+
+const isInternalTransaction = (tx: { linkage?: unknown; category?: AnalyticsTransaction["category"] }) =>
+  isInternalLinkage(tx.linkage) || isInternalCategory(tx.category);
+
 export const getReimbursementAllocatedAmount = (linkage: unknown) => {
   if (!linkage || typeof linkage !== "object") return 0;
   if ((linkage as any).type !== "reimbursement") return 0;
@@ -65,12 +74,14 @@ export const getReimbursementLeftover = (tx: { amountIn?: AmountLike; linkage?: 
 };
 
 export const getEffectiveIn = (tx: { amountIn?: AmountLike; linkage?: unknown }) => {
+  if (isInternalTransaction(tx)) return 0;
   const rawIn = Math.max(toNumber(tx.amountIn), 0);
   if (isReimbursementLinkage(tx.linkage)) return 0;
   return Number(rawIn.toFixed(2));
 };
 
 export const getEffectiveOut = (tx: { amountOut?: AmountLike; linkage?: unknown }) => {
+  if (isInternalTransaction(tx)) return 0;
   const rawOut = Math.max(toNumber(tx.amountOut), 0);
   const reimbursed = getReimbursedAmount(tx.linkage);
   return Number(Math.max(rawOut - reimbursed, 0).toFixed(2));

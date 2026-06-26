@@ -23,7 +23,7 @@ export function PageTabs<T extends string>({
   return (
     <div
       className={cn(
-        "-mx-4 -mt-4 border-b border-stroke bg-white px-4 dark:border-stroke-dark dark:bg-gray-dark md:-mx-5 md:-mt-5 md:px-5 2xl:-mx-6 2xl:-mt-6 2xl:px-6",
+        "sticky top-0 z-20 -mx-4 -mt-4 border-b border-stroke bg-white px-4 shadow-sm dark:border-stroke-dark dark:bg-gray-dark md:-mx-5 md:-mt-5 md:px-5 2xl:-mx-6 2xl:-mt-6 2xl:px-6",
         className,
       )}
     >

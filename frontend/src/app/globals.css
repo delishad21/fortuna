@@ -7,7 +7,9 @@
   /* ─────────────────────────────────────────────
    * Font
    * ──────────────────────────────────────────── */
-  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-sans: var(--font-dm-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: var(--font-barlow-condensed), var(--font-dm-sans), sans-serif;
+  --font-mono: var(--font-dm-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* ─────────────────────────────────────────────
    * Base colors
@@ -29,8 +31,8 @@
   --color-dark-2: #0F1725;
   --color-dark-3: #1C2A3C;
   --color-dark-4: #4B5563;
-  --color-dark-5: #6B7280;
-  --color-dark-6: #9CA3AF;
+  --color-dark-5: #4B5563;
+  --color-dark-6: #CBD5E1;
   --color-dark-7: #D1D5DB;
   --color-dark-8: #E5E7EB;
 
@@ -170,16 +172,26 @@ body {
   -moz-osx-font-smoothing: grayscale;
   background-color: var(--color-gray-2);
   color: var(--color-dark-5);
+  --chart-grid: var(--color-stroke);
+  --chart-muted: var(--color-dark-5);
 }
 
 .dark body {
   background-color: var(--color-dark-bg);
   color: var(--color-dark-6);
+  --chart-grid: var(--color-stroke-dark);
+  --chart-muted: var(--color-dark-6);
 }
 
 a {
   color: inherit;
   text-decoration: none;
+}
+
+h1,
+h2,
+.display-heading {
+  font-family: var(--font-display), var(--font-dm-sans), sans-serif;
 }
 
 /* Utility styles */

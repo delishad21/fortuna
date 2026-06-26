@@ -12,6 +12,7 @@ import {
   ClassificationPatternStatus,
   ClassificationPatternType,
 } from "./classification-patterns";
+import { inferImportSourceFilename } from "../imports/import-source";
 import { validatePendingReimbursementLinks } from "./transactions.import-validation";
 
 // Reserved category names and colors
@@ -1418,13 +1419,22 @@ export class TransactionService {
             .toString()
             .trim()
             .toUpperCase();
+          const metadata = stripImportOrderMetadata(transaction.metadata);
+          const importSource = batchInfo
+            ? inferImportSourceFilename({
+                batchFilename: batchInfo.filename,
+                transactionDate: transaction.date,
+                metadata,
+              })
+            : null;
 
           return {
             ...transaction,
             categoryId,
             currency: resolvedCurrency || "SGD",
             metadata: {
-              ...stripImportOrderMetadata(transaction.metadata),
+              ...metadata,
+              ...(importSource ? { sourceFilename: importSource.filename } : {}),
               [IMPORT_ORIGINAL_INDEX_KEY]: selectedIndices[index],
             },
             linkage: cleanLinkage,

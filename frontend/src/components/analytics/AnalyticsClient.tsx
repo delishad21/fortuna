@@ -16,7 +16,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { AlertTriangle, TrendingDown, TrendingUp } from "lucide-react";
+import { AlertTriangle, Download, TrendingDown, TrendingUp } from "lucide-react";
 import { getAnalyticsInsights, getAnalyticsReport } from "@/app/actions/analytics";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -42,6 +42,7 @@ type ReportData = {
   summary: { totalIn: number; totalOut: number; net: number; transactionCount: number };
   chartSeries: Array<{ key: string; label: string; totalIn: number; totalOut: number; net: number; metricValue?: number; transactionCount: number; color?: string }>;
   breakdown: Array<{ key: string; name: string; color?: string; totalIn: number; totalOut: number; net?: number; metricValue: number; transactionCount: number; percentOfTotal: number }>;
+  categoryBreakdown?: Array<{ key: string; name: string; color?: string; totalIn: number; totalOut: number; net?: number; metricValue: number; transactionCount: number; percentOfTotal: number }>;
   transactions: Transaction[];
   categories: Array<{ id: string; name: string; color: string }>;
   merchants: Array<{ key: string; name: string }>;
@@ -110,6 +111,9 @@ const chartOptions = [
   { value: "line", label: "Line chart" },
   { value: "pie", label: "Pie chart" },
 ];
+
+const fallbackChartColors = ["#5750F1", "#22AD5C", "#F23030", "#F59E0B", "#3B82F6", "#F97316"];
+const reportBarSize = 42;
 
 export function AnalyticsClient({ initialReport, initialInsights }: { initialReport: ReportData; initialInsights: InsightsData }) {
   const [activeTab, setActiveTab] = useState<"reports" | "insights">("reports");
@@ -205,22 +209,30 @@ function ReportsTab({ report, loading, monthOptions, categoryOptions, merchantOp
   loadReport: (next: Partial<ReportData["controls"]> & { month?: string }) => void;
   exportCsv: () => void;
 }) {
+  const categoryBreakdown = report.categoryBreakdown ?? report.breakdown;
+
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-dark dark:text-white">Reports</h2>
+          <h2 className="font-display text-3xl font-bold text-dark dark:text-white">Reports</h2>
           <p className="text-sm text-dark-5 dark:text-dark-6">Build charts and tables from imported statement data.</p>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-          <Select value={report.selectedMonth || ""} options={monthOptions} onChange={(month) => loadReport({ month })} placeholder="Month" />
-          <Select value={report.controls.range} options={rangeOptions} onChange={(range) => loadReport({ range })} />
-          <Select value={report.controls.metric} options={metricOptions} onChange={(metric) => loadReport({ metric })} />
-          <Select value={report.controls.groupBy} options={groupOptions} onChange={(groupBy) => loadReport({ groupBy })} />
-          <Select value={chartType} options={chartOptions} onChange={setChartType} />
-          <Button variant="secondary" onClick={exportCsv}>Export CSV</Button>
-        </div>
+        <Button variant="secondary" onClick={exportCsv} leftIcon={<Download className="size-4" />}>Export CSV</Button>
       </div>
+
+      <Card className="p-4">
+        <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-7">
+          <Select value={report.selectedMonth || ""} options={monthOptions} onChange={(month) => loadReport({ month })} placeholder="Month" buttonClassName="w-full min-w-0" />
+          <Select value={report.controls.range} options={rangeOptions} onChange={(range) => loadReport({ range })} buttonClassName="w-full min-w-0" />
+          <Select value={report.controls.metric} options={metricOptions} onChange={(metric) => loadReport({ metric })} buttonClassName="w-full min-w-0" />
+          <Select value={report.controls.groupBy} options={groupOptions} onChange={(groupBy) => loadReport({ groupBy })} buttonClassName="w-full min-w-0" />
+          <Select value={chartType} options={chartOptions} onChange={setChartType} buttonClassName="w-full min-w-0" />
+          <Select value={report.controls.categoryId || ""} options={categoryOptions} onChange={(categoryId) => loadReport({ categoryId })} buttonClassName="w-full min-w-0" />
+          <Select value={report.controls.merchantKey || ""} options={merchantOptions} onChange={(merchantKey) => loadReport({ merchantKey })} buttonClassName="w-full min-w-0" />
+        </CardContent>
+        {loading && <div className="mt-3 text-xs text-dark-5 dark:text-dark-6">Updating report...</div>}
+      </Card>
 
       <div className="grid gap-4 md:grid-cols-4">
         <Metric title="Income" value={formatCurrency(report.summary.totalIn)} tone="good" />
@@ -239,25 +251,13 @@ function ReportsTab({ report, loading, monthOptions, categoryOptions, merchantOp
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
-        <Card>
-          <CardHeader><CardTitle>Filters</CardTitle></CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-2">
-            <Select value={report.controls.categoryId || ""} options={categoryOptions} onChange={(categoryId) => loadReport({ categoryId })} />
-            <Select value={report.controls.merchantKey || ""} options={merchantOptions} onChange={(merchantKey) => loadReport({ merchantKey })} />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader><CardTitle>Breakdown</CardTitle></CardHeader>
-          <CardContent className="max-h-[360px] overflow-auto">
-            <BreakdownTable rows={report.breakdown} metric={report.controls.metric} />
-          </CardContent>
-        </Card>
-      </div>
-
       <Card>
-        <CardHeader><CardTitle>Transaction Drilldown</CardTitle></CardHeader>
-        <CardContent><TransactionTable transactions={report.transactions} /></CardContent>
+        <CardHeader>
+          <CardTitle>Category Breakdown</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <BreakdownChart rows={categoryBreakdown} metric={report.controls.metric} />
+        </CardContent>
       </Card>
     </div>
   );
@@ -266,11 +266,24 @@ function ReportsTab({ report, loading, monthOptions, categoryOptions, merchantOp
 function ReportChart({ data, metric, chartType }: { data: ReportData["chartSeries"]; metric: string; chartType: string }) {
   if (data.length === 0) return <div className="flex h-full items-center justify-center text-sm text-dark-5 dark:text-dark-6">No data for the selected report.</div>;
   if (chartType === "pie") {
+    const pieData = data.map((item) => ({
+      ...item,
+      chartValue: Math.abs(metric === "inOut" ? item.totalOut : item.metricValue || 0),
+    }));
+
     return (
       <ResponsiveContainer width="100%" height="100%">
         <PieChart>
-          <Pie data={data} dataKey={metric === "inOut" ? "totalOut" : "metricValue"} nameKey="label" innerRadius={70} outerRadius={130} paddingAngle={3}>
-            {data.map((entry, index) => <Cell key={entry.key} fill={entry.color || ["#5750F1", "#22AD5C", "#F23030", "#F59E0B"][index % 4]} />)}
+          <Pie
+            data={pieData}
+            dataKey="chartValue"
+            nameKey="label"
+            innerRadius={48}
+            outerRadius={130}
+            paddingAngle={0}
+            stroke="none"
+          >
+            {pieData.map((entry, index) => <Cell key={entry.key} fill={entry.color || fallbackChartColors[index % fallbackChartColors.length]} />)}
           </Pie>
           <Tooltip formatter={(value: number) => formatCurrency(Number(value))} />
         </PieChart>
@@ -281,9 +294,9 @@ function ReportChart({ data, metric, chartType }: { data: ReportData["chartSerie
     return (
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data}>
-          <CartesianGrid strokeDasharray="3 3" stroke="var(--color-stroke)" />
-          <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--color-dark-5)" }} />
-          <YAxis tick={{ fontSize: 12, fill: "var(--color-dark-5)" }} />
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
+          <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--chart-muted)" }} />
+          <YAxis tick={{ fontSize: 12, fill: "var(--chart-muted)" }} />
           <Tooltip formatter={(value: number) => formatCurrency(Number(value))} />
           {(metric === "income" || metric === "inOut") && <Line type="monotone" dataKey="totalIn" name="Income" stroke="#22AD5C" strokeWidth={2} />}
           {(metric === "spending" || metric === "inOut") && <Line type="monotone" dataKey="totalOut" name="Spending" stroke="#F23030" strokeWidth={2} />}
@@ -294,14 +307,14 @@ function ReportChart({ data, metric, chartType }: { data: ReportData["chartSerie
   }
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={data}>
-        <CartesianGrid strokeDasharray="3 3" stroke="var(--color-stroke)" />
-        <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--color-dark-5)" }} />
-        <YAxis tick={{ fontSize: 12, fill: "var(--color-dark-5)" }} />
+      <BarChart data={data} barGap={6} barCategoryGap="32%">
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
+        <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--chart-muted)" }} />
+        <YAxis tick={{ fontSize: 12, fill: "var(--chart-muted)" }} />
         <Tooltip formatter={(value: number) => formatCurrency(Number(value))} />
-        {(metric === "income" || metric === "inOut") && <Bar dataKey="totalIn" name="Income" fill="#22AD5C" radius={[6, 6, 0, 0]} />}
-        {(metric === "spending" || metric === "inOut") && <Bar dataKey="totalOut" name="Spending" fill="#F23030" radius={[6, 6, 0, 0]} />}
-        {metric === "net" && <Bar dataKey="net" name="Net" fill="#5750F1" radius={[6, 6, 0, 0]} />}
+        {(metric === "income" || metric === "inOut") && <Bar dataKey="totalIn" name="Income" fill="#22AD5C" barSize={reportBarSize} radius={[6, 6, 0, 0]} />}
+        {(metric === "spending" || metric === "inOut") && <Bar dataKey="totalOut" name="Spending" fill="#F23030" barSize={reportBarSize} radius={[6, 6, 0, 0]} />}
+        {metric === "net" && <Bar dataKey="net" name="Net" fill="#5750F1" barSize={reportBarSize} radius={[6, 6, 0, 0]} />}
       </BarChart>
     </ResponsiveContainer>
   );
@@ -314,7 +327,7 @@ function InsightsTab({ insights }: { insights: InsightsData }) {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-2xl font-semibold text-dark dark:text-white">Insights</h2>
+        <h2 className="font-display text-3xl font-bold text-dark dark:text-white">Insights</h2>
         <p className="text-sm text-dark-5 dark:text-dark-6">What changed in {formatMonth(insights.selectedMonth)} and what deserves attention.</p>
       </div>
       <div className="grid gap-4 md:grid-cols-3">
@@ -370,12 +383,55 @@ function InsightList({ title, rows }: { title: string; rows: Array<{ key: string
   );
 }
 
-function BreakdownTable({ rows, metric }: { rows: ReportData["breakdown"]; metric: string }) {
-  if (rows.length === 0) return <p className="text-sm text-dark-5 dark:text-dark-6">No breakdown data.</p>;
-  return <div className="space-y-3">{rows.slice(0, 12).map((row) => {
-    const valueClass = metric === "income" ? "text-green" : metric === "net" && row.metricValue < 0 ? "text-green" : "text-red";
-    return <div key={row.key} className="grid grid-cols-[1fr_auto_auto] gap-3 text-sm"><span className="truncate font-semibold text-dark dark:text-white">{row.name}</span><span className="text-dark-5 dark:text-dark-6">{row.percentOfTotal}%</span><span className={`font-semibold ${valueClass}`}>{formatCurrency(row.metricValue)}</span></div>;
-  })}</div>;
+function BreakdownChart({ rows, metric }: { rows: ReportData["breakdown"]; metric: string }) {
+  const chartRows = rows
+    .filter((row) => Math.abs(row.metricValue) > 0)
+    .map((row) => ({ ...row, chartValue: Math.abs(row.metricValue) }));
+  if (chartRows.length === 0) return <p className="text-sm text-dark-5 dark:text-dark-6">No breakdown data.</p>;
+
+  return (
+    <div className="grid gap-6 xl:grid-cols-[minmax(280px,420px)_1fr] xl:items-center">
+      <div className="h-[300px]">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={chartRows}
+              dataKey="chartValue"
+              nameKey="name"
+              innerRadius={44}
+              outerRadius={120}
+              paddingAngle={0}
+              stroke="none"
+            >
+              {chartRows.map((row, index) => (
+                <Cell
+                  key={row.key}
+                  fill={row.color || fallbackChartColors[index % fallbackChartColors.length]}
+                />
+              ))}
+            </Pie>
+            <Tooltip formatter={(value: number) => formatCurrency(Math.abs(Number(value)))} />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="max-h-[320px] space-y-3 overflow-auto pr-1">
+        {chartRows.slice(0, 12).map((row, index) => {
+          const valueClass = metric === "income" ? "text-green" : metric === "net" && row.metricValue < 0 ? "text-green" : "text-red";
+          return (
+            <div key={row.key} className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-3 text-sm">
+              <span
+                className="size-3 rounded-full"
+                style={{ backgroundColor: row.color || fallbackChartColors[index % fallbackChartColors.length] }}
+              />
+              <span className="truncate font-semibold text-dark dark:text-white">{row.name}</span>
+              <span className="font-mono text-xs text-dark-5 dark:text-dark-6">{row.percentOfTotal}%</span>
+              <span className={`font-semibold ${valueClass}`}>{formatCurrency(row.metricValue)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function TransactionTable({ transactions }: { transactions: Transaction[] }) {

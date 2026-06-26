@@ -6,6 +6,7 @@ import Link from "next/link";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { getCurrencyOptions } from "@/lib/currencies";
 import { registerUser } from "@/app/actions/auth";
+import { BrandLogo } from "@/components/ui/Brand";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -58,14 +59,11 @@ export default function RegisterPage() {
         <div className="w-full max-w-md">
           {/* Logo */}
           <div className="mb-8 flex justify-center">
-            <div className="flex items-center gap-2">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary">
-                <span className="text-2xl font-bold text-white">F</span>
-              </div>
-              <span className="text-2xl font-bold text-dark dark:text-white">
-                Finance App
-              </span>
-            </div>
+            <BrandLogo
+              markClassName="h-16 w-16"
+              iconClassName="size-9"
+              textClassName="text-4xl"
+            />
           </div>
 
           {/* Card */}
@@ -74,7 +72,7 @@ export default function RegisterPage() {
               Sign Up
             </h1>
             <p className="mb-6 text-center text-sm text-dark-5 dark:text-dark-6">
-              Create your Personal Finance App account
+              Create your Fortuna account
             </p>
 
             {error && (

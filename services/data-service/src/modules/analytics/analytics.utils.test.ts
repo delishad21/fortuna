@@ -3,12 +3,33 @@ import { describe, it } from "node:test";
 import {
   buildCategoryBreakdown,
   getEffectiveIn,
+  getEffectiveOut,
   getReimbursementLeftover,
   REIMBURSEMENT_LEFTOVER_CATEGORY,
   summarizeTransactions,
 } from "./analytics.utils";
 
 describe("reimbursement analytics", () => {
+  it("excludes internal transfers from effective income and spending", () => {
+    const transaction = {
+      amountIn: 500,
+      amountOut: 500,
+      linkage: { type: "internal" },
+    };
+
+    assert.equal(getEffectiveIn(transaction), 0);
+    assert.equal(getEffectiveOut(transaction), 0);
+  });
+
+  it("treats the reserved Internal category as non-spending", () => {
+    const transaction = {
+      amountOut: 75,
+      category: { id: "internal", name: "Internal", color: "#9ca3af" },
+    };
+
+    assert.equal(getEffectiveOut(transaction), 0);
+  });
+
   it("excludes linked reimbursement leftover from ordinary income", () => {
     const transaction = {
       amountIn: 100,

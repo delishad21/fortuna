@@ -119,7 +119,7 @@ export function UploadSection({
       <div className="w-96 flex flex-col h-full overflow-hidden">
         <div className="flex items-center gap-2 mb-4 flex-shrink-0">
           <Upload className="h-4 w-4 text-primary" />
-          <h3 className="text-sm font-semibold text-dark dark:text-white uppercase tracking-wide">
+          <h3 className="font-sans text-sm font-semibold text-dark dark:text-white uppercase tracking-wide">
             Upload Statement
           </h3>
         </div>

@@ -17,6 +17,7 @@ import {
   serializeTransaction,
   summarizeTransactions,
 } from "./analytics.utils";
+import { inferImportSourceFilename } from "../imports/import-source";
 
 export const analyticsRouter = Router();
 
@@ -30,24 +31,10 @@ const toNumber = (value: any) => {
   return Number(value);
 };
 
-const getReimbursedAmount = (linkage: any) => {
-  if (!linkage || typeof linkage !== "object") return 0;
-  const allocations = Array.isArray(linkage.reimbursedByAllocations)
-    ? linkage.reimbursedByAllocations
-    : [];
-  return allocations.reduce(
-    (sum: number, item: any) => sum + Math.max(toNumber(item?.amount), 0),
-    0,
-  );
-};
+const getEffectiveOut = (tx: { amountOut?: any; linkage?: any; category?: any }) =>
+  getAnalyticsEffectiveOut(tx);
 
-const getEffectiveOut = (tx: { amountOut: any; linkage?: any }) => {
-  const rawOut = Math.max(toNumber(tx.amountOut), 0);
-  const reimbursed = getReimbursedAmount(tx.linkage);
-  return Number(Math.max(rawOut - reimbursed, 0).toFixed(2));
-};
-
-const getEffectiveIn = (tx: { amountIn: any; linkage?: any }) =>
+const getEffectiveIn = (tx: { amountIn?: any; linkage?: any; category?: any }) =>
   getAnalyticsEffectiveIn(tx);
 
 const formatDayKey = (date: Date) => date.toISOString().slice(0, 10);
@@ -101,6 +88,68 @@ const buildMerchantBreakdown = (transactions: AnalyticsTransaction[]) => {
   }
 
   return Array.from(map.values()).sort((a, b) => b.totalOut - a.totalOut);
+};
+
+type ImportSummaryTransaction = AnalyticsTransaction & {
+  metadata?: unknown;
+  importBatch?: {
+    id: string;
+    filename: string;
+    parserId: string;
+    committedAt: Date | null;
+    uploadedAt: Date;
+  } | null;
+};
+
+const getImportSourceFilename = (tx: ImportSummaryTransaction) =>
+  inferImportSourceFilename({
+    batchFilename: tx.importBatch?.filename,
+    transactionDate: tx.date,
+    metadata: tx.metadata,
+  })?.filename ||
+  tx.importBatch?.filename ||
+  "Unknown import";
+
+const getImportFileGroups = (transactions: ImportSummaryTransaction[]) => {
+  const groups = new Map<
+    string,
+    {
+      key: string;
+      filename: string;
+      parserId: string | null;
+      importedAt: Date | null;
+      transactions: ImportSummaryTransaction[];
+    }
+  >();
+
+  for (const tx of transactions) {
+    if (!tx.importBatchId || !tx.importBatch) continue;
+    const filename = getImportSourceFilename(tx);
+    const key = `${tx.importBatchId}:${filename}`;
+    const importedAt = tx.importBatch.committedAt || tx.importBatch.uploadedAt || null;
+    const current = groups.get(key) || {
+      key,
+      filename,
+      parserId: tx.importBatch.parserId || null,
+      importedAt,
+      transactions: [],
+    };
+    current.transactions.push(tx);
+    if (
+      importedAt &&
+      (!current.importedAt || importedAt > current.importedAt)
+    ) {
+      current.importedAt = importedAt;
+    }
+    groups.set(key, current);
+  }
+
+  return Array.from(groups.values()).sort((a, b) => {
+    const importedDelta =
+      (b.importedAt?.getTime() || 0) - (a.importedAt?.getTime() || 0);
+    if (importedDelta !== 0) return importedDelta;
+    return a.filename.localeCompare(b.filename);
+  });
 };
 
 const getRangeForQuery = (range: string, month: string) => {
@@ -348,16 +397,19 @@ analyticsRouter.get("/dashboard-review", async (req: Request, res: Response) => 
           .slice(0, 8)
       : [];
 
-    const importSummaries = importedMonthGroups.slice(0, 6).map(([monthKey, monthTransactions]) => {
-      const monthCategories = buildAnalyticsCategoryBreakdown(monthTransactions);
+    const importSummaries = getImportFileGroups(transactions).slice(0, 6).map((importGroup) => {
+      const importCategories = buildAnalyticsCategoryBreakdown(importGroup.transactions);
       return {
-        month: monthKey,
-        latestTransactionDate: monthTransactions.reduce(
+        key: importGroup.key,
+        filename: importGroup.filename,
+        parserId: importGroup.parserId,
+        importedAt: importGroup.importedAt,
+        latestTransactionDate: importGroup.transactions.reduce(
           (latest, tx) => (tx.date > latest ? tx.date : latest),
-          monthTransactions[0]?.date || new Date(),
+          importGroup.transactions[0]?.date || new Date(),
         ),
-        ...summarizeTransactions(monthTransactions),
-        topCategory: monthCategories[0] || null,
+        ...summarizeTransactions(importGroup.transactions),
+        topCategory: importCategories[0] || null,
       };
     });
 
@@ -470,16 +522,24 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
     const merchantBreakdown = buildMerchantBreakdown(transactions);
     const availableCategories = buildAnalyticsCategoryBreakdown(baseTransactions);
     const availableMerchants = buildMerchantBreakdown(baseTransactions);
-    const breakdown = groupBy === "merchant" ? merchantBreakdown : categoryBreakdown;
     const getMetricValue = (item: { totalIn: number; totalOut: number }) => {
       if (metric === "income") return item.totalIn;
       if (metric === "net") return item.totalIn - item.totalOut;
       return item.totalOut;
     };
-    const totalForPercent = breakdown.reduce(
-      (sum, item) => sum + Math.abs(getMetricValue(item)),
-      0,
-    );
+    const withMetricPercent = (items: Array<any>) => {
+      const totalForPercent = items.reduce(
+        (sum, item) => sum + Math.abs(getMetricValue(item)),
+        0,
+      );
+
+      return items.map((item: any) => ({
+        ...item,
+        metricValue: getMetricValue(item),
+        percentOfTotal: totalForPercent ? Math.round((Math.abs(getMetricValue(item)) / totalForPercent) * 1000) / 10 : 0,
+      }));
+    };
+    const breakdown = groupBy === "merchant" ? merchantBreakdown : categoryBreakdown;
 
     res.json({
       selectedMonth,
@@ -499,11 +559,8 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
             color: item.color || "#5750F1",
           }))
         : timeSeries,
-      breakdown: breakdown.map((item: any) => ({
-        ...item,
-        metricValue: getMetricValue(item),
-        percentOfTotal: totalForPercent ? Math.round((Math.abs(getMetricValue(item)) / totalForPercent) * 1000) / 10 : 0,
-      })),
+      breakdown: withMetricPercent(breakdown),
+      categoryBreakdown: withMetricPercent(categoryBreakdown),
       transactions: [...transactions].reverse().map(serializeTransaction),
       categories: availableCategories.map((item) => ({ id: item.key, name: item.name, color: item.color })),
       merchants: availableMerchants.map((item) => ({ key: item.key, name: item.name })),

@@ -13,6 +13,7 @@ import {
   ChevronUp,
 } from "lucide-react";
 import { useSidebarContext } from "./sidebar-context";
+import { BrandLogo } from "@/components/ui/Brand";
 
 const menuItems = [
   {
@@ -59,14 +60,9 @@ export function Sidebar() {
             <Link
               href={"/dashboard"}
               onClick={() => isMobile && toggleSidebar()}
-              className="flex items-center gap-2 px-0 py-2.5"
+              className="flex items-center gap-3 px-0 py-2.5"
             >
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary">
-                <span className="text-xl font-bold text-white">F</span>
-              </div>
-              <span className="text-xl font-bold text-dark dark:text-white">
-                Finance App
-              </span>
+              <BrandLogo />
             </Link>
           </div>
 
