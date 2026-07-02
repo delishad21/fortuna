@@ -1,13 +1,18 @@
 "use client";
 
 import { useMemo, useState, useEffect } from "react";
-import { X, ArrowLeftRight, Receipt } from "lucide-react";
+import { X, ArrowLeftRight, Receipt, Scissors } from "lucide-react";
 import { TextInput } from "@/components/ui/TextInput";
 import { DatePicker } from "@/components/ui/DatePicker";
 import { Button } from "@/components/ui/Button";
 import { CategorySelect } from "@/components/ui/CategorySelect";
 import { AccountIdentifierSelect } from "@/components/ui/AccountIdentifierSelect";
 import { ReimbursementSelectorModal } from "@/components/import/ReimbursementSelectorModal";
+import { Modal } from "@/components/ui/Modal";
+import {
+  SplitTransactionModal,
+  type SplitTransactionChildInput,
+} from "@/components/transactions/SplitTransactionModal";
 import type { TransactionLinkage } from "@/components/transaction-table/types";
 
 interface Transaction {
@@ -82,6 +87,10 @@ interface EditTransactionModalProps {
   accountIdentifiers: AccountIdentifier[];
   onClose: () => void;
   onSave: (transaction: Transaction) => Promise<void>;
+  onSplit: (
+    transactionId: string,
+    children: [SplitTransactionChildInput, SplitTransactionChildInput],
+  ) => Promise<void>;
   onAddCategory: () => void;
   onAddAccountIdentifier: () => void;
 }
@@ -93,6 +102,7 @@ export function EditTransactionModal({
   accountIdentifiers,
   onClose,
   onSave,
+  onSplit,
   onAddCategory,
   onAddAccountIdentifier,
 }: EditTransactionModalProps) {
@@ -138,6 +148,8 @@ export function EditTransactionModal({
     );
   const [isReimbursementSelectorOpen, setIsReimbursementSelectorOpen] =
     useState(false);
+  const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
+  const [showSplitWarning, setShowSplitWarning] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -169,6 +181,8 @@ export function EditTransactionModal({
         : null,
     );
     setIsReimbursementSelectorOpen(false);
+    setIsSplitModalOpen(false);
+    setShowSplitWarning(false);
   }, [transaction]);
 
   const initialSelectedDbTransactions = useMemo(
@@ -271,6 +285,27 @@ export function EditTransactionModal({
     );
     setLinkageType("reimbursement");
     setIsReimbursementSelectorOpen(false);
+  };
+
+  const handleOpenSplitModal = () => {
+    const currentLinkage = formData.linkage || transaction.linkage;
+    if (
+      currentLinkage?.type === "reimbursement" ||
+      currentLinkage?.type === "reimbursed" ||
+      linkageType === "reimbursement"
+    ) {
+      setShowSplitWarning(true);
+      return;
+    }
+    setIsSplitModalOpen(true);
+  };
+
+  const handleConfirmSplit = async (
+    children: [SplitTransactionChildInput, SplitTransactionChildInput],
+  ) => {
+    await onSplit(transaction.id, children);
+    setIsSplitModalOpen(false);
+    onClose();
   };
 
   // Extract source from metadata
@@ -377,7 +412,7 @@ export function EditTransactionModal({
             <label className="block text-sm font-medium text-dark dark:text-white mb-2">
               Linkage
             </label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <Button
                 type="button"
                 variant={linkageType === "none" ? "primary" : "secondary"}
@@ -401,6 +436,14 @@ export function EditTransactionModal({
                 disabled={!parseAmount(formData.amountIn)}
               >
                 Reimbursement
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={handleOpenSplitModal}
+                leftIcon={<Scissors className="h-4 w-4" />}
+              >
+                Split
               </Button>
             </div>
             {!parseAmount(formData.amountIn) && (
@@ -584,6 +627,22 @@ export function EditTransactionModal({
         categories={categories}
         currentReimbursementId={transaction.id}
         initialSelectedDbTransactions={initialSelectedDbTransactions}
+      />
+
+      <SplitTransactionModal
+        isOpen={isSplitModalOpen}
+        transaction={formData}
+        categories={categories}
+        onClose={() => setIsSplitModalOpen(false)}
+        onConfirm={handleConfirmSplit}
+      />
+
+      <Modal
+        isOpen={showSplitWarning}
+        onClose={() => setShowSplitWarning(false)}
+        type="warning"
+        title="Cannot Split Reimbursement"
+        message="Reimbursement transactions cannot be split. To split this transaction, first remove the reimbursements, then redo the reimbursements on the split transactions."
       />
     </div>
   );

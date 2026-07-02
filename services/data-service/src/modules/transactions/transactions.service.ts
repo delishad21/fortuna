@@ -1760,6 +1760,135 @@ export class TransactionService {
     return updated;
   }
 
+  static async splitTransaction(
+    id: string,
+    userId: string,
+    children: Array<{
+      description: string;
+      label?: string | null;
+      categoryId?: string | null;
+      amountIn?: number | null;
+      amountOut?: number | null;
+    }>,
+  ) {
+    const existing = await TransactionRepository.findById(id, userId);
+    if (!existing) {
+      throw new Error("Transaction not found");
+    }
+
+    const existingLinkage = existing.linkage as TransactionLinkage | null;
+    if (
+      existingLinkage?.type === "reimbursement" ||
+      existingLinkage?.type === "reimbursed"
+    ) {
+      throw new Error(
+        "Reimbursement transactions cannot be split. To split this transaction, first remove the reimbursements, then redo the reimbursements on the split transactions.",
+      );
+    }
+
+    if (children.length !== 2) {
+      throw new Error("A transaction must be split into exactly two transactions");
+    }
+
+    const originalNet = Number(
+      (
+        (existing.amountIn !== null ? Number(existing.amountIn) : 0) -
+        (existing.amountOut !== null ? Number(existing.amountOut) : 0)
+      ).toFixed(2),
+    );
+    const childNet = Number(
+      children
+        .reduce(
+          (sum, child) =>
+            sum + Number(child.amountIn || 0) - Number(child.amountOut || 0),
+          0,
+        )
+        .toFixed(2),
+    );
+    if (Math.abs(originalNet - childNet) > 0.01) {
+      throw new Error("Split transactions must add up to the original net amount");
+    }
+
+    for (const child of children) {
+      const amountIn = Number(child.amountIn || 0);
+      const amountOut = Number(child.amountOut || 0);
+      if (!child.description?.trim()) {
+        throw new Error("Each split transaction needs a description");
+      }
+      if ((amountIn > 0 && amountOut > 0) || (amountIn <= 0 && amountOut <= 0)) {
+        throw new Error(
+          "Each split transaction must have either amount in or amount out",
+        );
+      }
+    }
+
+    const isInternal = existingLinkage?.type === "internal";
+    const { internal } = isInternal
+      ? await this.ensureReservedCategories(userId)
+      : { internal: null as any };
+
+    const categoryIds = children
+      .map((child) => child.categoryId || existing.categoryId)
+      .filter((categoryId): categoryId is string => !!categoryId);
+    if (categoryIds.length > 0) {
+      const validCategoryCount = await prisma.category.count({
+        where: { userId, id: { in: Array.from(new Set(categoryIds)) } },
+      });
+      if (validCategoryCount !== new Set(categoryIds).size) {
+        throw new Error("One or more split categories were not found");
+      }
+    }
+
+    return prisma.$transaction(async (tx) => {
+      const created = [];
+      for (let index = 0; index < children.length; index++) {
+        const child = children[index];
+        const metadata = {
+          ...((existing.metadata && typeof existing.metadata === "object"
+            ? existing.metadata
+            : {}) as Record<string, unknown>),
+          splitFromTransactionId: existing.id,
+          splitFromDescription: existing.description,
+          splitChildIndex: index + 1,
+        };
+
+        created.push(
+          await tx.transaction.create({
+            data: {
+              userId,
+              date: existing.date,
+              description: child.description.trim(),
+              label: child.label?.trim() || null,
+              categoryId: isInternal
+                ? internal.id
+                : child.categoryId || existing.categoryId,
+              amountIn: child.amountIn || null,
+              amountOut: child.amountOut || null,
+              balance: index === children.length - 1 ? existing.balance : null,
+              accountIdentifier: existing.accountIdentifier,
+              source: existing.source,
+              currency: existing.currency,
+              metadata: metadata as Prisma.InputJsonValue,
+              linkage: isInternal
+                ? ({
+                    type: "internal",
+                    autoDetected: false,
+                    detectionReason: "Inherited from split transaction",
+                  } as Prisma.InputJsonValue)
+                : Prisma.DbNull,
+              importBatchId: existing.importBatchId,
+              createdAt: new Date(existing.createdAt.getTime() + index),
+            },
+            include: { category: true, importBatch: true },
+          }),
+        );
+      }
+
+      await tx.transaction.delete({ where: { id, userId } });
+      return created;
+    });
+  }
+
   /**
    * Delete transaction
    */

@@ -272,6 +272,43 @@ export async function updateTransaction(
   return response.json();
 }
 
+export async function splitTransaction(
+  id: string,
+  children: Array<{
+    description: string;
+    label?: string;
+    categoryId?: string | null;
+    amountIn?: number | null;
+    amountOut?: number | null;
+  }>,
+) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    throw new Error("Unauthorized");
+  }
+
+  const response = await fetch(
+    `${DATA_SERVICE_URL}/api/transactions/${id}/split`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        userId: session.user.id,
+        children,
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || "Failed to split transaction");
+  }
+
+  return response.json();
+}
+
 export interface TransactionFilterPayload {
   dateFrom?: Date;
   dateTo?: Date;

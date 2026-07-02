@@ -22,6 +22,7 @@ interface CategorySelectProps {
   excludeReserved?: boolean;
   dropdownPlacement?: "fixed" | "inline";
   showOpenRing?: boolean;
+  openOnFocus?: boolean;
   emptyLabel?: string;
   suggestionMarker?: {
     show: boolean;
@@ -43,6 +44,7 @@ export function CategorySelect({
   excludeReserved = false,
   dropdownPlacement = "fixed",
   showOpenRing = true,
+  openOnFocus = false,
   emptyLabel = "Uncategorized",
   suggestionMarker,
   triggerProps,
@@ -56,6 +58,9 @@ export function CategorySelect({
   const [showAbove, setShowAbove] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const typeaheadRef = useRef("");
+  const typeaheadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pointerFocusRef = useRef(false);
 
   const reservedNames = ["internal", "reimbursement"];
   const filteredCategories = categories.filter((cat) => {
@@ -67,7 +72,6 @@ export function CategorySelect({
   const selectedCategory = filteredCategories.find((c) => c.id === value);
 
   const updateDropdownPosition = () => {
-    if (dropdownPlacement === "inline") return;
     if (!containerRef.current) return;
 
     const rect = containerRef.current.getBoundingClientRect();
@@ -80,6 +84,8 @@ export function CategorySelect({
       spaceBelow < dropdownHeight && spaceAbove > spaceBelow;
 
     setShowAbove(shouldShowAbove);
+    if (dropdownPlacement === "inline") return;
+
     setDropdownPosition({
       top: shouldShowAbove ? rect.top - 4 : rect.bottom + 4,
       left: rect.left,
@@ -107,7 +113,6 @@ export function CategorySelect({
 
   useEffect(() => {
     if (isOpen) {
-      if (dropdownPlacement === "inline") return;
       updateDropdownPosition();
 
       // Update position on scroll
@@ -136,8 +141,35 @@ export function CategorySelect({
     onAddClick();
   };
 
-  const { className: triggerClassNameProp, ...triggerRestProps } =
-    triggerProps || {};
+  const handleTypeahead = (key: string) => {
+    if (disabled || lockedByLinkage || key.length !== 1 || !/\S/.test(key)) {
+      return false;
+    }
+
+    const nextQuery = `${typeaheadRef.current}${key}`.toLowerCase();
+    typeaheadRef.current = nextQuery;
+    if (typeaheadTimerRef.current) {
+      clearTimeout(typeaheadTimerRef.current);
+    }
+    typeaheadTimerRef.current = setTimeout(() => {
+      typeaheadRef.current = "";
+    }, 2000);
+
+    const match = filteredCategories.find((category) =>
+      category.name.toLowerCase().startsWith(nextQuery),
+    );
+    if (match) {
+      onChange(match.id);
+    }
+    return true;
+  };
+
+  const {
+    className: triggerClassNameProp,
+    onKeyDown: triggerOnKeyDown,
+    onFocus: triggerOnFocus,
+    ...triggerRestProps
+  } = triggerProps || {};
   const triggerClassName = [
     `w-full h-full flex items-center px-4 py-3 text-sm text-left rounded-lg outline-none cursor-pointer transition-all disabled:cursor-not-allowed ${
       variant === "borderless"
@@ -158,7 +190,36 @@ export function CategorySelect({
       {/* Trigger Button */}
       <button
         type="button"
-        onClick={() => !disabled && setIsOpen(!isOpen)}
+        onMouseDown={() => {
+          pointerFocusRef.current = true;
+        }}
+        onClick={() => {
+          if (disabled) return;
+          pointerFocusRef.current = false;
+          setIsOpen((prev) => !prev);
+        }}
+        onFocus={(event) => {
+          triggerOnFocus?.(event);
+          if (openOnFocus && !disabled && !pointerFocusRef.current) {
+            updateDropdownPosition();
+            setIsOpen(true);
+          }
+        }}
+        onKeyDown={(event) => {
+          triggerOnKeyDown?.(event);
+          if (event.defaultPrevented) return;
+          if (event.key === "Escape") {
+            setIsOpen(false);
+            return;
+          }
+          if (event.key === "Tab") {
+            setIsOpen(false);
+            return;
+          }
+          if (handleTypeahead(event.key)) {
+            event.preventDefault();
+          }
+        }}
         disabled={disabled}
         {...triggerRestProps}
         className={triggerClassName}
@@ -205,15 +266,20 @@ export function CategorySelect({
           ref={dropdownRef}
           className={`${
             dropdownPlacement === "inline"
-              ? "absolute left-0 right-0 z-9"
+              ? "absolute left-0 right-0 z-30"
               : "fixed z-20"
           } py-1 bg-white dark:bg-dark-2 border border-stroke dark:border-dark-3 rounded-lg shadow-dropdown max-h-60 overflow-auto`}
           style={
             dropdownPlacement === "inline"
-              ? {
-                  top: "calc(100% + 4px)",
-                  transformOrigin: "top",
-                }
+              ? showAbove
+                ? {
+                    bottom: "calc(100% + 4px)",
+                    transformOrigin: "bottom",
+                  }
+                : {
+                    top: "calc(100% + 4px)",
+                    transformOrigin: "top",
+                  }
               : {
                   top: showAbove ? "auto" : dropdownPosition.top,
                   bottom: showAbove

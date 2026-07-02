@@ -198,6 +198,7 @@ function TransactionTableComponent({
   onBack,
   onLinkageChange,
   onOpenReimbursementSelector,
+  onOpenSplitTransaction,
   amountInHeader = "In",
   amountOutHeader = "Out",
   deferCellCommit = false,
@@ -430,6 +431,21 @@ function TransactionTableComponent({
 
     event.preventDefault();
     const currentRow = Number(rowAttr);
+    if (!event.shiftKey && colAttr === "label") {
+      const nextEl = tableContainerRef.current?.querySelector<HTMLElement>(
+        `[data-row="${currentRow}"][data-col="category"]`,
+      );
+      nextEl?.focus();
+      return;
+    }
+    if (!event.shiftKey && colAttr === "category") {
+      const nextEl = tableContainerRef.current?.querySelector<HTMLElement>(
+        `[data-row="${currentRow + 1}"][data-col="label"]`,
+      );
+      nextEl?.focus();
+      return;
+    }
+
     const direction = event.shiftKey ? -1 : 1;
 
     let nextRow = currentRow + direction;
@@ -601,7 +617,7 @@ function TransactionTableComponent({
                         ]}
                         className="w-full"
                         buttonClassName="w-full"
-                        menuPlacement="down"
+                        menuPlacement="auto"
                       />
                       <Select
                         value={tableTypeFilter}
@@ -615,7 +631,7 @@ function TransactionTableComponent({
                         ]}
                         className="w-full"
                         buttonClassName="w-full"
-                        menuPlacement="down"
+                        menuPlacement="auto"
                       />
                       <Select
                         value={tableSuggestionFilter}
@@ -631,7 +647,7 @@ function TransactionTableComponent({
                         ]}
                         className="w-full"
                         buttonClassName="w-full"
-                        menuPlacement="down"
+                        menuPlacement="auto"
                       />
                       <button
                         type="button"
@@ -856,7 +872,9 @@ function TransactionTableComponent({
                       <div className="flex items-center justify-center">
                         <Checkbox
                           checked={isSelected || false}
-                          onChange={() => onToggleSelection?.(index)}
+                          onChange={(_, event) =>
+                            onToggleSelection?.(index, event)
+                          }
                         />
                       </div>
                     </td>
@@ -1068,7 +1086,8 @@ function TransactionTableComponent({
                           excludeReserved={
                             !allowReservedCategorySelection && !transaction.linkage
                           }
-                          dropdownPlacement="inline"
+                          dropdownPlacement="fixed"
+                          openOnFocus
                           disabled={
                             showDuplicatesOnly ||
                             isLockedByLinkage ||
@@ -1209,6 +1228,11 @@ function TransactionTableComponent({
                       onSelectReimbursement={
                         onOpenReimbursementSelector
                           ? () => onOpenReimbursementSelector(index)
+                          : undefined
+                      }
+                      onSplitTransaction={
+                        onOpenSplitTransaction
+                          ? () => onOpenSplitTransaction(index)
                           : undefined
                       }
                     />

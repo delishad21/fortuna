@@ -28,6 +28,7 @@ import {
   deleteTransaction,
   exportTransactionsCsv,
   getTransactions,
+  splitTransaction,
   updateTransaction,
 } from "@/app/actions/transactions";
 import { createCategory } from "@/app/actions/categories";
@@ -364,6 +365,34 @@ export function TransactionsClient({
           error instanceof Error
             ? error.message
             : "Failed to update transaction",
+      });
+      throw error;
+    }
+  };
+
+  const handleSplitTransaction = async (
+    transactionId: string,
+    children: Parameters<typeof splitTransaction>[1],
+  ) => {
+    try {
+      await splitTransaction(transactionId, children);
+      await fetchTransactions(currentPage, filters);
+
+      setModalState({
+        isOpen: true,
+        type: "success",
+        title: "Transaction Split",
+        message: "Transaction split successfully",
+      });
+    } catch (error) {
+      setModalState({
+        isOpen: true,
+        type: "error",
+        title: "Split Failed",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to split transaction",
       });
       throw error;
     }
@@ -802,6 +831,7 @@ export function TransactionsClient({
             setEditingTransaction(null);
           }}
           onSave={handleSaveEdit}
+          onSplit={handleSplitTransaction}
           onAddCategory={() => setIsAddCategoryModalOpen(true)}
           onAddAccountIdentifier={handleAddAccountIdentifier}
         />

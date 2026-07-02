@@ -83,6 +83,30 @@ const CommitImportSchema = z.object({
     .optional(),
 });
 
+const SplitTransactionChildSchema = z
+  .object({
+    description: z.string().min(1),
+    label: z.string().optional(),
+    categoryId: z.string().nullable().optional(),
+    amountIn: z.number().nullable().optional(),
+    amountOut: z.number().nullable().optional(),
+  })
+  .refine(
+    (value) => {
+      const amountIn = Number(value.amountIn || 0);
+      const amountOut = Number(value.amountOut || 0);
+      return (amountIn > 0 || amountOut > 0) && !(amountIn > 0 && amountOut > 0);
+    },
+    {
+      message: "Each split transaction must have either amountIn or amountOut",
+    },
+  );
+
+const SplitTransactionSchema = z.object({
+  userId: z.string(),
+  children: z.tuple([SplitTransactionChildSchema, SplitTransactionChildSchema]),
+});
+
 const GetTransactionsSchema = z.object({
   userId: z.string(),
   dateFrom: z.string().optional(),
@@ -840,6 +864,27 @@ transactionRouter.put("/:id", async (req: Request, res: Response) => {
     );
 
     res.json(transaction);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/transactions/:id/split
+ * Replace one transaction with two child transactions
+ */
+transactionRouter.post("/:id/split", async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const parsed = SplitTransactionSchema.parse(req.body);
+
+    const transactions = await TransactionService.splitTransaction(
+      id,
+      parsed.userId,
+      parsed.children,
+    );
+
+    res.json({ transactions });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }

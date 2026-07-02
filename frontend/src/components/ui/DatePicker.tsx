@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import type { HTMLAttributes } from "react";
+import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, Calendar } from "lucide-react";
 
 interface DatePickerProps {
@@ -38,7 +39,13 @@ export function DatePicker({
   triggerProps,
 }: DatePickerProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [dropdownPosition, setDropdownPosition] = useState({
+    top: 0,
+    bottom: "auto" as number | "auto",
+    left: 0,
+  });
   const containerRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Parse the value into a Date object
   const selectedDate = value ? new Date(value + "T00:00:00") : new Date();
@@ -51,7 +58,8 @@ export function DatePicker({
     function handleClickOutside(event: MouseEvent) {
       if (
         containerRef.current &&
-        !containerRef.current.contains(event.target as Node)
+        !containerRef.current.contains(event.target as Node) &&
+        !dropdownRef.current?.contains(event.target as Node)
       ) {
         setIsOpen(false);
       }
@@ -59,6 +67,31 @@ export function DatePicker({
 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isOpen]);
+
+  const updateDropdownPosition = () => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const dropdownHeight = 340;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    const showAbove = spaceBelow < dropdownHeight && spaceAbove > spaceBelow;
+    setDropdownPosition({
+      top: showAbove ? 0 : rect.bottom + 4,
+      bottom: showAbove ? window.innerHeight - rect.top + 4 : "auto",
+      left: rect.left,
+    });
+  };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    updateDropdownPosition();
+    window.addEventListener("scroll", updateDropdownPosition, true);
+    window.addEventListener("resize", updateDropdownPosition);
+    return () => {
+      window.removeEventListener("scroll", updateDropdownPosition, true);
+      window.removeEventListener("resize", updateDropdownPosition);
+    };
   }, [isOpen]);
 
   // Reset view to selected date when opening
@@ -191,8 +224,17 @@ export function DatePicker({
       </button>
 
       {/* Calendar Dropdown */}
-      {isOpen && !disabled && (
-        <div className="absolute top-full left-0 z-50 mt-1 p-3 bg-white dark:bg-dark-2 border border-stroke dark:border-dark-3 rounded-lg shadow-dropdown min-w-70">
+      {isOpen && !disabled &&
+        createPortal(
+        <div
+          ref={dropdownRef}
+          className="fixed z-[90] p-3 bg-white dark:bg-dark-2 border border-stroke dark:border-dark-3 rounded-lg shadow-dropdown min-w-70"
+          style={{
+            top: dropdownPosition.bottom === "auto" ? dropdownPosition.top : "auto",
+            bottom: dropdownPosition.bottom,
+            left: dropdownPosition.left,
+          }}
+        >
           {/* Month/Year Navigation */}
           <div className="flex items-center justify-between mb-3">
             <button
@@ -243,7 +285,8 @@ export function DatePicker({
               Today
             </button>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

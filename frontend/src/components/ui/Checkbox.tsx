@@ -4,7 +4,7 @@ import { Check, Minus } from "lucide-react";
 
 interface CheckboxProps {
   checked: boolean;
-  onChange: (checked: boolean) => void;
+  onChange: (checked: boolean, event?: React.MouseEvent<HTMLButtonElement>) => void;
   indeterminate?: boolean;
   disabled?: boolean;
   className?: string;
@@ -27,7 +27,7 @@ export function Checkbox({
         event.preventDefault();
         event.stopPropagation();
         if (!disabled) {
-          onChange(!checked);
+          onChange(!checked, event);
         }
       }}
       className={`w-4 h-4 rounded-sm border-2 flex items-center justify-center transition-all ${

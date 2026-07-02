@@ -1,4 +1,4 @@
-import { ArrowLeftRight, Receipt, X } from "lucide-react";
+import { ArrowLeftRight, Receipt, Scissors, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
 import { AccountIdentifierSelect } from "@/components/ui/AccountIdentifierSelect";
@@ -24,6 +24,7 @@ interface TransactionRowExpandedProps {
   onAddAccountIdentifier?: () => void;
   onLinkageChange?: (linkage: TransactionLinkage | null) => void;
   onSelectReimbursement?: () => void;
+  onSplitTransaction?: () => void;
 }
 
 export function TransactionRowExpanded({
@@ -40,6 +41,7 @@ export function TransactionRowExpanded({
   onAddAccountIdentifier,
   onLinkageChange,
   onSelectReimbursement,
+  onSplitTransaction,
 }: TransactionRowExpandedProps) {
   const canMarkReimbursement = (transaction.amountIn ?? 0) > 0;
 
@@ -121,6 +123,18 @@ export function TransactionRowExpanded({
                     ? "Marked as Internal"
                     : "Mark as Internal"}
                 </Button>
+
+                {onSplitTransaction && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={onSplitTransaction}
+                    disabled={disabled}
+                    leftIcon={<Scissors className="w-4 h-4" />}
+                  >
+                    Split Transaction
+                  </Button>
+                )}
 
                 <Button
                   variant={

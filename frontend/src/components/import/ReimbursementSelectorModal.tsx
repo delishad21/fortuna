@@ -207,11 +207,34 @@ export function ReimbursementSelectorModal({
     const initialBatch = new Set<number>();
     const initialDb = new Set<string>();
     const initialAllocations: Record<TargetKey, number> = {};
+    const initialDbCache: Record<string, DatabaseTransaction> = Object.fromEntries(
+      initialSelectedDbTransactions.map((transaction) => [
+        transaction.id,
+        transaction,
+      ]),
+    );
 
     (currentLinkage?.reimbursesAllocations || []).forEach((item) => {
       if (typeof item.transactionId === "string") {
         initialDb.add(item.transactionId);
         initialAllocations[toDbKey(item.transactionId)] = toNumber(item.amount);
+        if (!initialDbCache[item.transactionId]) {
+          initialDbCache[item.transactionId] = {
+            id: item.transactionId,
+            date: item.targetDate || new Date().toISOString(),
+            description: item.targetDescription || "Existing transaction",
+            label: null,
+            amountIn: null,
+            amountOut:
+              typeof item.targetRemainingReimbursable === "number"
+                ? item.targetRemainingReimbursable
+                : toNumber(item.amount),
+            balance: null,
+            metadata: {},
+            category: null,
+            linkage: null,
+          };
+        }
       } else if (typeof item.pendingBatchIndex === "number") {
         initialBatch.add(item.pendingBatchIndex);
         initialAllocations[toBatchKey(item.pendingBatchIndex)] = toNumber(item.amount);
@@ -220,14 +243,7 @@ export function ReimbursementSelectorModal({
 
     setSelectedBatchIndices(initialBatch);
     setSelectedDbIds(initialDb);
-    setSelectedDbCache(
-      Object.fromEntries(
-        initialSelectedDbTransactions.map((transaction) => [
-          transaction.id,
-          transaction,
-        ]),
-      ),
-    );
+    setSelectedDbCache(initialDbCache);
     setAllocationByTarget(initialAllocations);
     setLeftoverCategoryId(currentLinkage?.leftoverCategoryId || "");
 
@@ -872,6 +888,8 @@ export function ReimbursementSelectorModal({
                         { value: "out", label: "Out only" },
                       ]}
                       buttonClassName="rounded-none border-0"
+                      menuPlacement="auto"
+                      menuStrategy="fixed"
                     />
                   </div>
 
@@ -889,6 +907,8 @@ export function ReimbursementSelectorModal({
                       }}
                       options={categoryOptions}
                       buttonClassName="rounded-none border-0"
+                      menuPlacement="auto"
+                      menuStrategy="fixed"
                     />
                   </div>
 
@@ -1076,6 +1096,8 @@ export function ReimbursementSelectorModal({
                     label: category.name,
                   })),
                 ]}
+                menuPlacement="auto"
+                menuStrategy="fixed"
               />
             </div>
 

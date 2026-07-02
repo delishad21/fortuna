@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 
 export interface TransactionLinkage {
   type: "internal" | "reimbursement" | "reimbursed";
@@ -119,11 +119,15 @@ export interface TransactionTableProps {
   onDeselectAll?: () => void;
   onSelectVisible?: (indices: number[]) => void;
   onDeselectVisible?: (indices: number[]) => void;
-  onToggleSelection?: (index: number) => void;
+  onToggleSelection?: (
+    index: number,
+    event?: MouseEvent<HTMLButtonElement>,
+  ) => void;
   onAddCategoryClick: () => void;
   onBack?: () => void;
   onLinkageChange?: (index: number, linkage: TransactionLinkage | null) => void;
   onOpenReimbursementSelector?: (index: number) => void;
+  onOpenSplitTransaction?: (index: number) => void;
   amountInHeader?: string;
   amountOutHeader?: string;
   deferCellCommit?: boolean;

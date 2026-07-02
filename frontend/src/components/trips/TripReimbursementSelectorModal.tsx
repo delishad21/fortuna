@@ -1042,6 +1042,7 @@ export function TripReimbursementSelectorModal({
                       { value: "out", label: "Out only" },
                     ]}
                     disabled={selectorTab === "existing"}
+                    menuStrategy="fixed"
                   />
 
                   <Select
@@ -1054,6 +1055,7 @@ export function TripReimbursementSelectorModal({
                       }
                     }}
                     options={categoryOptions}
+                    menuStrategy="fixed"
                   />
 
                   {selectorTab === "existing" ? (
@@ -1061,6 +1063,7 @@ export function TripReimbursementSelectorModal({
                       value={dbWalletFilter}
                       onChange={setDbWalletFilter}
                       options={walletOptions}
+                      menuStrategy="fixed"
                     />
                   ) : null}
 
@@ -1272,6 +1275,7 @@ export function TripReimbursementSelectorModal({
                     label: category.name,
                   })),
                 ]}
+                menuStrategy="fixed"
               />
 
               {showSyncToBankToggle ? (

@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import type { MouseEvent } from "react";
 import { parseFilesWithParsers, type MultiFileParseResult } from "@/app/actions/parser";
 import { createCategory } from "@/app/actions/categories";
 import { upsertAccountNumber } from "@/app/actions/accountNumbers";
@@ -20,6 +21,10 @@ import { AddAccountIdentifierModal } from "@/components/ui/AddAccountIdentifierM
 import { UploadSection, type FileUploadState } from "./UploadSection";
 import { TransactionTable } from "@/components/transaction-table/TransactionTable";
 import { ReimbursementSelectorModal } from "./ReimbursementSelectorModal";
+import {
+  SplitTransactionModal,
+  type SplitTransactionChildInput,
+} from "@/components/transactions/SplitTransactionModal";
 import type { TransactionLinkage } from "@/components/transaction-table/types";
 import {
   formatImportValidationErrors,
@@ -137,6 +142,10 @@ export function ImportClient({
   const [pendingUploadAfterPaylahPrompt, setPendingUploadAfterPaylahPrompt] =
     useState(false);
   const paylahPromptConfirmedRef = useRef(false);
+  const lastSelectionRef = useRef<{
+    index: number;
+    checked: boolean;
+  } | null>(null);
 
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(
     new Set(),
@@ -168,6 +177,7 @@ export function ImportClient({
   const [reimbursementTargetIndex, setReimbursementTargetIndex] = useState<
     number | null
   >(null);
+  const [splitTargetIndex, setSplitTargetIndex] = useState<number | null>(null);
 
   const showModal = (type: ModalType, title: string, message: string) => {
     setModalState({ isOpen: true, type, title, message });
@@ -194,6 +204,12 @@ export function ImportClient({
 
   const closeModal = () => {
     setModalState((prev) => ({ ...prev, isOpen: false }));
+  };
+
+  const handleFilesChange = (nextFiles: FileUploadState[]) => {
+    setFiles(nextFiles);
+    setError(null);
+    setAccountMismatchError(null);
   };
 
   const handleLinkageChange = (
@@ -236,6 +252,7 @@ export function ImportClient({
 
     setEditedTransactions(updated);
     setValidationErrors([]);
+    lastSelectionRef.current = null;
   };
 
   const handleOpenReimbursementSelector = (index: number) => {
@@ -251,6 +268,82 @@ export function ImportClient({
     }
     setReimbursementTargetIndex(index);
     setReimbursementModalOpen(true);
+  };
+
+  const showReimbursementSplitWarning = () => {
+    showModal(
+      "warning",
+      "Cannot Split Reimbursement",
+      "Reimbursement transactions cannot be split. To split this transaction, first remove the reimbursements, then redo the reimbursements on the split transactions.",
+    );
+  };
+
+  const handleOpenSplitTransaction = (index: number) => {
+    const linkage = editedTransactions[index]?.linkage;
+    if (linkage?.type === "reimbursement" || linkage?.type === "reimbursed") {
+      showReimbursementSplitWarning();
+      return;
+    }
+    setSplitTargetIndex(index);
+  };
+
+  const shiftIndicesAfterSplit = (indices: Set<number>, splitIndex: number) => {
+    const next = new Set<number>();
+    indices.forEach((index) => {
+      if (index < splitIndex) {
+        next.add(index);
+      } else if (index === splitIndex) {
+        next.add(splitIndex);
+        next.add(splitIndex + 1);
+      } else {
+        next.add(index + 1);
+      }
+    });
+    return next;
+  };
+
+  const handleConfirmSplitTransaction = (
+    children: [SplitTransactionChildInput, SplitTransactionChildInput],
+  ) => {
+    if (splitTargetIndex === null) return;
+    const original = editedTransactions[splitTargetIndex];
+    if (!original) return;
+
+    const splitRows = children.map((child, childIndex) => ({
+      ...original,
+      description: child.description,
+      label: child.label,
+      categoryId:
+        original.linkage?.type === "internal"
+          ? original.categoryId
+          : child.categoryId || undefined,
+      amountIn: child.amountIn || undefined,
+      amountOut: child.amountOut || undefined,
+      balance: childIndex === 1 ? original.balance : undefined,
+      metadata: {
+        ...original.metadata,
+        splitFromDescription: original.description,
+        splitChildIndex: childIndex + 1,
+      },
+      linkage:
+        original.linkage?.type === "internal"
+          ? { ...original.linkage, autoDetected: false }
+          : null,
+    })) as Transaction[];
+
+    setEditedTransactions((prev) => [
+      ...prev.slice(0, splitTargetIndex),
+      splitRows[0],
+      splitRows[1],
+      ...prev.slice(splitTargetIndex + 1),
+    ]);
+    setSelectedIndices((prev) => shiftIndicesAfterSplit(prev, splitTargetIndex));
+    setNonDuplicateIndices((prev) =>
+      shiftIndicesAfterSplit(prev, splitTargetIndex),
+    );
+    setDuplicates(new Map());
+    setValidationErrors([]);
+    setSplitTargetIndex(null);
   };
 
   const handleConfirmReimbursement = (linkage: TransactionLinkage) => {
@@ -573,11 +666,13 @@ export function ImportClient({
   const handleSelectAll = () => {
     setSelectedIndices(new Set(editedTransactions.map((_, i) => i)));
     setValidationErrors([]);
+    lastSelectionRef.current = null;
   };
 
   const handleDeselectAll = () => {
     setSelectedIndices(new Set());
     setValidationErrors([]);
+    lastSelectionRef.current = null;
   };
 
   const handleSelectVisible = (indices: number[]) => {
@@ -607,13 +702,30 @@ export function ImportClient({
     });
   };
 
-  const handleToggleSelection = (index: number) => {
+  const handleToggleSelection = (
+    index: number,
+    event?: MouseEvent<HTMLButtonElement>,
+  ) => {
+    const currentChecked = selectedIndices.has(index);
+    const nextChecked = !currentChecked;
     const newSelection = new Set(selectedIndices);
-    if (newSelection.has(index)) {
-      newSelection.delete(index);
-    } else {
+
+    if (event?.shiftKey && lastSelectionRef.current) {
+      const start = Math.min(lastSelectionRef.current.index, index);
+      const end = Math.max(lastSelectionRef.current.index, index);
+      for (let rangeIndex = start; rangeIndex <= end; rangeIndex++) {
+        if (lastSelectionRef.current.checked) {
+          newSelection.add(rangeIndex);
+        } else {
+          newSelection.delete(rangeIndex);
+        }
+      }
+    } else if (nextChecked) {
       newSelection.add(index);
+    } else {
+      newSelection.delete(index);
     }
+
     const validationSelection =
       stage === "duplicates"
         ? new Set([...newSelection, ...nonDuplicateIndices])
@@ -625,6 +737,12 @@ export function ImportClient({
     }
     setValidationErrors([]);
     setSelectedIndices(newSelection);
+    lastSelectionRef.current = {
+      index,
+      checked: event?.shiftKey && lastSelectionRef.current
+        ? lastSelectionRef.current.checked
+        : nextChecked,
+    };
   };
 
   const handleConfirmImport = async () => {
@@ -655,6 +773,7 @@ export function ImportClient({
     setPendingAccountColors(new Map());
     setAccountMismatchError(null);
     setValidationErrors([]);
+    lastSelectionRef.current = null;
   };
 
   const handleBackFromDuplicates = () => {
@@ -791,7 +910,7 @@ export function ImportClient({
             isUploading={isUploading}
             error={error}
             accountMismatchError={accountMismatchError}
-            onFilesChange={setFiles}
+            onFilesChange={handleFilesChange}
             onParserChange={setSelectedParser}
             onUpload={handleUpload}
           />
@@ -837,6 +956,9 @@ export function ImportClient({
           onLinkageChange={stage === "review" ? handleLinkageChange : undefined}
           onOpenReimbursementSelector={
             stage === "review" ? handleOpenReimbursementSelector : undefined
+          }
+          onOpenSplitTransaction={
+            stage === "review" ? handleOpenSplitTransaction : undefined
           }
           deferCellCommit
           lockLinkedReimbursements={false}
@@ -905,6 +1027,16 @@ export function ImportClient({
           void continueAfterPaylahPrompt(true);
         }}
       />
+
+      {splitTargetIndex !== null && editedTransactions[splitTargetIndex] && (
+        <SplitTransactionModal
+          isOpen={splitTargetIndex !== null}
+          transaction={editedTransactions[splitTargetIndex]}
+          categories={categories}
+          onClose={() => setSplitTargetIndex(null)}
+          onConfirm={handleConfirmSplitTransaction}
+        />
+      )}
 
       <ReimbursementSelectorModal
         isOpen={reimbursementModalOpen}
