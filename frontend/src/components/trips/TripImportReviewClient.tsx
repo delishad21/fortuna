@@ -152,7 +152,6 @@ export function TripImportReviewClient({
   useEffect(() => {
     setHeaderConfig({
       title: `${trip.name} · Import Review`,
-      subtitle: "Review parsed statement rows before import",
       showBack: true,
       backHref: `/trips/${trip.id}/manage`,
     });

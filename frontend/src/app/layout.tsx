@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Barlow_Condensed, DM_Mono, DM_Sans } from "next/font/google";
+import { DM_Mono, DM_Sans, Montserrat } from "next/font/google";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import { AuthProvider } from "@/components/providers/AuthProvider";
 import "./globals.css";
@@ -10,11 +10,11 @@ const dmSans = DM_Sans({
   variable: "--font-dm-sans",
 });
 
-const barlowCondensed = Barlow_Condensed({
+const montserrat = Montserrat({
   subsets: ["latin"],
   weight: ["500", "600", "700", "800"],
   display: "swap",
-  variable: "--font-barlow-condensed",
+  variable: "--font-montserrat",
 });
 
 const dmMono = DM_Mono({
@@ -40,7 +40,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${dmSans.variable} ${barlowCondensed.variable} ${dmMono.variable}`}
+      className={`${dmSans.variable} ${montserrat.variable} ${dmMono.variable}`}
     >
       <body className={dmSans.className}>
         <AuthProvider>

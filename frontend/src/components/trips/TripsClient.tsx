@@ -84,12 +84,6 @@ export function TripsClient({ trips, baseCurrency }: TripsClientProps) {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-2xl font-semibold text-dark dark:text-white">Trips</h2>
-          <p className="text-sm text-dark-5 dark:text-dark-6">
-            Build trip budgets from linked funding, wallets, and imported travel spendings.
-          </p>
-        </div>
         <Button
           variant="primary"
           leftIcon={<Plus className="h-4 w-4" />}

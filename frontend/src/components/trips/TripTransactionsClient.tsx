@@ -848,7 +848,6 @@ export function TripTransactionsClient({
   useEffect(() => {
     setHeaderConfig({
       title: `${trip.name} · Manage`,
-      subtitle: "Funding transactions, wallets, and trip transactions",
       showBack: true,
       backHref: `/trips/${trip.id}`,
     });

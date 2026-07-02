@@ -8,36 +8,28 @@ import { usePathname } from "next/navigation";
 
 const pageConfig: Record<
   string,
-  { title: string; subtitle: string; showBack?: boolean; backHref?: string }
+  { title: string; subtitle?: string; showBack?: boolean; backHref?: string }
 > = {
   "/dashboard": {
     title: "Dashboard",
-    subtitle: "Personal Finance Management",
   },
   "/import": {
     title: "Import Transactions",
-    subtitle:
-      "Upload your bank statements to automatically extract transactions",
   },
   "/transactions": {
     title: "Transactions",
-    subtitle: "View and manage your transactions",
   },
   "/trips": {
     title: "Trips",
-    subtitle: "Create and manage your trip spending workspaces",
   },
   "/analytics": {
     title: "Analytics",
-    subtitle: "Reports and insights from imported statements",
   },
   "/categories": {
     title: "Categories",
-    subtitle: "Organize your spending categories",
   },
   "/settings": {
     title: "Settings",
-    subtitle: "Manage your account settings",
   },
 };
 
@@ -52,7 +44,6 @@ export default function DashboardLayout({
     (pathname.startsWith("/trips/")
       ? {
           title: "Trip",
-          subtitle: "Manage funding, wallets, and trip transactions",
           showBack: true,
           backHref: "/trips",
         }

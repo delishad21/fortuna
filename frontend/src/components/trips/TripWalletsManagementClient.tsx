@@ -128,8 +128,6 @@ export function TripWalletsManagementClient({
   useEffect(() => {
     setHeaderConfig({
       title: `${trip.name} · Wallets`,
-      subtitle:
-        "Manage wallet funding and rebalance wallet outflows into your trip base currency.",
       showBack: true,
       backHref: `/trips/${trip.id}/manage`,
     });

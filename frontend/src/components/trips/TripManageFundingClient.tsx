@@ -594,10 +594,6 @@ export function TripManageFundingClient({
   useEffect(() => {
     setHeaderConfig({
       title: `${trip.name} · ${viewMode === "funding" ? "Funding" : "Manage"}`,
-      subtitle:
-        viewMode === "funding"
-          ? "Funding sources and wallet management"
-          : "Funding sources, wallets, and trip transactions",
       showBack: true,
       backHref: `/trips/${trip.id}`,
     });

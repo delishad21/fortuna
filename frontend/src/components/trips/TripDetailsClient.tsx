@@ -46,7 +46,6 @@ export function TripDetailsClient({ trip }: TripDetailsClientProps) {
   useEffect(() => {
     setHeaderConfig({
       title: `${trip.name} · Details`,
-      subtitle: "Manage trip metadata and lifecycle",
       showBack: true,
       backHref: `/trips/${trip.id}`,
     });

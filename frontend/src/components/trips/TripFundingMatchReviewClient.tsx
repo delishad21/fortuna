@@ -138,7 +138,6 @@ export function TripFundingMatchReviewClient({
   useEffect(() => {
     setHeaderConfig({
       title: `${trip.name} · Funding Review`,
-      subtitle: "Review and finalize topup-to-bank linkage candidates",
       showBack: true,
       backHref: `/trips/${trip.id}/manage`,
     });

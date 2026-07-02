@@ -1,6 +1,6 @@
 "use client";
 
-import { Menu, Bell, User, ArrowLeft } from "lucide-react";
+import { Menu, User, ArrowLeft } from "lucide-react";
 import { useSidebarContext } from "./sidebar-context";
 import { useThemeStore } from "@/lib/stores/themeStore";
 import { useSession, signOut } from "next-auth/react";
@@ -18,7 +18,7 @@ interface HeaderProps {
 
 export function Header({
   title = "Dashboard",
-  subtitle = "Personal Finance Management",
+  subtitle,
   showBack = false,
   backHref = "/dashboard",
 }: HeaderProps) {
@@ -66,9 +66,11 @@ export function Header({
               <h1 className="mb-0.5 font-display text-heading-5 font-bold text-dark dark:text-white">
                 {resolvedTitle}
               </h1>
-              <p className="font-medium text-dark-5 dark:text-dark-6">
-                {resolvedSubtitle}
-              </p>
+              {resolvedSubtitle && (
+                <p className="font-medium text-dark-5 dark:text-dark-6">
+                  {resolvedSubtitle}
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -110,18 +112,6 @@ export function Header({
               />
             </svg>
           )}
-        </button>
-
-        {/* Notifications */}
-        <button
-          className="relative flex items-center justify-center rounded-full p-2 hover:bg-gray-2 dark:hover:bg-dark-2"
-          aria-label="Notifications"
-        >
-          <Bell className="size-6 text-dark-5 dark:text-dark-6" />
-          <span className="absolute right-1 top-1 flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75"></span>
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-primary"></span>
-          </span>
         </button>
 
         {/* User Menu */}

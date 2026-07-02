@@ -208,17 +208,19 @@ export function UploadSection({
                         buttonClassName="w-full min-w-0 !py-1.5 !px-2 !text-xs"
                       />
                     </div>
-                    {(fileState.status === "pending" || fileState.status === "error") && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRemoveFile(index);
-                        }}
-                        className="p-1 text-dark-5 hover:text-red transition-colors flex-shrink-0"
-                      >
-                        <XCircle className="h-4 w-4" />
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${fileState.file.name}`}
+                      title="Remove file"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRemoveFile(index);
+                      }}
+                      disabled={isUploading || fileState.status === "parsing"}
+                      className="p-1 text-dark-5 transition-colors flex-shrink-0 hover:text-red disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-dark-5"
+                    >
+                      <XCircle className="h-4 w-4" />
+                    </button>
                   </div>
                 ))}
               </div>

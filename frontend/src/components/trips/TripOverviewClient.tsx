@@ -73,7 +73,6 @@ export function TripOverviewClient({
   useEffect(() => {
     setHeaderConfig({
       title: trip.name,
-      subtitle: "Trip Overview",
       showBack: true,
       backHref: "/trips",
     });
