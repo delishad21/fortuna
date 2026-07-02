@@ -68,12 +68,15 @@ def parse(content: bytes) -> list[dict]:
 
             # pdfplumber format: "26 Nov MIRANA SIGN 4.40 DB"
             # Pattern: date + description + amount + CR/DB
-            tx_match = re.match(r"^(\d{1,2}\s+\w+)\s+(.+?)\s+(\d+\.\d{2})\s+(CR|DB)$", line)
+            tx_match = re.match(
+                r"^(\d{1,2}\s+\w+)\s+(.+?)\s+((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})\s+(CR|DB)$",
+                line,
+            )
 
             if tx_match:
                 date_str = tx_match.group(1)
                 description = tx_match.group(2).strip()
-                amount = float(tx_match.group(3))
+                amount = float(tx_match.group(3).replace(",", ""))
                 tx_type = tx_match.group(4)
 
                 try:
