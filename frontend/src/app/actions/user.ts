@@ -12,7 +12,20 @@ export interface UserProfile {
   baseCurrency: string;
   autoLabelEnabled: boolean;
   autoLabelThreshold: number;
+  analyticsExcludedCategoryIds: string[];
 }
+
+const parseCategoryIdList = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  );
+};
 
 export async function getCurrentUser(): Promise<UserProfile | null> {
   const session = await auth();
@@ -32,6 +45,7 @@ export async function getCurrentUser(): Promise<UserProfile | null> {
           currency: true,
           autoLabelEnabled: true,
           autoLabelThreshold: true,
+          analyticsExcludedCategoryIds: true,
         },
       },
     },
@@ -46,6 +60,9 @@ export async function getCurrentUser(): Promise<UserProfile | null> {
     baseCurrency: user.settings?.currency || "SGD",
     autoLabelEnabled: user.settings?.autoLabelEnabled ?? false,
     autoLabelThreshold: Number(user.settings?.autoLabelThreshold ?? 0.5),
+    analyticsExcludedCategoryIds: parseCategoryIdList(
+      user.settings?.analyticsExcludedCategoryIds,
+    ),
   };
 }
 
@@ -100,6 +117,7 @@ export async function updateUserProfile(
           currency: true,
           autoLabelEnabled: true,
           autoLabelThreshold: true,
+          analyticsExcludedCategoryIds: true,
         },
       },
     },
@@ -112,6 +130,9 @@ export async function updateUserProfile(
     baseCurrency: user.settings?.currency || "SGD",
     autoLabelEnabled: user.settings?.autoLabelEnabled ?? false,
     autoLabelThreshold: Number(user.settings?.autoLabelThreshold ?? 0.5),
+    analyticsExcludedCategoryIds: parseCategoryIdList(
+      user.settings?.analyticsExcludedCategoryIds,
+    ),
   };
 }
 
@@ -148,6 +169,42 @@ export async function updateAutoLabelSettings(
   return {
     autoLabelEnabled: settings.autoLabelEnabled,
     autoLabelThreshold: Number(settings.autoLabelThreshold),
+  };
+}
+
+export async function updateAnalyticsExcludedCategories(categoryIds: string[]) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    throw new Error("Not authenticated");
+  }
+
+  const validCategories = await prisma.category.findMany({
+    where: {
+      userId: session.user.id,
+      id: { in: parseCategoryIdList(categoryIds) },
+    },
+    select: { id: true },
+  });
+  const analyticsExcludedCategoryIds = validCategories.map((category) => category.id);
+
+  const settings = await prisma.userSettings.upsert({
+    where: { userId: session.user.id },
+    create: {
+      userId: session.user.id,
+      analyticsExcludedCategoryIds,
+    },
+    update: {
+      analyticsExcludedCategoryIds,
+    },
+    select: {
+      analyticsExcludedCategoryIds: true,
+    },
+  });
+
+  return {
+    analyticsExcludedCategoryIds: parseCategoryIdList(
+      settings.analyticsExcludedCategoryIds,
+    ),
   };
 }
 

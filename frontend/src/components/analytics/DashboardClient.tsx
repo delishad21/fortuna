@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { format, parseISO } from "date-fns";
 import {
   Bar,
@@ -12,12 +13,13 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { AlertCircle, CheckCircle2, FileText, Upload } from "lucide-react";
-import { getDashboardOverview } from "@/app/actions/analytics";
+import { AlertCircle, ArrowRight, CheckCircle2, FileText, Upload } from "lucide-react";
+import { updateTransaction } from "@/app/actions/transactions";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
+import { CategorySelect } from "@/components/ui/CategorySelect";
 import { PageTabs } from "@/components/ui/PageTabs";
-import { Select } from "@/components/ui/Select";
+import { ImportSummaryCard } from "@/components/analytics/ImportSummaryCard";
 import { ExpandableTransactionList } from "@/components/transactions/ExpandableTransactionList";
 import type { TransactionCardTransaction } from "@/components/transactions/TransactionCard";
 
@@ -30,6 +32,12 @@ type Transaction = {
   amountOut: number;
   category?: { id: string; name: string; color: string } | null;
   merchant?: string;
+};
+
+type Category = {
+  id: string;
+  name: string;
+  color: string;
 };
 
 type OverviewData = {
@@ -65,7 +73,6 @@ type ReviewData = {
     totalOut: number;
     net: number;
     transactionCount: number;
-    topCategory: { name: string; color: string; totalOut: number } | null;
   }>;
   dataHealth: {
     transactionCount: number;
@@ -90,27 +97,7 @@ const formatMonth = (month: string | null) => {
   return format(parseISO(`${month}-01`), "MMM yyyy");
 };
 
-const formatDateLabel = (date: string | null | undefined) => {
-  if (!date) return "Unknown date";
-  return format(parseISO(date), "dd MMM yyyy");
-};
-
 const dashboardBarSize = 42;
-
-function MetricCard({ title, value, hint, tone = "default" }: { title: string; value: string; hint: string; tone?: "default" | "good" | "bad" }) {
-  const toneClass = tone === "good" ? "text-green" : tone === "bad" ? "text-red" : "text-dark dark:text-white";
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-sm font-semibold text-dark-5 dark:text-dark-6">{title}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className={`text-2xl font-bold ${toneClass}`}>{value}</div>
-        <p className="mt-2 text-xs text-dark-5 dark:text-dark-6">{hint}</p>
-      </CardContent>
-    </Card>
-  );
-}
 
 function EmptyState({ title, description, action }: { title: string; description: string; action?: React.ReactNode }) {
   return (
@@ -127,16 +114,9 @@ function EmptyState({ title, description, action }: { title: string; description
   );
 }
 
-export function DashboardClient({ initialOverview, initialReview }: { initialOverview: OverviewData; initialReview: ReviewData }) {
+export function DashboardClient({ initialOverview, initialReview, categories }: { initialOverview: OverviewData; initialReview: ReviewData; categories: Category[] }) {
   const [activeTab, setActiveTab] = useState<"overview" | "review">("overview");
-  const [overview, setOverview] = useState(initialOverview);
-  const [loadingMonth, setLoadingMonth] = useState(false);
-
-  const monthOptions = overview.importedMonths.map((item) => ({
-    value: item.month,
-    label: formatMonth(item.month),
-    description: `${item.transactionCount} transactions`,
-  }));
+  const overview = initialOverview;
 
   const trend = useMemo(
     () => overview.trend.map((item) => ({ ...item, label: formatMonth(item.month) })),
@@ -146,15 +126,6 @@ export function DashboardClient({ initialOverview, initialReview }: { initialOve
   const reviewCount =
     initialReview.reviewQueue.uncategorized.length +
     initialReview.reviewQueue.largeTransactions.length;
-
-  const handleMonthChange = async (month: string) => {
-    setLoadingMonth(true);
-    try {
-      setOverview(await getDashboardOverview(month));
-    } finally {
-      setLoadingMonth(false);
-    }
-  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -169,24 +140,6 @@ export function DashboardClient({ initialOverview, initialReview }: { initialOve
 
       {activeTab === "overview" ? (
         <div className="flex flex-col gap-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h2 className="font-display text-3xl font-bold text-dark dark:text-white">Imported Month Overview</h2>
-              <p className="text-sm text-dark-5 dark:text-dark-6">
-                Quick analytics from completed statement periods, not live current-month data.
-              </p>
-            </div>
-            <div className="w-full max-w-xs">
-              <Select
-                value={overview.selectedMonth || ""}
-                options={monthOptions}
-                onChange={handleMonthChange}
-                buttonClassName="w-full"
-                placeholder="Select imported month"
-              />
-            </div>
-          </div>
-
           {!overview.hasTransactions ? (
             <EmptyState
               title="No transactions imported yet"
@@ -201,19 +154,9 @@ export function DashboardClient({ initialOverview, initialReview }: { initialOve
             />
           ) : (
             <>
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <MetricCard title="Spending" value={formatCurrency(overview.summary.totalOut)} hint={formatMonth(overview.selectedMonth)} tone="bad" />
-                <MetricCard title="Income" value={formatCurrency(overview.summary.totalIn)} hint={`${overview.summary.transactionCount} transactions`} tone="good" />
-                <MetricCard title="Net Flow" value={formatCurrency(overview.summary.net)} hint="Income minus spending" tone={overview.summary.net >= 0 ? "good" : "bad"} />
-                <MetricCard title="Top Category" value={overview.summary.topCategory?.name || "None"} hint={overview.summary.topCategory ? formatCurrency(overview.summary.topCategory.totalOut) : "No spending categories"} />
-              </div>
-
               <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
                 <Card className="min-h-[360px]">
-                  <CardHeader className="flex items-center justify-between">
-                    <CardTitle>Spending and Income Trend</CardTitle>
-                    {loadingMonth && <span className="text-xs text-dark-5 dark:text-dark-6">Updating...</span>}
-                  </CardHeader>
+                  <CardHeader><CardTitle>Spending and Income Trend</CardTitle></CardHeader>
                   <CardContent className="h-[300px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={trend} barGap={6} barCategoryGap="32%">
@@ -249,7 +192,7 @@ export function DashboardClient({ initialOverview, initialReview }: { initialOve
           )}
         </div>
       ) : (
-        <ReviewTab data={initialReview} />
+        <ReviewTab data={initialReview} categories={categories} />
       )}
     </div>
   );
@@ -297,18 +240,54 @@ function RecentTransactionCards({ transactions }: { transactions: Transaction[] 
   return <ExpandableTransactionList transactions={cardTransactions} />;
 }
 
-function ReviewTab({ data }: { data: ReviewData }) {
+function ReviewTab({ data, categories }: { data: ReviewData; categories: Category[] }) {
+  const [uncategorized, setUncategorized] = useState(data.reviewQueue.uncategorized);
+  const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
   const queueEmpty =
-    data.reviewQueue.uncategorized.length === 0 &&
+    uncategorized.length === 0 &&
     data.reviewQueue.largeTransactions.length === 0;
+  const reviewData = {
+    ...data,
+    reviewQueue: {
+      ...data.reviewQueue,
+      uncategorized,
+    },
+    dataHealth: {
+      ...data.dataHealth,
+      uncategorizedCount: Math.max(data.dataHealth.uncategorizedCount - (data.reviewQueue.uncategorized.length - uncategorized.length), 0),
+      categorizedCount: data.dataHealth.categorizedCount + (data.reviewQueue.uncategorized.length - uncategorized.length),
+      categorizedPercent: data.dataHealth.transactionCount
+        ? Math.round(((data.dataHealth.categorizedCount + (data.reviewQueue.uncategorized.length - uncategorized.length)) / data.dataHealth.transactionCount) * 100)
+        : 0,
+    },
+  };
+
+  const handleCategorize = async (transaction: Transaction, categoryId: string) => {
+    if (!categoryId) return;
+    setError(null);
+    setSavingIds((prev) => new Set(prev).add(transaction.id));
+    try {
+      await updateTransaction(transaction.id, { categoryId });
+      setUncategorized((prev) => prev.filter((item) => item.id !== transaction.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update category");
+    } finally {
+      setSavingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(transaction.id);
+        return next;
+      });
+    }
+  };
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h2 className="font-display text-3xl font-bold text-dark dark:text-white">Review Queue</h2>
-        <p className="text-sm text-dark-5 dark:text-dark-6">Cleanup and data quality signals from imported statements.</p>
-      </div>
-
+      {error && (
+        <div className="rounded-lg bg-red/10 px-4 py-3 text-sm text-red">
+          {error}
+        </div>
+      )}
       {queueEmpty ? (
         <Card>
           <CardContent className="flex items-center gap-3 py-8">
@@ -321,22 +300,27 @@ function ReviewTab({ data }: { data: ReviewData }) {
         </Card>
       ) : (
         <div className="grid gap-6 xl:grid-cols-2">
-          <QueueCard title="Uncategorized" count={data.reviewQueue.uncategorized.length} transactions={data.reviewQueue.uncategorized} />
-          <DataHealthCard data={data} />
+          <UncategorizedQueueCard
+            categories={categories}
+            savingIds={savingIds}
+            transactions={uncategorized}
+            onCategorize={handleCategorize}
+          />
+          <DataHealthCard data={reviewData} />
         </div>
       )}
 
       <div className="flex flex-col gap-6">
         <Card>
-          <CardHeader><CardTitle>Recent Import Summaries</CardTitle></CardHeader>
+          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <CardTitle>Recent Import Summaries</CardTitle>
+            <Link href="/imports">
+              <Button variant="secondary" size="sm" rightIcon={<ArrowRight className="size-4" />}>View All</Button>
+            </Link>
+          </CardHeader>
           <CardContent className="space-y-3">
             {data.importSummaries.length === 0 ? <p className="text-sm text-dark-5 dark:text-dark-6">No imported files detected yet.</p> : data.importSummaries.map((item) => (
-              <div key={item.key} className="grid gap-3 rounded-lg border border-stroke p-4 dark:border-stroke-dark md:grid-cols-[minmax(0,1.6fr)_repeat(3,minmax(0,1fr))]">
-                <div className="min-w-0"><p className="break-words text-sm font-semibold text-dark dark:text-white">{item.filename}</p><p className="mt-1 text-xs text-dark-5 dark:text-dark-6">{item.transactionCount} transactions · {item.parserId || "Unknown parser"} · Imported {formatDateLabel(item.importedAt)}</p></div>
-                <div><p className="text-xs text-dark-5 dark:text-dark-6">Spending</p><p className="font-semibold text-red">{formatCurrency(item.totalOut)}</p></div>
-                <div><p className="text-xs text-dark-5 dark:text-dark-6">Income</p><p className="font-semibold text-green">{formatCurrency(item.totalIn)}</p></div>
-                <div><p className="text-xs text-dark-5 dark:text-dark-6">Top category</p><p className="font-semibold text-dark dark:text-white">{item.topCategory?.name || "None"}</p></div>
-              </div>
+              <ImportSummaryCard key={item.key} item={item} />
             ))}
           </CardContent>
         </Card>
@@ -344,6 +328,59 @@ function ReviewTab({ data }: { data: ReviewData }) {
         <QueueCard title="Large Transactions" count={data.reviewQueue.largeTransactions.length} transactions={data.reviewQueue.largeTransactions} useTransactionCards />
       </div>
     </div>
+  );
+}
+
+function UncategorizedQueueCard({
+  categories,
+  savingIds,
+  transactions,
+  onCategorize,
+}: {
+  categories: Category[];
+  savingIds: Set<string>;
+  transactions: Transaction[];
+  onCategorize: (transaction: Transaction, categoryId: string) => void;
+}) {
+  const router = useRouter();
+
+  return (
+    <Card>
+      <CardHeader><CardTitle>Uncategorized ({transactions.length})</CardTitle></CardHeader>
+      <CardContent>
+        {transactions.length === 0 ? (
+          <div className="py-8 text-center text-sm text-dark-5 dark:text-dark-6">No uncategorized transactions.</div>
+        ) : (
+          <div className="space-y-3">
+            {transactions.slice(0, 8).map((tx) => {
+              const isSaving = savingIds.has(tx.id);
+              return (
+                <div key={tx.id} className="grid gap-3 rounded-lg border border-stroke p-3 dark:border-stroke-dark md:grid-cols-[minmax(0,1fr)_220px] md:items-center">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-dark dark:text-white">{tx.label || tx.description}</p>
+                    <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
+                      {format(parseISO(String(tx.date)), "dd MMM yyyy")} · {tx.amountIn > 0 ? `+${formatCurrency(tx.amountIn)}` : `-${formatCurrency(tx.amountOut)}`}
+                    </p>
+                  </div>
+                  <div className="min-w-0">
+                    <CategorySelect
+                      value=""
+                      categories={categories}
+                      onChange={(categoryId) => onCategorize(tx, categoryId)}
+                      onAddClick={() => router.push("/settings")}
+                      disabled={isSaving}
+                      excludeReserved
+                      emptyLabel={isSaving ? "Saving..." : "Choose category"}
+                      dropdownPlacement="inline"
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

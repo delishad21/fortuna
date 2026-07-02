@@ -80,6 +80,7 @@ model UserSettings {
   autoLabelThreshold Decimal @default(0.5) @map("auto_label_threshold") @db.Decimal(4, 2)
   paylahInternalPrompted Boolean @default(false) @map("paylah_internal_prompted")
   paylahAutoInternal Boolean @default(false) @map("paylah_auto_internal")
+  analyticsExcludedCategoryIds Json? @map("analytics_excluded_category_ids")
   dateFormat       String   @default("MM/dd/yyyy")
   defaultTimeframe String   @default("month") @map("default_timeframe")
   createdAt        DateTime @default(now()) @map("created_at")

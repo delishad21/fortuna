@@ -90,6 +90,59 @@ const buildMerchantBreakdown = (transactions: AnalyticsTransaction[]) => {
   return Array.from(map.values()).sort((a, b) => b.totalOut - a.totalOut);
 };
 
+type CategoryExcludableTransaction = {
+  categoryId?: string | null;
+};
+
+const parseAnalyticsExcludedCategoryIds = (value: unknown) => {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  );
+};
+
+const getAnalyticsExcludedCategoryIds = async (userId: string) => {
+  const settings = await prisma.userSettings.findUnique({
+    where: { userId },
+    select: { analyticsExcludedCategoryIds: true },
+  });
+  return parseAnalyticsExcludedCategoryIds(
+    settings?.analyticsExcludedCategoryIds,
+  );
+};
+
+const filterAnalyticsExcludedCategories = <
+  T extends CategoryExcludableTransaction,
+>(
+  transactions: T[],
+  excludedCategoryIds: string[] | Set<string>,
+) => {
+  const excluded =
+    excludedCategoryIds instanceof Set
+      ? excludedCategoryIds
+      : new Set(excludedCategoryIds);
+  if (excluded.size === 0) return transactions;
+  return transactions.filter(
+    (transaction) =>
+      !transaction.categoryId || !excluded.has(transaction.categoryId),
+  );
+};
+
+const buildCategoryExclusionWhere = (excludedCategoryIds: string[]) =>
+  excludedCategoryIds.length
+    ? {
+        OR: [
+          { categoryId: null },
+          { categoryId: { notIn: excludedCategoryIds } },
+        ],
+      }
+    : {};
+
 type ImportSummaryTransaction = AnalyticsTransaction & {
   metadata?: unknown;
   importBatch?: {
@@ -99,6 +152,17 @@ type ImportSummaryTransaction = AnalyticsTransaction & {
     committedAt: Date | null;
     uploadedAt: Date;
   } | null;
+};
+
+const parseImportKey = (importKey: string) => {
+  const separatorIndex = importKey.indexOf(":");
+  if (separatorIndex === -1) {
+    return { batchId: importKey, filename: null };
+  }
+  return {
+    batchId: importKey.slice(0, separatorIndex),
+    filename: importKey.slice(separatorIndex + 1),
+  };
 };
 
 const getImportSourceFilename = (tx: ImportSummaryTransaction) =>
@@ -115,7 +179,9 @@ const getImportFileGroups = (transactions: ImportSummaryTransaction[]) => {
     string,
     {
       key: string;
+      batchId: string;
       filename: string;
+      batchFilename: string;
       parserId: string | null;
       importedAt: Date | null;
       transactions: ImportSummaryTransaction[];
@@ -129,7 +195,9 @@ const getImportFileGroups = (transactions: ImportSummaryTransaction[]) => {
     const importedAt = tx.importBatch.committedAt || tx.importBatch.uploadedAt || null;
     const current = groups.get(key) || {
       key,
+      batchId: tx.importBatchId,
       filename,
+      batchFilename: tx.importBatch.filename,
       parserId: tx.importBatch.parserId || null,
       importedAt,
       transactions: [],
@@ -152,6 +220,143 @@ const getImportFileGroups = (transactions: ImportSummaryTransaction[]) => {
   });
 };
 
+const getDateRange = (transactions: ImportSummaryTransaction[]) => {
+  if (transactions.length === 0) {
+    return { startDate: null, endDate: null };
+  }
+  const timestamps = transactions.map((tx) => tx.date.getTime());
+  return {
+    startDate: new Date(Math.min(...timestamps)),
+    endDate: new Date(Math.max(...timestamps)),
+  };
+};
+
+const buildImportAccountBreakdown = (transactions: ImportSummaryTransaction[]) => {
+  const map = new Map<
+    string,
+    {
+      key: string;
+      name: string;
+      totalIn: number;
+      totalOut: number;
+      net: number;
+      transactionCount: number;
+    }
+  >();
+
+  for (const tx of transactions) {
+    const name = tx.accountIdentifier || tx.source || "Unassigned account";
+    const key = name.toLowerCase();
+    const current = map.get(key) || {
+      key,
+      name,
+      totalIn: 0,
+      totalOut: 0,
+      net: 0,
+      transactionCount: 0,
+    };
+    const totalIn = getAnalyticsEffectiveIn(tx);
+    const totalOut = getAnalyticsEffectiveOut(tx);
+    current.totalIn += totalIn;
+    current.totalOut += totalOut;
+    current.net += totalIn - totalOut;
+    current.transactionCount += 1;
+    map.set(key, current);
+  }
+
+  return Array.from(map.values()).sort((a, b) => b.totalOut - a.totalOut);
+};
+
+const buildImportDailySeries = (transactions: ImportSummaryTransaction[]) => {
+  const map = new Map<
+    string,
+    { date: string; totalIn: number; totalOut: number; net: number; transactionCount: number }
+  >();
+
+  for (const tx of transactions) {
+    const key = formatAnalyticsDayKey(tx.date);
+    const current = map.get(key) || {
+      date: key,
+      totalIn: 0,
+      totalOut: 0,
+      net: 0,
+      transactionCount: 0,
+    };
+    const totalIn = getAnalyticsEffectiveIn(tx);
+    const totalOut = getAnalyticsEffectiveOut(tx);
+    current.totalIn += totalIn;
+    current.totalOut += totalOut;
+    current.net += totalIn - totalOut;
+    current.transactionCount += 1;
+    map.set(key, current);
+  }
+
+  return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+};
+
+const buildRecurringMerchantInsights = (
+  importedMonthGroups: Array<[string, AnalyticsTransaction[]]>,
+) => {
+  const merchantByMonth = new Map<string, Map<string, { name: string; months: Set<string>; totalOut: number; amounts: number[] }>>();
+  for (const [monthKey, monthTransactions] of importedMonthGroups) {
+    for (const tx of monthTransactions) {
+      const amountOut = getAnalyticsEffectiveOut(tx);
+      if (amountOut <= 0) continue;
+      const merchant = normalizeMerchant(tx);
+      const monthMap = merchantByMonth.get(merchant.key) || new Map();
+      const current = monthMap.get(monthKey) || { name: merchant.name, months: new Set<string>(), totalOut: 0, amounts: [] };
+      current.months.add(monthKey);
+      current.totalOut += amountOut;
+      current.amounts.push(amountOut);
+      monthMap.set(monthKey, current);
+      merchantByMonth.set(merchant.key, monthMap);
+    }
+  }
+
+  return Array.from(merchantByMonth.entries())
+    .map(([key, monthMap]) => {
+      const entries = Array.from(monthMap.values());
+      const monthsSeen = entries.length;
+      const amounts = entries.flatMap((entry) => entry.amounts);
+      const averageAmount = amounts.reduce((sum, amount) => sum + amount, 0) / Math.max(amounts.length, 1);
+      const minAmount = Math.min(...amounts);
+      const maxAmount = Math.max(...amounts);
+      return {
+        key,
+        name: entries[0]?.name || key,
+        monthsSeen,
+        totalOut: entries.reduce((sum, entry) => sum + entry.totalOut, 0),
+        averageAmount,
+        frequency: monthsSeen >= 3 ? "monthly" : monthsSeen === 2 ? "recurring" : "one-off",
+        stability: maxAmount - minAmount <= Math.max(5, averageAmount * 0.1) ? "fixed" : "variable",
+      };
+    })
+    .filter((item) => item.monthsSeen >= 2)
+    .sort((a, b) => b.totalOut - a.totalOut)
+    .slice(0, 8);
+};
+
+const summarizeImportGroup = (
+  importGroup: ReturnType<typeof getImportFileGroups>[number],
+) => {
+  const categoryBreakdown = buildAnalyticsCategoryBreakdown(importGroup.transactions);
+  const { startDate, endDate } = getDateRange(importGroup.transactions);
+  return {
+    key: importGroup.key,
+    batchId: importGroup.batchId,
+    filename: importGroup.filename,
+    batchFilename: importGroup.batchFilename,
+    parserId: importGroup.parserId,
+    importedAt: importGroup.importedAt,
+    startDate,
+    endDate,
+    latestTransactionDate: endDate || new Date(),
+    ...summarizeTransactions(importGroup.transactions),
+    topCategory: categoryBreakdown[0] || null,
+    categoryBreakdown,
+  };
+};
+
 const getRangeForQuery = (range: string, month: string) => {
   const selected = getMonthRange(month);
   if (range === "last3") {
@@ -171,14 +376,22 @@ const getRangeForQuery = (range: string, month: string) => {
 };
 
 const findLatestImportedMonth = async (userId: string) => {
-  const allTransactions = await prisma.transaction.findMany({
-    where: { userId },
-    include: { category: true },
-    orderBy: { date: "desc" },
-  });
+  const [rawTransactions, excludedCategoryIds] = await Promise.all([
+    prisma.transaction.findMany({
+      where: { userId },
+      include: { category: true },
+      orderBy: { date: "desc" },
+    }),
+    getAnalyticsExcludedCategoryIds(userId),
+  ]);
+  const allTransactions = filterAnalyticsExcludedCategories(
+    rawTransactions,
+    excludedCategoryIds,
+  );
   const importedMonthGroups = getImportedMonthGroups(allTransactions);
   return {
     allTransactions,
+    excludedCategoryIds,
     importedMonthGroups,
     latestMonth: importedMonthGroups[0]?.[0] || null,
   };
@@ -202,7 +415,7 @@ analyticsRouter.get("/dashboard", async (req: Request, res: Response) => {
     startDate.setDate(startDate.getDate() - (timeframeDays - 1));
     startDate.setHours(0, 0, 0, 0);
 
-    const [transactions] = await Promise.all([
+    const [rawTransactions, excludedCategoryIds] = await Promise.all([
       prisma.transaction.findMany({
         where: {
           userId: userId as string,
@@ -211,7 +424,12 @@ analyticsRouter.get("/dashboard", async (req: Request, res: Response) => {
         include: { category: true },
         orderBy: { date: "asc" },
       }),
+      getAnalyticsExcludedCategoryIds(userId as string),
     ]);
+    const transactions = filterAnalyticsExcludedCategories(
+      rawTransactions,
+      excludedCategoryIds,
+    );
 
     const totals = transactions.reduce(
       (acc, tx) => ({
@@ -397,21 +615,9 @@ analyticsRouter.get("/dashboard-review", async (req: Request, res: Response) => 
           .slice(0, 8)
       : [];
 
-    const importSummaries = getImportFileGroups(transactions).slice(0, 6).map((importGroup) => {
-      const importCategories = buildAnalyticsCategoryBreakdown(importGroup.transactions);
-      return {
-        key: importGroup.key,
-        filename: importGroup.filename,
-        parserId: importGroup.parserId,
-        importedAt: importGroup.importedAt,
-        latestTransactionDate: importGroup.transactions.reduce(
-          (latest, tx) => (tx.date > latest ? tx.date : latest),
-          importGroup.transactions[0]?.date || new Date(),
-        ),
-        ...summarizeTransactions(importGroup.transactions),
-        topCategory: importCategories[0] || null,
-      };
-    });
+    const importSummaries = getImportFileGroups(transactions)
+      .slice(0, 6)
+      .map(summarizeImportGroup);
 
     const ruleCount = await prisma.importRule.count({ where: { userId: userId as string } });
     const categorizedCount = transactions.filter((tx) => tx.categoryId).length;
@@ -439,6 +645,79 @@ analyticsRouter.get("/dashboard-review", async (req: Request, res: Response) => 
 });
 
 /**
+ * GET /api/analytics/imports
+ * File-level summaries for all committed imports
+ */
+analyticsRouter.get("/imports", async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const transactions = await prisma.transaction.findMany({
+      where: {
+        userId: userId as string,
+        importBatchId: { not: null },
+      },
+      include: { category: true, importBatch: true },
+      orderBy: { date: "desc" },
+    });
+
+    res.json({
+      imports: getImportFileGroups(transactions).map(summarizeImportGroup),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/analytics/import-detail
+ * Detail view for one imported file within a committed import batch
+ */
+analyticsRouter.get("/import-detail", async (req: Request, res: Response) => {
+  try {
+    const { userId, importKey } = req.query;
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+    if (!importKey || typeof importKey !== "string") {
+      return res.status(400).json({ error: "importKey is required" });
+    }
+
+    const { batchId, filename } = parseImportKey(importKey);
+    const transactions = await prisma.transaction.findMany({
+      where: {
+        userId: userId as string,
+        importBatchId: batchId,
+      },
+      include: { category: true, importBatch: true },
+      orderBy: { date: "desc" },
+    });
+
+    const importGroup = getImportFileGroups(transactions).find(
+      (group) => group.batchId === batchId && (!filename || group.filename === filename),
+    );
+
+    if (!importGroup) {
+      return res.status(404).json({ error: "Import not found" });
+    }
+
+    res.json({
+      import: {
+        ...summarizeImportGroup(importGroup),
+        accountBreakdown: buildImportAccountBreakdown(importGroup.transactions),
+        dailySeries: buildImportDailySeries(importGroup.transactions),
+        transactions: importGroup.transactions.map(serializeTransaction),
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
  * GET /api/analytics/report
  * Configurable reporting data for the analytics reports tab
  */
@@ -447,6 +726,8 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
     const {
       userId,
       month,
+      dateFrom,
+      dateTo,
       range = "month",
       metric = "inOut",
       groupBy = "month",
@@ -457,11 +738,24 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "userId is required" });
     }
 
-    const { latestMonth, importedMonthGroups } = await findLatestImportedMonth(userId as string);
+    const { latestMonth, importedMonthGroups, excludedCategoryIds } =
+      await findLatestImportedMonth(userId as string);
     const selectedMonth = (month as string | undefined) || latestMonth || formatMonthKey(new Date());
-    const { start, end } = getRangeForQuery(range as string, selectedMonth);
+    const explicitStart = typeof dateFrom === "string" && dateFrom
+      ? new Date(`${dateFrom}T00:00:00`)
+      : null;
+    const explicitEnd = typeof dateTo === "string" && dateTo
+      ? new Date(`${dateTo}T23:59:59`)
+      : null;
+    const fallbackRange = getRangeForQuery(range as string, selectedMonth);
+    const start = explicitStart && !Number.isNaN(explicitStart.getTime())
+      ? explicitStart
+      : fallbackRange.start;
+    const end = explicitEnd && !Number.isNaN(explicitEnd.getTime())
+      ? explicitEnd
+      : fallbackRange.end;
 
-    const baseTransactions = await prisma.transaction.findMany({
+    const rawBaseTransactions = await prisma.transaction.findMany({
       where: {
         userId: userId as string,
         date: { gte: start, lte: end },
@@ -469,8 +763,12 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
       include: { category: true },
       orderBy: { date: "asc" },
     });
+    const baseTransactions = filterAnalyticsExcludedCategories(
+      rawBaseTransactions,
+      excludedCategoryIds,
+    );
 
-    let transactions = await prisma.transaction.findMany({
+    const rawTransactions = await prisma.transaction.findMany({
       where: {
         userId: userId as string,
         date: { gte: start, lte: end },
@@ -483,6 +781,10 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
       include: { category: true },
       orderBy: { date: "asc" },
     });
+    let transactions = filterAnalyticsExcludedCategories(
+      rawTransactions,
+      excludedCategoryIds,
+    );
 
     if (merchantKey) {
       transactions = transactions.filter((tx) => normalizeMerchant(tx).key === merchantKey);
@@ -571,6 +873,50 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/analytics/overview
+ * All-time spending and pattern overview across imported data
+ */
+analyticsRouter.get("/overview", async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const { allTransactions, importedMonthGroups } =
+      await findLatestImportedMonth(userId as string);
+    const categoryBreakdown = buildAnalyticsCategoryBreakdown(allTransactions);
+    const merchantBreakdown = buildMerchantBreakdown(allTransactions);
+    const monthsAscending = [...importedMonthGroups].reverse();
+    const monthlyTrend = monthsAscending.slice(-12).map(([monthKey, monthTransactions]) => ({
+      month: monthKey,
+      ...summarizeTransactions(monthTransactions),
+    }));
+    const averageOut = allTransactions.length
+      ? allTransactions.reduce((sum, tx) => sum + getAnalyticsEffectiveOut(tx), 0) / allTransactions.length
+      : 0;
+    const anomalies = allTransactions
+      .filter((tx) => getAnalyticsEffectiveOut(tx) > Math.max(averageOut * 3, 250))
+      .sort((a, b) => getAnalyticsEffectiveOut(b) - getAnalyticsEffectiveOut(a))
+      .slice(0, 8)
+      .map(serializeTransaction);
+
+    res.json({
+      importedMonths: importedMonthGroups.map(([monthKey]) => monthKey),
+      summary: summarizeTransactions(allTransactions),
+      monthlyTrend,
+      topCategories: categoryBreakdown.slice(0, 8),
+      topMerchants: merchantBreakdown.slice(0, 8),
+      recurringMerchants: buildRecurringMerchantInsights(importedMonthGroups),
+      anomalies,
+      hasTransactions: allTransactions.length > 0,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
  * GET /api/analytics/insights
  * Opinionated insights for imported statement data
  */
@@ -614,44 +960,6 @@ analyticsRouter.get("/insights", async (req: Request, res: Response) => {
       .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
       .slice(0, 8);
 
-    const merchantByMonth = new Map<string, Map<string, { name: string; months: Set<string>; totalOut: number; amounts: number[] }>>();
-    for (const [monthKey, monthTransactions] of importedMonthGroups) {
-      for (const tx of monthTransactions) {
-        const amountOut = getAnalyticsEffectiveOut(tx);
-        if (amountOut <= 0) continue;
-        const merchant = normalizeMerchant(tx);
-        const monthMap = merchantByMonth.get(merchant.key) || new Map();
-        const current = monthMap.get(monthKey) || { name: merchant.name, months: new Set<string>(), totalOut: 0, amounts: [] };
-        current.months.add(monthKey);
-        current.totalOut += amountOut;
-        current.amounts.push(amountOut);
-        monthMap.set(monthKey, current);
-        merchantByMonth.set(merchant.key, monthMap);
-      }
-    }
-
-    const recurringMerchants = Array.from(merchantByMonth.entries())
-      .map(([key, monthMap]) => {
-        const entries = Array.from(monthMap.values());
-        const monthsSeen = entries.length;
-        const amounts = entries.flatMap((entry) => entry.amounts);
-        const averageAmount = amounts.reduce((sum, amount) => sum + amount, 0) / Math.max(amounts.length, 1);
-        const minAmount = Math.min(...amounts);
-        const maxAmount = Math.max(...amounts);
-        return {
-          key,
-          name: entries[0]?.name || key,
-          monthsSeen,
-          totalOut: entries.reduce((sum, entry) => sum + entry.totalOut, 0),
-          averageAmount,
-          frequency: monthsSeen >= 3 ? "monthly" : monthsSeen === 2 ? "recurring" : "one-off",
-          stability: maxAmount - minAmount <= Math.max(5, averageAmount * 0.1) ? "fixed" : "variable",
-        };
-      })
-      .filter((item) => item.monthsSeen >= 2)
-      .sort((a, b) => b.totalOut - a.totalOut)
-      .slice(0, 8);
-
     const merchantBreakdown = buildMerchantBreakdown(selectedTransactions);
     const previousMerchantKeys = new Set(previousMonth ? buildMerchantBreakdown(previousMonth[1]).map((item) => item.key) : []);
     const newMerchants = merchantBreakdown.filter((item) => !previousMerchantKeys.has(item.key)).slice(0, 8);
@@ -676,7 +984,7 @@ analyticsRouter.get("/insights", async (req: Request, res: Response) => {
         threeMonthDelta: threeMonthAverage !== null ? currentSummary.totalOut - threeMonthAverage : null,
         mainDrivers: categoryChanges.slice(0, 3),
       },
-      recurringMerchants,
+      recurringMerchants: buildRecurringMerchantInsights(importedMonthGroups),
       merchantInsights: {
         topMerchants: merchantBreakdown.slice(0, 8),
         newMerchants,
@@ -709,7 +1017,10 @@ analyticsRouter.get("/monthly", async (req: Request, res: Response) => {
     const endDate = new Date(yearNum, monthNum, 0);
     endDate.setHours(23, 59, 59, 999);
 
-    const transactions = await prisma.transaction.findMany({
+    const excludedCategoryIds = await getAnalyticsExcludedCategoryIds(
+      userId as string,
+    );
+    const rawTransactions = await prisma.transaction.findMany({
       where: {
         userId: userId as string,
         date: { gte: startDate, lte: endDate },
@@ -717,6 +1028,10 @@ analyticsRouter.get("/monthly", async (req: Request, res: Response) => {
       include: { category: true },
       orderBy: { date: "asc" },
     });
+    const transactions = filterAnalyticsExcludedCategories(
+      rawTransactions,
+      excludedCategoryIds,
+    );
 
     const totals = transactions.reduce(
       (acc, tx) => ({
@@ -780,13 +1095,23 @@ analyticsRouter.get("/monthly", async (req: Request, res: Response) => {
     const trendEnd = new Date(yearNum, monthNum, 0);
     trendEnd.setHours(23, 59, 59, 999);
 
-    const trendTransactions = await prisma.transaction.findMany({
+    const rawTrendTransactions = await prisma.transaction.findMany({
       where: {
         userId: userId as string,
         date: { gte: trendStart, lte: trendEnd },
       },
+      select: {
+        date: true,
+        categoryId: true,
+        amountOut: true,
+        linkage: true,
+      },
       orderBy: { date: "asc" },
     });
+    const trendTransactions = filterAnalyticsExcludedCategories(
+      rawTrendTransactions,
+      excludedCategoryIds,
+    );
 
     const trendSeries: Array<{ month: string; totalOut: number }> = [];
     for (let i = trendMonths - 1; i >= 0; i--) {
@@ -856,12 +1181,19 @@ analyticsRouter.get("/monthly-summary", async (req: Request, res: Response) => {
       parseInt(month as string),
       0,
     );
+    const excludedCategoryIds = await getAnalyticsExcludedCategoryIds(
+      userId as string,
+    );
+    const categoryExclusionWhere = buildCategoryExclusionWhere(
+      excludedCategoryIds,
+    );
 
     // Get category breakdown
     const categoryBreakdown = await prisma.transaction.groupBy({
       by: ["categoryId"],
       where: {
         userId: userId as string,
+        ...categoryExclusionWhere,
         date: {
           gte: startDate,
           lte: endDate,
@@ -898,6 +1230,7 @@ analyticsRouter.get("/monthly-summary", async (req: Request, res: Response) => {
     const monthlyTransactions = await prisma.transaction.findMany({
       where: {
         userId: userId as string,
+        ...categoryExclusionWhere,
         date: {
           gte: startDate,
           lte: endDate,
@@ -981,8 +1314,20 @@ analyticsRouter.get(
         return res.status(400).json({ error: "userId is required" });
       }
 
+      const excludedCategoryIds = await getAnalyticsExcludedCategoryIds(
+        userId as string,
+      );
+      if (
+        categoryId &&
+        typeof categoryId === "string" &&
+        excludedCategoryIds.includes(categoryId)
+      ) {
+        return res.json({ transactions: [] });
+      }
+
       const where: any = {
         userId: userId as string,
+        ...(categoryId ? {} : buildCategoryExclusionWhere(excludedCategoryIds)),
       };
 
       if (dateFrom && dateTo) {

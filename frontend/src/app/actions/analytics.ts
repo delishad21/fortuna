@@ -34,8 +34,20 @@ export async function getDashboardReview() {
   return fetchAnalytics("/api/analytics/dashboard-review");
 }
 
+export async function getImportSummaries() {
+  return fetchAnalytics("/api/analytics/imports");
+}
+
+export async function getImportDetail(importKey: string) {
+  return fetchAnalytics(
+    `/api/analytics/import-detail?importKey=${encodeURIComponent(importKey)}`,
+  );
+}
+
 export interface AnalyticsReportParams {
   month?: string;
+  dateFrom?: string;
+  dateTo?: string;
   range?: string;
   metric?: string;
   groupBy?: string;
@@ -50,6 +62,10 @@ export async function getAnalyticsReport(params: AnalyticsReportParams = {}) {
   });
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return fetchAnalytics(`/api/analytics/report${suffix}`);
+}
+
+export async function getAnalyticsOverview() {
+  return fetchAnalytics("/api/analytics/overview");
 }
 
 export async function getAnalyticsInsights(month?: string) {

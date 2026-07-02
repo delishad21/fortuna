@@ -16,10 +16,25 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { AlertTriangle, Download, TrendingDown, TrendingUp } from "lucide-react";
+import {
+  AlertTriangle,
+  BarChart3,
+  CalendarDays,
+  CalendarRange,
+  Download,
+  Filter,
+  LineChart as LineChartIcon,
+  Store,
+  Tags,
+  TrendingDown,
+  TrendingUp,
+  WalletCards,
+  X,
+} from "lucide-react";
 import { getAnalyticsInsights, getAnalyticsReport } from "@/app/actions/analytics";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
+import { DatePicker } from "@/components/ui/DatePicker";
 import { PageTabs } from "@/components/ui/PageTabs";
 import { Select } from "@/components/ui/Select";
 
@@ -39,6 +54,7 @@ type ReportData = {
   selectedMonth: string;
   importedMonths: string[];
   controls: { range: string; metric: string; groupBy: string; categoryId?: string | null; merchantKey?: string | null };
+  period: { start: string; end: string };
   summary: { totalIn: number; totalOut: number; net: number; transactionCount: number };
   chartSeries: Array<{ key: string; label: string; totalIn: number; totalOut: number; net: number; metricValue?: number; transactionCount: number; color?: string }>;
   breakdown: Array<{ key: string; name: string; color?: string; totalIn: number; totalOut: number; net?: number; metricValue: number; transactionCount: number; percentOfTotal: number }>;
@@ -73,6 +89,17 @@ type InsightsData = {
   hasTransactions: boolean;
 };
 
+type OverviewInsightsData = {
+  importedMonths: string[];
+  summary: { totalIn: number; totalOut: number; net: number; transactionCount: number };
+  monthlyTrend: Array<{ month: string; totalIn: number; totalOut: number; net: number; transactionCount: number }>;
+  topCategories: Array<{ key: string; name: string; color?: string; totalIn: number; totalOut: number; transactionCount: number }>;
+  topMerchants: Array<{ key: string; name: string; totalOut: number; transactionCount: number }>;
+  recurringMerchants: InsightsData["recurringMerchants"];
+  anomalies: Transaction[];
+  hasTransactions: boolean;
+};
+
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat("en-SG", {
     style: "currency",
@@ -85,12 +112,20 @@ const formatMonth = (month: string | null) => {
   return format(parseISO(`${month}-01`), "MMM yyyy");
 };
 
-const rangeOptions = [
-  { value: "month", label: "Selected month" },
-  { value: "last3", label: "Last 3 months" },
-  { value: "ytd", label: "Year to date" },
-  { value: "last12", label: "Last 12 months" },
-];
+const formatDateInput = (date: string | Date | null | undefined) => {
+  if (!date) return "";
+  return format(new Date(date), "yyyy-MM-dd");
+};
+
+const getMonthDateRange = (month: string) => {
+  const [year, monthNumber] = month.split("-").map((part) => Number(part));
+  const start = new Date(year, monthNumber - 1, 1);
+  const end = new Date(year, monthNumber, 0);
+  return {
+    dateFrom: format(start, "yyyy-MM-dd"),
+    dateTo: format(end, "yyyy-MM-dd"),
+  };
+};
 
 const metricOptions = [
   { value: "spending", label: "Spending only" },
@@ -115,12 +150,22 @@ const chartOptions = [
 const fallbackChartColors = ["#5750F1", "#22AD5C", "#F23030", "#F59E0B", "#3B82F6", "#F97316"];
 const reportBarSize = 42;
 
-export function AnalyticsClient({ initialReport, initialInsights }: { initialReport: ReportData; initialInsights: InsightsData }) {
-  const [activeTab, setActiveTab] = useState<"reports" | "insights">("reports");
+export function AnalyticsClient({
+  initialOverview,
+  initialReport,
+  initialInsights,
+}: {
+  initialOverview: OverviewInsightsData;
+  initialReport: ReportData;
+  initialInsights: InsightsData;
+}) {
+  const [activeTab, setActiveTab] = useState<"reports" | "insights" | "overall">("reports");
+  const [overview] = useState(initialOverview);
   const [report, setReport] = useState(initialReport);
   const [insights, setInsights] = useState(initialInsights);
   const [chartType, setChartType] = useState("bar");
   const [loading, setLoading] = useState(false);
+  const [insightsLoading, setInsightsLoading] = useState(false);
 
   const monthOptions = report.importedMonths.map((month) => ({ value: month, label: formatMonth(month) }));
   const categoryOptions = [{ value: "", label: "All categories" }, ...report.categories.map((item) => ({ value: item.id, label: item.name }))];
@@ -128,11 +173,13 @@ export function AnalyticsClient({ initialReport, initialInsights }: { initialRep
 
   const selectedChartType = chartType === "pie" && !["category", "merchant"].includes(report.controls.groupBy) ? "bar" : chartType;
 
-  const loadReport = async (next: Partial<ReportData["controls"]> & { month?: string }) => {
+  const loadReport = async (next: Partial<ReportData["controls"]> & { month?: string; dateFrom?: string; dateTo?: string }) => {
     setLoading(true);
     try {
       const nextReport = await getAnalyticsReport({
         month: next.month || report.selectedMonth,
+        dateFrom: next.dateFrom ?? formatDateInput(report.period.start),
+        dateTo: next.dateTo ?? formatDateInput(report.period.end),
         range: next.range || report.controls.range,
         metric: next.metric || report.controls.metric,
         groupBy: next.groupBy || report.controls.groupBy,
@@ -140,9 +187,17 @@ export function AnalyticsClient({ initialReport, initialInsights }: { initialRep
         merchantKey: next.merchantKey === undefined ? report.controls.merchantKey || undefined : next.merchantKey || undefined,
       });
       setReport(nextReport);
-      if (next.month) setInsights(await getAnalyticsInsights(next.month));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadInsights = async (month: string) => {
+    setInsightsLoading(true);
+    try {
+      setInsights(await getAnalyticsInsights(month));
+    } finally {
+      setInsightsLoading(false);
     }
   };
 
@@ -174,6 +229,7 @@ export function AnalyticsClient({ initialReport, initialInsights }: { initialRep
         tabs={[
           { key: "reports", label: "Reports" },
           { key: "insights", label: "Insights" },
+          { key: "overall", label: "Overall" },
         ]}
         activeTab={activeTab}
         onChange={setActiveTab}
@@ -191,9 +247,75 @@ export function AnalyticsClient({ initialReport, initialInsights }: { initialRep
           loadReport={loadReport}
           exportCsv={exportCsv}
         />
+      ) : activeTab === "insights" ? (
+        <InsightsTab insights={insights} monthOptions={monthOptions} loading={insightsLoading} loadInsights={loadInsights} />
       ) : (
-        <InsightsTab insights={insights} />
+        <OverallTab overview={overview} />
       )}
+    </div>
+  );
+}
+
+function OverallTab({ overview }: { overview: OverviewInsightsData }) {
+  if (!overview.hasTransactions) {
+    return <Card><CardContent className="py-12 text-center text-sm text-dark-5 dark:text-dark-6">Import statements to unlock analytics overview.</CardContent></Card>;
+  }
+
+  const trend = overview.monthlyTrend.map((item) => ({
+    ...item,
+    key: item.month,
+    label: formatMonth(item.month),
+  }));
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="grid gap-4 md:grid-cols-4">
+        <Metric title="Income" value={formatCurrency(overview.summary.totalIn)} tone="good" />
+        <Metric title="Spending" value={formatCurrency(overview.summary.totalOut)} tone="bad" />
+        <Metric title="Net Flow" value={formatCurrency(overview.summary.net)} tone={overview.summary.net >= 0 ? "good" : "bad"} />
+        <Metric title="Transactions" value={String(overview.summary.transactionCount)} />
+      </div>
+
+      <Card>
+        <CardHeader><CardTitle>Long-Term Cashflow</CardTitle></CardHeader>
+        <CardContent className="h-[340px]">
+          <ReportChart data={trend} metric="inOut" chartType="bar" />
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <InsightList title="Top Categories" rows={overview.topCategories.map((item) => ({ key: item.key, label: item.name, value: item.totalOut, helper: `${item.transactionCount} transactions` }))} />
+        <InsightList title="Top Merchants" rows={overview.topMerchants.map((item) => ({ key: item.key, label: item.name, value: item.totalOut, helper: `${item.transactionCount} transactions` }))} />
+        <InsightList title="Recurring Spend" rows={overview.recurringMerchants.map((item) => ({ key: item.key, label: item.name, value: item.totalOut, helper: `${item.frequency}, ${item.stability}, ${item.monthsSeen} months` }))} />
+        <Card>
+          <CardHeader><CardTitle>Large Unusual Transactions</CardTitle></CardHeader>
+          <CardContent>{overview.anomalies.length === 0 ? <p className="text-sm text-dark-5 dark:text-dark-6">No large unusual transactions detected.</p> : <TransactionTable transactions={overview.anomalies} />}</CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function FilterField({
+  icon,
+  label,
+  children,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <p className="mb-1.5 text-xs font-semibold uppercase text-dark-5 dark:text-dark-6">
+        {label}
+      </p>
+      <div className="relative">
+        <div className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-dark-5 dark:text-dark-6">
+          {icon}
+        </div>
+        {children}
+      </div>
     </div>
   );
 }
@@ -206,33 +328,99 @@ function ReportsTab({ report, loading, monthOptions, categoryOptions, merchantOp
   merchantOptions: Array<{ value: string; label: string }>;
   chartType: string;
   setChartType: (value: string) => void;
-  loadReport: (next: Partial<ReportData["controls"]> & { month?: string }) => void;
+  loadReport: (next: Partial<ReportData["controls"]> & { month?: string; dateFrom?: string; dateTo?: string }) => void;
   exportCsv: () => void;
 }) {
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const categoryBreakdown = report.categoryBreakdown ?? report.breakdown;
+  const dateFrom = formatDateInput(report.period.start);
+  const dateTo = formatDateInput(report.period.end);
+  const activeFilterLabels = [
+    `${format(parseISO(dateFrom), "dd MMM yyyy")} - ${format(parseISO(dateTo), "dd MMM yyyy")}`,
+    metricOptions.find((item) => item.value === report.controls.metric)?.label,
+    groupOptions.find((item) => item.value === report.controls.groupBy)?.label,
+    report.controls.categoryId ? categoryOptions.find((item) => item.value === report.controls.categoryId)?.label : null,
+    report.controls.merchantKey ? merchantOptions.find((item) => item.value === report.controls.merchantKey)?.label : null,
+  ].filter(Boolean);
+  const handleMonthPresetChange = (month: string) => {
+    const range = getMonthDateRange(month);
+    loadReport({ month, ...range, range: "month" });
+  };
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div>
-          <h2 className="font-display text-3xl font-bold text-dark dark:text-white">Reports</h2>
-          <p className="text-sm text-dark-5 dark:text-dark-6">Build charts and tables from imported statement data.</p>
+          <div className="flex flex-wrap gap-2">
+            {activeFilterLabels.map((label) => (
+              <span key={label} className="rounded-full bg-gray-2 px-3 py-1 text-xs font-medium text-dark-5 dark:bg-dark-2 dark:text-dark-6">
+                {label}
+              </span>
+            ))}
+          </div>
         </div>
-        <Button variant="secondary" onClick={exportCsv} leftIcon={<Download className="size-4" />}>Export CSV</Button>
+        <div className="flex flex-wrap gap-3">
+          <Button variant="secondary" onClick={() => setFiltersOpen(true)} leftIcon={<Filter className="size-4" />}>Filters</Button>
+          <Button variant="secondary" onClick={exportCsv} leftIcon={<Download className="size-4" />}>Export CSV</Button>
+        </div>
       </div>
 
-      <Card className="p-4">
-        <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-7">
-          <Select value={report.selectedMonth || ""} options={monthOptions} onChange={(month) => loadReport({ month })} placeholder="Month" buttonClassName="w-full min-w-0" />
-          <Select value={report.controls.range} options={rangeOptions} onChange={(range) => loadReport({ range })} buttonClassName="w-full min-w-0" />
-          <Select value={report.controls.metric} options={metricOptions} onChange={(metric) => loadReport({ metric })} buttonClassName="w-full min-w-0" />
-          <Select value={report.controls.groupBy} options={groupOptions} onChange={(groupBy) => loadReport({ groupBy })} buttonClassName="w-full min-w-0" />
-          <Select value={chartType} options={chartOptions} onChange={setChartType} buttonClassName="w-full min-w-0" />
-          <Select value={report.controls.categoryId || ""} options={categoryOptions} onChange={(categoryId) => loadReport({ categoryId })} buttonClassName="w-full min-w-0" />
-          <Select value={report.controls.merchantKey || ""} options={merchantOptions} onChange={(merchantKey) => loadReport({ merchantKey })} buttonClassName="w-full min-w-0" />
-        </CardContent>
-        {loading && <div className="mt-3 text-xs text-dark-5 dark:text-dark-6">Updating report...</div>}
-      </Card>
+      {filtersOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/40">
+          <div className="h-full w-full max-w-md overflow-y-auto bg-white p-6 shadow-xl dark:bg-gray-dark">
+            <div className="mb-6 flex items-center justify-between gap-4">
+              <div>
+                <h3 className="font-display text-2xl font-bold text-dark dark:text-white">Report Filters</h3>
+                {loading && <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">Updating report...</p>}
+              </div>
+              <button
+                type="button"
+                onClick={() => setFiltersOpen(false)}
+                className="rounded-lg p-2 text-dark-5 hover:bg-gray-2 hover:text-dark dark:text-dark-6 dark:hover:bg-dark-2 dark:hover:text-white"
+                aria-label="Close filters"
+              >
+                <X className="size-5" />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <FilterField label="Quick month" icon={<CalendarDays className="size-4" />}>
+                <Select value={report.selectedMonth || ""} options={monthOptions} onChange={handleMonthPresetChange} placeholder="Month" buttonClassName="w-full min-w-0 pl-10" />
+              </FilterField>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <FilterField label="Start date" icon={<CalendarRange className="size-4" />}>
+                  <DatePicker
+                    value={dateFrom}
+                    onChange={(nextDateFrom) => loadReport({ dateFrom: nextDateFrom })}
+                    triggerProps={{ className: "pl-10" }}
+                  />
+                </FilterField>
+                <FilterField label="End date" icon={<CalendarRange className="size-4" />}>
+                  <DatePicker
+                    value={dateTo}
+                    onChange={(nextDateTo) => loadReport({ dateTo: nextDateTo })}
+                    triggerProps={{ className: "pl-10" }}
+                  />
+                </FilterField>
+              </div>
+              <FilterField label="Metric" icon={<WalletCards className="size-4" />}>
+                <Select value={report.controls.metric} options={metricOptions} onChange={(metric) => loadReport({ metric })} buttonClassName="w-full min-w-0 pl-10" />
+              </FilterField>
+              <FilterField label="Group by" icon={<BarChart3 className="size-4" />}>
+                <Select value={report.controls.groupBy} options={groupOptions} onChange={(groupBy) => loadReport({ groupBy })} buttonClassName="w-full min-w-0 pl-10" />
+              </FilterField>
+              <FilterField label="Chart" icon={<LineChartIcon className="size-4" />}>
+                <Select value={chartType} options={chartOptions} onChange={setChartType} buttonClassName="w-full min-w-0 pl-10" />
+              </FilterField>
+              <FilterField label="Category" icon={<Tags className="size-4" />}>
+                <Select value={report.controls.categoryId || ""} options={categoryOptions} onChange={(categoryId) => loadReport({ categoryId })} buttonClassName="w-full min-w-0 pl-10" />
+              </FilterField>
+              <FilterField label="Merchant" icon={<Store className="size-4" />}>
+                <Select value={report.controls.merchantKey || ""} options={merchantOptions} onChange={(merchantKey) => loadReport({ merchantKey })} buttonClassName="w-full min-w-0 pl-10" />
+              </FilterField>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-4">
         <Metric title="Income" value={formatCurrency(report.summary.totalIn)} tone="good" />
@@ -320,30 +508,53 @@ function ReportChart({ data, metric, chartType }: { data: ReportData["chartSerie
   );
 }
 
-function InsightsTab({ insights }: { insights: InsightsData }) {
+function InsightsTab({
+  insights,
+  monthOptions,
+  loading,
+  loadInsights,
+}: {
+  insights: InsightsData;
+  monthOptions: Array<{ value: string; label: string }>;
+  loading: boolean;
+  loadInsights: (month: string) => void;
+}) {
   if (!insights.hasTransactions) {
     return <Card><CardContent className="py-12 text-center text-sm text-dark-5 dark:text-dark-6">Import multiple statements to unlock insights.</CardContent></Card>;
   }
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h2 className="font-display text-3xl font-bold text-dark dark:text-white">Insights</h2>
-        <p className="text-sm text-dark-5 dark:text-dark-6">What changed in {formatMonth(insights.selectedMonth)} and what deserves attention.</p>
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="text-sm text-dark-5 dark:text-dark-6">{formatMonth(insights.selectedMonth)}</p>
+        </div>
+        <div className="w-full max-w-xs">
+          <Select
+            value={insights.selectedMonth || ""}
+            options={monthOptions}
+            onChange={loadInsights}
+            placeholder="Select month"
+            buttonClassName="w-full"
+          />
+        </div>
       </div>
       <div className="grid gap-4 md:grid-cols-3">
         <InsightMetric title="Vs Previous Month" value={insights.monthlySummary.spendingDelta} />
         <InsightMetric title="Vs 3-Month Average" value={insights.monthlySummary.threeMonthDelta} />
-        <Metric title="Recurring Merchants" value={String(insights.recurringMerchants.length)} />
+        <Metric title="Transactions" value={String(insights.monthlySummary.transactionCount)} />
       </div>
       <div className="grid gap-6 xl:grid-cols-2">
         <InsightList title="Main Spending Drivers" rows={insights.monthlySummary.mainDrivers.map((item) => ({ key: item.key, label: item.name, value: item.delta, helper: item.percentDelta === null ? "New category" : `${item.percentDelta}%` }))} />
-        <InsightList title="Recurring Spend" rows={insights.recurringMerchants.map((item) => ({ key: item.key, label: item.name, value: item.totalOut, helper: `${item.frequency}, ${item.stability}, ${item.monthsSeen} months` }))} />
         <InsightList title="Top Merchants" rows={insights.merchantInsights.topMerchants.map((item) => ({ key: item.key, label: item.name, value: item.totalOut, helper: `${item.transactionCount} transactions` }))} />
+        <InsightList title="New Merchants This Month" rows={insights.merchantInsights.newMerchants.map((item) => ({ key: item.key, label: item.name, value: item.totalOut, helper: `${item.transactionCount} transactions` }))} />
         <InsightList title="Category Changes" rows={insights.categoryChanges.map((item) => ({ key: item.key, label: item.name, value: item.delta, helper: item.percentDelta === null ? "No previous spend" : `${item.percentDelta}%` }))} />
       </div>
       <Card>
-        <CardHeader><CardTitle>Anomalies</CardTitle></CardHeader>
-        <CardContent>{insights.anomalies.length === 0 ? <p className="text-sm text-dark-5 dark:text-dark-6">No large unusual transactions detected.</p> : <TransactionTable transactions={insights.anomalies} />}</CardContent>
+        <CardHeader className="flex items-center justify-between">
+          <CardTitle>Month Anomalies</CardTitle>
+          {loading && <span className="text-xs text-dark-5 dark:text-dark-6">Updating...</span>}
+        </CardHeader>
+        <CardContent>{insights.anomalies.length === 0 ? <p className="text-sm text-dark-5 dark:text-dark-6">No large unusual transactions detected for this month.</p> : <TransactionTable transactions={insights.anomalies} />}</CardContent>
       </Card>
     </div>
   );

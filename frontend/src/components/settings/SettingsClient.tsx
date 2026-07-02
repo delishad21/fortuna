@@ -14,6 +14,7 @@ import {
   WalletCards,
   Settings2,
   WandSparkles,
+  EyeOff,
 } from "lucide-react";
 import { ManageCategoriesModal } from "@/components/settings/ManageCategoriesModal";
 import { ManageAccountsModal } from "@/components/settings/ManageAccountsModal";
@@ -23,6 +24,7 @@ import {
   updateUserProfile,
   changePassword,
   updateAutoLabelSettings,
+  updateAnalyticsExcludedCategories,
   type UserProfile,
 } from "@/app/actions/user";
 import {
@@ -101,6 +103,10 @@ export function SettingsClient({
   const [autoLabelThreshold, setAutoLabelThreshold] = useState(
     user?.autoLabelThreshold ?? 0.5,
   );
+  const [analyticsExcludedCategoryIds, setAnalyticsExcludedCategoryIds] =
+    useState<string[]>(user?.analyticsExcludedCategoryIds ?? []);
+  const [savedAnalyticsExcludedCategoryIds, setSavedAnalyticsExcludedCategoryIds] =
+    useState<string[]>(user?.analyticsExcludedCategoryIds ?? []);
 
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
@@ -224,6 +230,12 @@ export function SettingsClient({
           await deleteCategory(categoryId);
           setCategories((prev) =>
             prev.filter((item) => item.id !== categoryId),
+          );
+          setAnalyticsExcludedCategoryIds((prev) =>
+            prev.filter((id) => id !== categoryId),
+          );
+          setSavedAnalyticsExcludedCategoryIds((prev) =>
+            prev.filter((id) => id !== categoryId),
           );
           showModal("success", "Category Deleted", "Category removed.");
         } catch (error) {
@@ -387,6 +399,46 @@ export function SettingsClient({
     }
   };
 
+  const handleAnalyticsExclusionToggle = (
+    categoryId: string,
+    excluded: boolean,
+  ) => {
+    setAnalyticsExcludedCategoryIds((prev) => {
+      if (excluded) {
+        return prev.includes(categoryId) ? prev : [...prev, categoryId];
+      }
+      return prev.filter((id) => id !== categoryId);
+    });
+  };
+
+  const handleSaveAnalyticsExclusions = async () => {
+    try {
+      const updated = await updateAnalyticsExcludedCategories(
+        analyticsExcludedCategoryIds,
+      );
+      setAnalyticsExcludedCategoryIds(updated.analyticsExcludedCategoryIds);
+      setSavedAnalyticsExcludedCategoryIds(updated.analyticsExcludedCategoryIds);
+      setProfile((prev) =>
+        prev
+          ? {
+              ...prev,
+              analyticsExcludedCategoryIds:
+                updated.analyticsExcludedCategoryIds,
+            }
+          : prev,
+      );
+      showModal("success", "Analytics Exclusions Saved", "Preferences updated.");
+    } catch (error) {
+      showModal(
+        "error",
+        "Save Failed",
+        error instanceof Error
+          ? error.message
+          : "Failed to save analytics exclusions",
+      );
+    }
+  };
+
   const handleRebuildClassificationPatterns = async () => {
     try {
       const result = await rebuildClassificationPatterns();
@@ -431,6 +483,19 @@ export function SettingsClient({
     autoLabelEnabled !== baselineAutoLabelEnabled ||
     Number(autoLabelThreshold.toFixed(4)) !==
       Number(baselineAutoLabelThreshold.toFixed(4));
+  const sortIds = (ids: string[]) => [...ids].sort().join("|");
+  const analyticsExclusionsDirty =
+    sortIds(analyticsExcludedCategoryIds) !==
+    sortIds(savedAnalyticsExcludedCategoryIds);
+  const analyticsExclusionCategories = categories.filter(
+    (category) =>
+      !tripCategoryNames.some(
+        (name) => name.toLowerCase() === category.name.toLowerCase(),
+      ),
+  );
+  const excludedCategoryPreview = analyticsExclusionCategories.filter((category) =>
+    analyticsExcludedCategoryIds.includes(category.id),
+  );
 
   const categoryPreview = categories.slice(0, PREVIEW_CHIP_LIMIT);
   const categoryRemaining = Math.max(categories.length - PREVIEW_CHIP_LIMIT, 0);
@@ -589,6 +654,73 @@ export function SettingsClient({
                 </span>
               )}
             </div>
+          </div>
+
+          <div className="rounded-lg border border-stroke dark:border-dark-3 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex items-center gap-3 min-w-0">
+                <EyeOff className="h-6 w-6 shrink-0 text-red" />
+                <div className="min-w-0">
+                  <h4 className="text-base font-semibold text-dark dark:text-white">
+                    Analytics Exclusions
+                  </h4>
+                  <p className="text-sm text-dark-5 dark:text-dark-6 mt-1">
+                    Hide selected categories from analytics.
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant={analyticsExclusionsDirty ? "success" : "secondary"}
+                size="sm"
+                onClick={handleSaveAnalyticsExclusions}
+                disabled={!analyticsExclusionsDirty}
+              >
+                Save
+              </Button>
+            </div>
+
+            <div className="mt-4 grid max-h-[220px] gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+              {analyticsExclusionCategories.map((category) => (
+                <label
+                  key={category.id}
+                  className="flex min-w-0 items-center gap-3 rounded-lg border border-stroke px-3 py-2 text-sm text-dark dark:border-dark-3 dark:text-white"
+                >
+                  <Checkbox
+                    checked={analyticsExcludedCategoryIds.includes(category.id)}
+                    onChange={(checked) =>
+                      handleAnalyticsExclusionToggle(category.id, checked)
+                    }
+                  />
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: category.color }}
+                  />
+                  <span className="truncate">{category.name}</span>
+                </label>
+              ))}
+              {analyticsExclusionCategories.length === 0 && (
+                <span className="text-sm text-dark-5 dark:text-dark-6">
+                  No categories yet.
+                </span>
+              )}
+            </div>
+
+            {excludedCategoryPreview.length > 0 && (
+              <div className="mt-4 flex flex-wrap gap-2 text-sm text-dark-5 dark:text-dark-6">
+                {excludedCategoryPreview.map((category) => (
+                  <span
+                    key={category.id}
+                    className="inline-flex max-w-full items-center gap-2 rounded-full border border-stroke px-3 py-1 dark:border-dark-3"
+                  >
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: category.color }}
+                    />
+                    <span className="truncate">{category.name}</span>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="rounded-lg border border-stroke dark:border-dark-3 p-4">
