@@ -55,7 +55,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v5
 
       - name: Compile test APK
-        run: ./android/gradlew -p android assembleRelease --no-daemon
+        run: ./android/gradlew -p android assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a
 
       - name: Name APK
         run: cp android/app/build/outputs/apk/release/app-release.apk Fortuna-test-${{ github.run_number }}.apk
