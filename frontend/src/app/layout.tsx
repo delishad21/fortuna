@@ -28,7 +28,8 @@ export const metadata: Metadata = {
   title: "Fortuna",
   description: "Manage your finances in one place",
   icons: {
-    icon: "/icon.svg",
+    icon: "/icon.png",
+    apple: "/apple-icon.png",
   },
 };
 

@@ -1,6 +1,6 @@
 "use server";
 
-import { auth } from "@/lib/auth";
+import { auth } from "@/lib/actionAuth";
 import { getCategories } from "@/app/actions/categories";
 import { getImportRules, bootstrapDefaultImportRules } from "@/app/actions/importRules";
 import { prisma } from "@/lib/db/client";
@@ -79,9 +79,18 @@ function ruleMatches(
 
 export async function parseFile(formData: FormData): Promise<ParseResult> {
   try {
+    const session = await auth();
+    const internalToken = process.env.INTERNAL_SERVICE_TOKEN;
     const response = await fetch(`${PARSER_SERVICE_URL}/parse`, {
       method: "POST",
       body: formData,
+      headers:
+        session?.user?.id && internalToken
+          ? {
+              "X-Internal-Service-Token": internalToken,
+              "X-Authenticated-User-Id": session.user.id,
+            }
+          : undefined,
     });
 
     if (!response.ok) {
@@ -102,7 +111,6 @@ export async function parseFile(formData: FormData): Promise<ParseResult> {
       throw new Error("Invalid response from parser service");
     }
 
-    const session = await auth();
     const normalizedParserId = String(result.parserId || "")
       .trim()
       .toLowerCase();
@@ -261,8 +269,18 @@ export async function parseFile(formData: FormData): Promise<ParseResult> {
 
 export async function getAvailableParsers(mode?: "bank" | "trip") {
   try {
+    const session = await auth();
+    const internalToken = process.env.INTERNAL_SERVICE_TOKEN;
     const query = mode ? `?mode=${mode}` : "";
-    const response = await fetch(`${PARSER_SERVICE_URL}/parsers${query}`);
+    const response = await fetch(`${PARSER_SERVICE_URL}/parsers${query}`, {
+      headers:
+        session?.user?.id && internalToken
+          ? {
+              "X-Internal-Service-Token": internalToken,
+              "X-Authenticated-User-Id": session.user.id,
+            }
+          : undefined,
+    });
 
     if (!response.ok) {
       throw new Error("Failed to fetch parsers");

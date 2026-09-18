@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "Fortuna",
+    "slug": "fortuna",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.fortuna.mobile"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#040A14"
+      },
+      "predictiveBackGestureEnabled": true,
+      "package": "app.fortuna.mobile"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-sharing",
+      "expo-font",
+      "@react-native-community/datetimepicker",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/icon.png",
+          "imageWidth": 160,
+          "resizeMode": "contain",
+          "backgroundColor": "#040A14"
+        }
+      ]
+    ],
+    "scheme": "fortuna"
+  }
+}

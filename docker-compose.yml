@@ -1,68 +1,161 @@
-version: '3.8'
+# Preserve existing named volumes and Compose ownership after the repository rename.
+name: personal-finance-app
 
 services:
-  # PostgreSQL Database
   postgres:
     image: postgres:16-alpine
-    container_name: finance-postgres
+    container_name: fortuna-postgres
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-financeuser}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-financepass}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-personal_finance}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - ${FORTUNA_DATA_DIR:-/srv/fortuna}/postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-financeuser} -d ${POSTGRES_DB:-personal_finance}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-personal_finance}"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - finance-network
 
-  # File Parser Microservice (Python with pdfplumber)
   file-parser:
-    build:
-      context: ./services/file-parser
-      dockerfile: Dockerfile
-    container_name: finance-parser
+    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-file-parser:${IMAGE_TAG:-latest}
+    container_name: fortuna-file-parser
     restart: always
-    ports:
-      - "${PARSER_PORT:-4000}:4000"
+    expose:
+      - "4000"
     environment:
       - PORT=4000
-      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
-    networks:
-      - finance-network
-
-  # Next.js Frontend Application
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile.frontend
-    container_name: finance-frontend
-    restart: always
-    ports:
-      - "${APP_PORT:-3000}:3000"
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-financeuser}:${POSTGRES_PASSWORD:-financepass}@postgres:5432/${POSTGRES_DB:-personal_finance}?schema=public
-      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
-      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
-      - PARSER_SERVICE_URL=http://file-parser:4000
-      - NODE_ENV=production
+      - FRONTEND_URL=${NEXTAUTH_URL}
+      - DATA_SERVICE_URL=http://data-service:4001
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+      - SANDBOX_QUEUE_DIR=/sandbox
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    volumes:
+      - parser-sandbox-queue:/sandbox
     depends_on:
-      postgres:
-        condition: service_healthy
-      file-parser:
+      parser-sandbox-worker:
         condition: service_started
     networks:
       - finance-network
 
-volumes:
-  postgres-data:
+  parser-sandbox-worker:
+    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-file-parser:${IMAGE_TAG:-latest}
+    container_name: fortuna-parser-sandbox
+    restart: always
+    command: python -m app.sandbox_worker
+    network_mode: none
+    read_only: true
+    cap_drop: ["ALL"]
+    cap_add: ["SETUID", "SETGID"]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 768m
+    cpus: 1.0
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    environment:
+      - SANDBOX_QUEUE_DIR=/sandbox
+      - SANDBOX_WALL_TIMEOUT_SECONDS=20
+    volumes:
+      - parser-sandbox-queue:/sandbox
+
+  data-service:
+    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-data-service:${IMAGE_TAG:-latest}
+    container_name: fortuna-data-service
+    restart: always
+    expose:
+      - "4001"
+    environment:
+      - PORT=4001
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-personal_finance}?schema=public
+      - NODE_ENV=production
+      - PARSER_SERVICE_URL=http://file-parser:4000
+      - STATEMENT_STORAGE_DIR=/data/statements
+      - COMMIT_TOKEN_SECRET=${COMMIT_TOKEN_SECRET}
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+    volumes:
+      - ${FORTUNA_DATA_DIR:-/srv/fortuna}/statements:/data/statements
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    command: sh -c "npx prisma migrate deploy && npm start"
+    networks:
+      - finance-network
+
+  frontend:
+    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-frontend:${IMAGE_TAG:-latest}
+    container_name: fortuna-frontend
+    restart: always
+    ports:
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-3000}:3000"
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-personal_finance}?schema=public
+      - NEXTAUTH_URL=${NEXTAUTH_URL}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - AUTH_TRUST_HOST=true
+      - PARSER_SERVICE_URL=http://file-parser:4000
+      - DATA_SERVICE_URL=http://data-service:4001
+      - NODE_ENV=production
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      file-parser:
+        condition: service_healthy
+      data-service:
+        condition: service_healthy
+    networks:
+      - finance-network
+
+  finance-mcp:
+    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-finance-mcp:${IMAGE_TAG:-latest}
+    container_name: fortuna-finance-mcp
+    restart: always
+    ports:
+      - "${MCP_BIND:-127.0.0.1}:${MCP_PORT:-4002}:4002"
+    environment:
+      - PORT=4002
+      - HOST=0.0.0.0
+      - DATA_SERVICE_URL=http://data-service:4001
+      - PARSER_SERVICE_URL=http://file-parser:4000
+      - FINANCE_API_TOKEN=${FINANCE_API_TOKEN}
+      - MCP_CLIENT_TOKEN=${MCP_CLIENT_TOKEN}
+      - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-localhost,127.0.0.1,192.168.1.2}
+      - STATEMENT_INBOX=${FORTUNA_DATA_DIR:-/srv/fortuna}/inbox
+    volumes:
+      - ${FORTUNA_DATA_DIR:-/srv/fortuna}/inbox:${FORTUNA_DATA_DIR:-/srv/fortuna}/inbox:ro
+    depends_on:
+      data-service:
+        condition: service_healthy
+      file-parser:
+        condition: service_healthy
+    networks:
+      - finance-network
 
 networks:
   finance-network:
     driver: bridge
+
+volumes:
+  parser-sandbox-queue:

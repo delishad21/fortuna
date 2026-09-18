@@ -87,7 +87,11 @@ export function mergeFileParseStatuses<
     status: "pending" | "parsing" | "success" | "error";
     error?: string;
   },
->(files: T[], pendingFiles: T[], results: MultiFileParseResult[]): T[] {
+>(
+  files: T[],
+  pendingFiles: T[],
+  results: MultiFileParseResult[],
+): Array<T & { error?: string }> {
   const resultByFile = new Map<unknown, MultiFileParseResult>();
   pendingFiles.forEach((fileState, index) => {
     resultByFile.set(fileState.file, results[index]);

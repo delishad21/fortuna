@@ -30,12 +30,9 @@ RUN npx prisma generate
 COPY . .
 
 # Build application
+ARG SERVER_ACTION_ALLOWED_ORIGINS
+ENV SERVER_ACTION_ALLOWED_ORIGINS=$SERVER_ACTION_ALLOWED_ORIGINS
 RUN npm run build
-
-# Run migrations during build (requires DATABASE_URL at build time)
-# Note: In production, run migrations separately before deployment
-ARG DATABASE_URL
-ENV DATABASE_URL=$DATABASE_URL
 
 # Production stage
 FROM node:20-alpine AS runner
@@ -50,7 +47,9 @@ RUN apk add --no-cache \
     giflib \
     openssl
 
+ARG SERVER_ACTION_ALLOWED_ORIGINS
 ENV NODE_ENV=production
+ENV SERVER_ACTION_ALLOWED_ORIGINS=$SERVER_ACTION_ALLOWED_ORIGINS
 
 # Create non-root user
 RUN addgroup --system --gid 1001 nodejs && \

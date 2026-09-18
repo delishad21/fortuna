@@ -8,6 +8,7 @@ import {
 } from "@/app/actions/classificationPatterns";
 import { getParserOptions } from "@/lib/parsers";
 import { SettingsClient } from "@/components/settings/SettingsClient";
+import { getApiTokens } from "@/app/actions/apiTokens";
 
 export default async function SettingsPage() {
   try {
@@ -24,6 +25,7 @@ export default async function SettingsPage() {
     parserOptions,
     classificationPatterns,
     appliedClassificationSummary,
+    apiTokens,
   ] = await Promise.all([
     getCurrentUser(),
     getCategories({ scope: "settings" }),
@@ -32,6 +34,7 @@ export default async function SettingsPage() {
     getParserOptions("bank"),
     getClassificationPatterns(),
     getAppliedClassificationSummary(),
+    getApiTokens(),
   ]);
 
   return (
@@ -43,6 +46,7 @@ export default async function SettingsPage() {
       parserOptions={parserOptions}
       initialClassificationPatterns={classificationPatterns}
       initialAppliedClassificationSummary={appliedClassificationSummary}
+      initialApiTokens={apiTokens}
     />
   );
 }

@@ -71,6 +71,7 @@ prisma/migrations/dev.db
 # Uploads (for local dev)
 uploads/
 temp/
+hermes-inbox/
 *.pdf
 *.csv
 
@@ -80,3 +81,11 @@ AGENTS.md
 
 # Worktrees
 .worktrees/
+
+
+deployment/
+
+# Expo and mobile validation
+.expo/
+test-results/
+playwright-report/

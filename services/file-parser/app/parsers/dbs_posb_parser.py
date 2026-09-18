@@ -265,6 +265,8 @@ def _finalize_transaction(
     if account_number:
         transaction["accountNumber"] = account_number
         transaction["accountIdentifier"] = account_number
+        transaction["metadata"]["accountNumber"] = account_number
+        transaction["metadata"]["accountIdentifier"] = account_number
     return transaction, balance if balance is not None else previous_balance
 
 
@@ -307,6 +309,9 @@ def _parse_with_columns(
 ) -> list[dict]:
     """Parse POSB statement using word positions to map amounts to columns."""
     transactions = []
+    statement_metadata = dict(account_metadata)
+    statement_metadata.pop("accountNumber", None)
+    statement_metadata.pop("accountIdentifier", None)
     withdrawal_x = header_positions["withdrawal_x"]
     deposit_x = header_positions["deposit_x"]
     balance_x = header_positions["balance_x"]
@@ -314,6 +319,7 @@ def _parse_with_columns(
     in_section = False
     previous_balance = None
     pending_tx = None
+    current_account_number = account_number
 
     def _has_meaningful_pending(tx: Optional[dict]) -> bool:
         if not tx:
@@ -340,6 +346,14 @@ def _parse_with_columns(
             if not line_text:
                 continue
 
+            # An account header can appear at the top of a page or midway
+            # through one. Keep it as parser state until the next header.
+            detected_account_number = _extract_account_number(line_text)
+            if detected_account_number:
+                current_account_number = detected_account_number
+                previous_balance = None
+                print(f"Account Number: {current_account_number}")
+
             # Section starts
             if "Balance Brought Forward" in line_text or "Balance B/F" in line_text:
                 in_section = True
@@ -363,7 +377,9 @@ def _parse_with_columns(
                 or line_text.startswith("Transaction Details as of")
             ):
                 if _has_meaningful_pending(pending_tx):
-                    tx = _build_transaction(pending_tx, account_metadata, account_number)
+                    tx = _build_transaction(
+                        pending_tx, statement_metadata, current_account_number
+                    )
                     transactions.append(tx)
                     previous_balance = pending_tx.get("balance")
                 in_section = False
@@ -377,7 +393,9 @@ def _parse_with_columns(
             date_match = re.match(r"^(\d{2}/\d{2}/\d{4})\b", line_text)
             if date_match:
                 if _has_meaningful_pending(pending_tx):
-                    tx = _build_transaction(pending_tx, account_metadata, account_number)
+                    tx = _build_transaction(
+                        pending_tx, statement_metadata, current_account_number
+                    )
                     transactions.append(tx)
                     previous_balance = pending_tx.get("balance")
 
@@ -424,7 +442,9 @@ def _parse_with_columns(
                         )
 
         if in_section and _has_meaningful_pending(pending_tx):
-            tx = _build_transaction(pending_tx, account_metadata, account_number)
+            tx = _build_transaction(
+                pending_tx, statement_metadata, current_account_number
+            )
             transactions.append(tx)
             previous_balance = pending_tx.get("balance")
             pending_tx = None
@@ -453,4 +473,6 @@ def _build_transaction(pending: dict, account_metadata: dict, account_number: Op
     if account_number:
         transaction["accountNumber"] = account_number
         transaction["accountIdentifier"] = account_number
+        transaction["metadata"]["accountNumber"] = account_number
+        transaction["metadata"]["accountIdentifier"] = account_number
     return transaction

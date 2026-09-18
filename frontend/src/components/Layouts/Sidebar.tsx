@@ -20,7 +20,7 @@ const menuItems = [
     section: "Main",
     items: [
       { title: "Dashboard", icon: LayoutDashboard, url: "/dashboard" },
-      { title: "Import", icon: Upload, url: "/import" },
+      { title: "Imports", icon: Upload, url: "/imports" },
       { title: "Transactions", icon: Receipt, url: "/transactions" },
       { title: "Trips", icon: Plane, url: "/trips" },
       { title: "Analytics", icon: BarChart3, url: "/analytics" },

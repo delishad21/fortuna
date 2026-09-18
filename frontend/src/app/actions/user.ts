@@ -1,6 +1,6 @@
 "use server";
 
-import { auth } from "@/lib/auth";
+import { auth } from "@/lib/actionAuth";
 import { prisma } from "@/lib/db/client";
 import { compare, hash } from "bcryptjs";
 

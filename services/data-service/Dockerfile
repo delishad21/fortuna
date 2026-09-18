@@ -2,15 +2,15 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+RUN apk add --no-cache openssl
+
 # Copy package files
 COPY package*.json ./
 COPY tsconfig.json ./
+COPY prisma ./prisma/
 
 # Install dependencies
 RUN npm ci
-
-# Copy Prisma schema from frontend
-COPY --from=frontend-build /app/prisma ./prisma
 
 # Generate Prisma client
 RUN npx prisma generate

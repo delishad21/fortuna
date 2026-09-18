@@ -59,34 +59,304 @@ model User {
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
-  accounts           Account[]
-  sessions           Session[]
-  settings           UserSettings?
-  categories         Category[]
-  accountIdentifiers AccountIdentifier[]
-  transactions       Transaction[]
-  importBatches      ImportBatch[]
-  trips              Trip[]
-  importRules        ImportRule[]
+  accounts               Account[]
+  sessions               Session[]
+  settings               UserSettings?
+  categories             Category[]
+  accountIdentifiers     AccountIdentifier[]
+  transactions           Transaction[]
+  importBatches          ImportBatch[]
+  trips                  Trip[]
+  importRules            ImportRule[]
   classificationPatterns ClassificationPattern[]
+  apiTokens              ApiToken[]
+  statementFiles         StatementFile[]
+  importDrafts           ImportDraft[]
+  classificationJobs     ClassificationJob[]
+  auditEvents            AgentAuditEvent[]
+  parserWorkspaces       ParserWorkspace[]
+  dynamicParsers         DynamicParserDefinition[]
 
   @@map("users")
 }
 
+model ApiToken {
+  id         String    @id
+  userId     String    @map("user_id")
+  name       String
+  secretHash String    @map("secret_hash")
+  scopes     String[]
+  expiresAt  DateTime? @map("expires_at")
+  lastUsedAt DateTime? @map("last_used_at")
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("api_tokens")
+}
+
+model StatementFile {
+  id          String    @id @default(cuid())
+  userId      String    @map("user_id")
+  filename    String
+  contentType String    @map("content_type")
+  storagePath String    @map("storage_path")
+  sha256      String
+  sizeBytes   Int       @map("size_bytes")
+  status      String    @default("available")
+  retained    Boolean   @default(false)
+  expiresAt   DateTime  @map("expires_at")
+  deletedAt   DateTime? @map("deleted_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  user   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  drafts ImportDraft[]
+
+  @@unique([userId, sha256])
+  @@index([userId, expiresAt])
+  @@map("statement_files")
+}
+
+model ImportDraft {
+  id                     String    @id @default(cuid())
+  userId                 String    @map("user_id")
+  mode                   String
+  parserId               String?   @map("parser_id")
+  sourceFilename         String    @map("source_filename")
+  sourceFileId           String?   @map("source_file_id")
+  sourceSha256           String    @map("source_sha256")
+  status                 String    @default("uploaded")
+  version                Int       @default(1)
+  targetTripId           String?   @map("target_trip_id")
+  parserVersion          String?   @map("parser_version")
+  validationHash         String?   @map("validation_hash")
+  commitTokenHash        String?   @map("commit_token_hash")
+  commitTokenExpiresAt   DateTime? @map("commit_token_expires_at")
+  commitTokenUsedAt      DateTime? @map("commit_token_used_at")
+  committedImportBatchId String?   @map("committed_import_batch_id")
+  error                  String?   @db.Text
+  expiresAt              DateTime  @map("expires_at")
+  committedAt            DateTime? @map("committed_at")
+  discardedAt            DateTime? @map("discarded_at")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+
+  user       User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceFile StatementFile?           @relation(fields: [sourceFileId], references: [id], onDelete: SetNull)
+  rows       ImportDraftRow[]
+  jobs       ClassificationJob[]
+  proposals  ClassificationProposal[]
+
+  @@index([userId, status, updatedAt])
+  @@index([sourceFileId])
+  @@map("import_drafts")
+}
+
+model ImportDraftRow {
+  id             String   @id @default(cuid())
+  draftId        String   @map("draft_id")
+  rowIndex       Int      @map("row_index")
+  parsedPayload  Json     @map("parsed_payload")
+  currentPayload Json     @map("current_payload")
+  version        Int      @default(1)
+  selected       Boolean  @default(true)
+  reviewStatus   String   @default("unresolved") @map("review_status")
+  provenance     Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  draft     ImportDraft              @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  proposals ClassificationProposal[]
+
+  @@unique([draftId, rowIndex])
+  @@index([draftId, reviewStatus])
+  @@map("import_draft_rows")
+}
+
+model ClassificationJob {
+  id             String    @id @default(cuid())
+  userId         String    @map("user_id")
+  draftId        String    @map("draft_id")
+  targetType     String    @map("target_type")
+  status         String    @default("queued")
+  claimedBy      String?   @map("claimed_by")
+  capabilities   Json?
+  inputVersion   Int       @map("input_version")
+  attemptCount   Int       @default(0) @map("attempt_count")
+  error          String?   @db.Text
+  leaseExpiresAt DateTime? @map("lease_expires_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  claimedAt      DateTime? @map("claimed_at")
+  completedAt    DateTime? @map("completed_at")
+
+  user      User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  draft     ImportDraft              @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  proposals ClassificationProposal[]
+
+  @@index([userId, status, createdAt])
+  @@index([draftId])
+  @@map("classification_jobs")
+}
+
+model ClassificationProposal {
+  id                    String    @id @default(cuid())
+  draftId               String    @map("draft_id")
+  jobId                 String?   @map("job_id")
+  draftRowId            String    @map("draft_row_id")
+  inputDraftVersion     Int       @map("input_draft_version")
+  inputRowVersion       Int       @map("input_row_version")
+  proposedLabel         String?   @map("proposed_label") @db.Text
+  proposedCategoryId    String?   @map("proposed_category_id")
+  proposedLinkage       Json?     @map("proposed_linkage")
+  proposedTripId        String?   @map("proposed_trip_id")
+  proposedTripEntryType String?   @map("proposed_trip_entry_type")
+  proposedWalletId      String?   @map("proposed_wallet_id")
+  confidence            Decimal   @db.Decimal(5, 4)
+  reason                String    @db.Text
+  evidence              Json?
+  model                 String
+  effort                String?
+  promptVersion         String    @map("prompt_version")
+  status                String    @default("proposed")
+  idempotencyKey        String    @unique @map("idempotency_key")
+  payloadHash           String    @map("payload_hash")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  decidedAt             DateTime? @map("decided_at")
+
+  draft    ImportDraft        @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  job      ClassificationJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  draftRow ImportDraftRow     @relation(fields: [draftRowId], references: [id], onDelete: Cascade)
+
+  @@index([draftId, status])
+  @@index([draftRowId])
+  @@map("classification_proposals")
+}
+
+model AgentAuditEvent {
+  id            String   @id @default(cuid())
+  userId        String   @map("user_id")
+  actorType     String   @map("actor_type")
+  actorId       String?  @map("actor_id")
+  requestId     String?  @map("request_id")
+  toolName      String   @map("tool_name")
+  targetType    String   @map("target_type")
+  targetId      String   @map("target_id")
+  model         String?
+  effort        String?
+  promptVersion String?  @map("prompt_version")
+  beforeValue   Json?    @map("before_value")
+  afterValue    Json?    @map("after_value")
+  metadata      Json?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([targetType, targetId])
+  @@map("agent_audit_events")
+}
+
+model ParserWorkspace {
+  id               String    @id @default(cuid())
+  userId           String    @map("user_id")
+  status           String    @default("draft")
+  statementFileIds Json      @map("statement_file_ids")
+  fixtureConsentAt DateTime? @map("fixture_consent_at")
+  expiresAt        DateTime  @map("expires_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  candidates ParserCandidate[]
+
+  @@index([userId, status])
+  @@map("parser_workspaces")
+}
+
+model ParserCandidate {
+  id               String    @id @default(cuid())
+  workspaceId      String    @map("workspace_id")
+  parserId         String    @map("parser_id")
+  parserType       String    @map("parser_type")
+  specification    Json
+  sourceCode       String?   @map("source_code") @db.Text
+  testReport       Json?     @map("test_report")
+  status           String    @default("draft")
+  submittedAt      DateTime? @map("submitted_at")
+  approvedAt       DateTime? @map("approved_at")
+  approvedByUserId String?   @map("approved_by_user_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  workspace ParserWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, parserId])
+  @@index([status])
+  @@map("parser_candidates")
+}
+
+model DynamicParserDefinition {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  parserId        String   @map("parser_id")
+  name            String
+  description     String?  @db.Text
+  fileType        String   @map("file_type")
+  mode            String   @default("bank")
+  activeVersionId String?  @unique @map("active_version_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  versions      DynamicParserVersion[] @relation("ParserDefinitionVersions")
+  activeVersion DynamicParserVersion?  @relation("ActiveParserVersion", fields: [activeVersionId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, parserId])
+  @@index([userId, mode])
+  @@map("dynamic_parser_definitions")
+}
+
+model DynamicParserVersion {
+  id               String    @id @default(cuid())
+  definitionId     String    @map("definition_id")
+  version          Int
+  parserType       String    @map("parser_type")
+  specification    Json
+  sourceCode       String?   @map("source_code") @db.Text
+  sourceSha256     String    @map("source_sha256")
+  testReport       Json      @map("test_report")
+  status           String    @default("approved")
+  candidateId      String?   @unique @map("candidate_id")
+  approvedByUserId String    @map("approved_by_user_id")
+  approvedAt       DateTime  @default(now()) @map("approved_at")
+  activatedAt      DateTime? @map("activated_at")
+  retiredAt        DateTime? @map("retired_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  definition DynamicParserDefinition   @relation("ParserDefinitionVersions", fields: [definitionId], references: [id], onDelete: Cascade)
+  activeFor  DynamicParserDefinition[] @relation("ActiveParserVersion")
+
+  @@unique([definitionId, version])
+  @@index([definitionId, status])
+  @@map("dynamic_parser_versions")
+}
+
 model UserSettings {
-  id               String   @id @default(cuid())
-  userId           String   @unique @map("user_id")
-  theme            String   @default("light") // light or dark
-  currency         String   @default("SGD")
-  autoLabelEnabled Boolean  @default(false) @map("auto_label_enabled")
-  autoLabelThreshold Decimal @default(0.5) @map("auto_label_threshold") @db.Decimal(4, 2)
-  paylahInternalPrompted Boolean @default(false) @map("paylah_internal_prompted")
-  paylahAutoInternal Boolean @default(false) @map("paylah_auto_internal")
-  analyticsExcludedCategoryIds Json? @map("analytics_excluded_category_ids")
-  dateFormat       String   @default("MM/dd/yyyy")
-  defaultTimeframe String   @default("month") @map("default_timeframe")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  id                           String   @id @default(cuid())
+  userId                       String   @unique @map("user_id")
+  theme                        String   @default("light") // light or dark
+  currency                     String   @default("SGD")
+  autoLabelEnabled             Boolean  @default(false) @map("auto_label_enabled")
+  autoLabelThreshold           Decimal  @default(0.5) @map("auto_label_threshold") @db.Decimal(4, 2)
+  paylahInternalPrompted       Boolean  @default(false) @map("paylah_internal_prompted")
+  paylahAutoInternal           Boolean  @default(false) @map("paylah_auto_internal")
+  analyticsExcludedCategoryIds Json?    @map("analytics_excluded_category_ids")
+  dateFormat                   String   @default("MM/dd/yyyy")
+  defaultTimeframe             String   @default("month") @map("default_timeframe")
+  createdAt                    DateTime @default(now()) @map("created_at")
+  updatedAt                    DateTime @updatedAt @map("updated_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -119,9 +389,9 @@ model Category {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  transactions Transaction[]
-  tripEntries  TripEntry[]
+  user                   User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions           Transaction[]
+  tripEntries            TripEntry[]
   classificationPatterns ClassificationPattern[]
 
   @@unique([userId, name])
@@ -197,10 +467,10 @@ model Trip {
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
-  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  wallets     Wallet[]
-  fundings    TripFunding[]
-  entries     TripEntry[]
+  user                     User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallets                  Wallet[]
+  fundings                 TripFunding[]
+  entries                  TripEntry[]
   reimbursementAllocations TripReimbursementAllocation[]
 
   @@index([userId, startDate])
@@ -216,7 +486,7 @@ model Wallet {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  trip     Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  trip     Trip          @relation(fields: [tripId], references: [id], onDelete: Cascade)
   fundings TripFunding[]
   entries  TripEntry[]
 
@@ -273,13 +543,13 @@ model TripEntry {
   metadata            Json?
   createdAt           DateTime @default(now()) @map("created_at")
 
-  trip              Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  wallet            Wallet?      @relation(fields: [walletId], references: [id], onDelete: SetNull)
-  sourceTransaction Transaction? @relation("TripEntrySourceTransaction", fields: [sourceTransactionId], references: [id], onDelete: SetNull)
-  category          Category?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  linkedEntry       TripEntry?   @relation("TripEntryLink", fields: [linkedEntryId], references: [id], onDelete: SetNull)
-  linkedFrom        TripEntry[]  @relation("TripEntryLink")
-  fundingRecord     TripFunding? @relation("TripFundingEntry")
+  trip                             Trip                          @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  wallet                           Wallet?                       @relation(fields: [walletId], references: [id], onDelete: SetNull)
+  sourceTransaction                Transaction?                  @relation("TripEntrySourceTransaction", fields: [sourceTransactionId], references: [id], onDelete: SetNull)
+  category                         Category?                     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  linkedEntry                      TripEntry?                    @relation("TripEntryLink", fields: [linkedEntryId], references: [id], onDelete: SetNull)
+  linkedFrom                       TripEntry[]                   @relation("TripEntryLink")
+  fundingRecord                    TripFunding?                  @relation("TripFundingEntry")
   reimbursementAllocationsAsSource TripReimbursementAllocation[] @relation("TripReimbursementSource")
   reimbursementAllocationsAsTarget TripReimbursementAllocation[] @relation("TripReimbursementTarget")
 
@@ -292,25 +562,25 @@ model TripEntry {
 }
 
 model TripReimbursementAllocation {
-  id                    String   @id @default(cuid())
-  tripId                String   @map("trip_id")
-  reimbursementEntryId  String   @map("reimbursement_entry_id")
-  reimbursedEntryId     String   @map("reimbursed_entry_id")
-  amountBase            Decimal  @map("amount_base") @db.Decimal(14, 4)
-  reimbursingLocalAmount Decimal @map("reimbursing_local_amount") @db.Decimal(14, 4)
-  reimbursedLocalAmount  Decimal @map("reimbursed_local_amount") @db.Decimal(14, 4)
-  reimbursingFxRate     Decimal  @map("reimbursing_fx_rate") @db.Decimal(14, 6)
-  reimbursedFxRate      Decimal  @map("reimbursed_fx_rate") @db.Decimal(14, 6)
-  createdAt             DateTime @default(now()) @map("created_at")
+  id                     String   @id @default(cuid())
+  tripId                 String   @map("trip_id")
+  reimbursementEntryId   String   @map("reimbursement_entry_id")
+  reimbursedEntryId      String   @map("reimbursed_entry_id")
+  amountBase             Decimal  @map("amount_base") @db.Decimal(14, 4)
+  reimbursingLocalAmount Decimal  @map("reimbursing_local_amount") @db.Decimal(14, 4)
+  reimbursedLocalAmount  Decimal  @map("reimbursed_local_amount") @db.Decimal(14, 4)
+  reimbursingFxRate      Decimal  @map("reimbursing_fx_rate") @db.Decimal(14, 6)
+  reimbursedFxRate       Decimal  @map("reimbursed_fx_rate") @db.Decimal(14, 6)
+  createdAt              DateTime @default(now()) @map("created_at")
 
-  trip                 Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  reimbursementEntry   TripEntry @relation("TripReimbursementSource", fields: [reimbursementEntryId], references: [id], onDelete: Cascade)
-  reimbursedEntry      TripEntry @relation("TripReimbursementTarget", fields: [reimbursedEntryId], references: [id], onDelete: Cascade)
+  trip               Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  reimbursementEntry TripEntry @relation("TripReimbursementSource", fields: [reimbursementEntryId], references: [id], onDelete: Cascade)
+  reimbursedEntry    TripEntry @relation("TripReimbursementTarget", fields: [reimbursedEntryId], references: [id], onDelete: Cascade)
 
+  @@unique([reimbursementEntryId, reimbursedEntryId])
   @@index([tripId])
   @@index([reimbursementEntryId])
   @@index([reimbursedEntryId])
-  @@unique([reimbursementEntryId, reimbursedEntryId])
   @@map("trip_reimbursement_allocations")
 }
 
@@ -346,32 +616,32 @@ model ImportRule {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, name])
   @@index([userId, enabled, parserId])
   @@index([userId, sortOrder, createdAt])
-  @@unique([userId, name])
   @@map("import_rules")
 }
 
 model ClassificationPattern {
-  id            String   @id @default(cuid())
-  userId        String   @map("user_id")
-  patternType   String   @map("pattern_type")
-  patternValue  String   @map("pattern_value")
-  parserId      String?  @map("parser_id")
+  id            String    @id @default(cuid())
+  userId        String    @map("user_id")
+  patternType   String    @map("pattern_type")
+  patternValue  String    @map("pattern_value")
+  parserId      String?   @map("parser_id")
   direction     String?
   label         String?
-  categoryId    String?  @map("category_id")
-  markInternal  Boolean  @default(false) @map("mark_internal")
-  confidence    Decimal  @default(0) @db.Decimal(5, 3)
-  supportCount  Int      @default(0) @map("support_count")
-  matchCount    Int      @default(0) @map("match_count")
-  conflictCount Int      @default(0) @map("conflict_count")
-  appliedCount  Int      @default(0) @map("applied_count")
-  status        String   @default("suggest")
+  categoryId    String?   @map("category_id")
+  markInternal  Boolean   @default(false) @map("mark_internal")
+  confidence    Decimal   @default(0) @db.Decimal(5, 3)
+  supportCount  Int       @default(0) @map("support_count")
+  matchCount    Int       @default(0) @map("match_count")
+  conflictCount Int       @default(0) @map("conflict_count")
+  appliedCount  Int       @default(0) @map("applied_count")
+  status        String    @default("suggest")
   lastSeenAt    DateTime? @map("last_seen_at")
   metadata      Json?
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
 
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)

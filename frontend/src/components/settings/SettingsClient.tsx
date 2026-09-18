@@ -55,6 +55,8 @@ import {
   type ClassificationPatternStatus,
 } from "@/app/actions/classificationPatterns";
 import type { ParserOption } from "@/lib/parsers";
+import type { ApiTokenSummary } from "@/lib/apiTokens";
+import { ApiTokensPanel } from "@/components/settings/ApiTokensPanel";
 
 interface SettingsClientProps {
   user: UserProfile | null;
@@ -64,6 +66,7 @@ interface SettingsClientProps {
   parserOptions: ParserOption[];
   initialClassificationPatterns: ClassificationPattern[];
   initialAppliedClassificationSummary: AppliedClassificationSummaryItem[];
+  initialApiTokens: ApiTokenSummary[];
 }
 
 export function SettingsClient({
@@ -74,6 +77,7 @@ export function SettingsClient({
   parserOptions,
   initialClassificationPatterns,
   initialAppliedClassificationSummary,
+  initialApiTokens,
 }: SettingsClientProps) {
   const PREVIEW_CHIP_LIMIT = 4;
   const tripCategoryNames = TRIP_CATEGORY_DEFINITIONS.map((item) => item.name);
@@ -90,7 +94,7 @@ export function SettingsClient({
   const [appliedClassificationSummary, setAppliedClassificationSummary] = useState<
     AppliedClassificationSummaryItem[]
   >(initialAppliedClassificationSummary);
-  const [activeTab, setActiveTab] = useState<"profile" | "rules">("profile");
+  const [activeTab, setActiveTab] = useState<"profile" | "rules" | "api">("profile");
 
   const [passwordState, setPasswordState] = useState({
     current: "",
@@ -523,6 +527,7 @@ export function SettingsClient({
         tabs={[
           { key: "profile", label: "Profile & Preferences" },
           { key: "rules", label: "Rules" },
+          { key: "api", label: "API Tokens" },
         ]}
         activeTab={activeTab}
         onChange={setActiveTab}
@@ -770,7 +775,7 @@ export function SettingsClient({
 
       </div>
       </>
-      ) : (
+      ) : activeTab === "rules" ? (
       <>
 
       <Card>
@@ -1041,6 +1046,8 @@ export function SettingsClient({
         </CardContent>
       </Card>
       </>
+      ) : (
+        <ApiTokensPanel initialTokens={initialApiTokens} />
       )}
 
       <ManageCategoriesModal

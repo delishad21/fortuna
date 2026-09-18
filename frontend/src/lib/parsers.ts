@@ -11,10 +11,19 @@ export async function getParserOptions(
   mode: ParserMode = "bank",
 ): Promise<ParserOption[]> {
   try {
+    const session = await auth();
+    const internalToken = process.env.INTERNAL_SERVICE_TOKEN;
     const parserServiceUrl =
       process.env.PARSER_SERVICE_URL || "http://localhost:4000";
     const response = await fetch(`${parserServiceUrl}/parsers?mode=${mode}`, {
       cache: "no-store", // Always fetch fresh parser list
+      headers:
+        session?.user?.id && internalToken
+          ? {
+              "X-Internal-Service-Token": internalToken,
+              "X-Authenticated-User-Id": session.user.id,
+            }
+          : undefined,
     });
 
     if (!response.ok) {
@@ -86,3 +95,4 @@ function getFallbackParsers(mode: ParserMode): ParserOption[] {
 
   return mode === "trip" ? tripParsers : bankParsers;
 }
+import { auth } from "@/lib/auth";

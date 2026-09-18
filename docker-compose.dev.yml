@@ -1,3 +1,6 @@
+# Preserve existing named volumes and Compose ownership after the repository rename.
+name: personal-finance-app
+
 services:
   # Single LAN/local entrypoint for the dev app
   edge:
@@ -10,11 +13,11 @@ services:
       - ./nginx/dev.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       frontend:
-        condition: service_started
+        condition: service_healthy
       file-parser:
-        condition: service_started
+        condition: service_healthy
       data-service:
-        condition: service_started
+        condition: service_healthy
     networks:
       - finance-network
 
@@ -51,11 +54,49 @@ services:
     environment:
       - PORT=4000
       - FRONTEND_URL=${APP_ORIGIN:-http://localhost:3000}
+      - DATA_SERVICE_URL=http://data-service:4001
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-development-only-internal-service-token}
+      - SANDBOX_QUEUE_DIR=/sandbox
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     volumes:
       # Mount source code for hot reload
       - ./services/file-parser/app:/app/app
+      - parser-sandbox-queue:/sandbox
+    depends_on:
+      parser-sandbox-worker:
+        condition: service_started
     networks:
       - finance-network
+
+  parser-sandbox-worker:
+    build:
+      context: ./services/file-parser
+      dockerfile: Dockerfile.dev
+    container_name: finance-parser-sandbox-dev
+    restart: unless-stopped
+    command: python -m app.sandbox_worker
+    network_mode: none
+    read_only: true
+    cap_drop: ["ALL"]
+    cap_add: ["SETUID", "SETGID"]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 768m
+    cpus: 1.0
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    environment:
+      - SANDBOX_QUEUE_DIR=/sandbox
+      - SANDBOX_WALL_TIMEOUT_SECONDS=20
+    volumes:
+      - ./services/file-parser/app:/app/app:ro
+      - parser-sandbox-queue:/sandbox
 
   # Data Service (Node.js/TypeScript)
   data-service:
@@ -70,17 +111,61 @@ services:
       - PORT=4001
       - DATABASE_URL=postgresql://financeuser:financepass@postgres:5432/personal_finance?schema=public
       - NODE_ENV=development
+      - PARSER_SERVICE_URL=http://file-parser:4000
+      - STATEMENT_STORAGE_DIR=/data/statements
+      - COMMIT_TOKEN_SECRET=${COMMIT_TOKEN_SECRET:-development-only-commit-token-secret-change-me}
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-development-only-internal-service-token}
     volumes:
       # Mount service code for hot reload
       - ./services/data-service:/app
       # Exclude node_modules
       - /app/node_modules
+      - statement-data:/data/statements
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
     networks:
       - finance-network
     command: sh -c "npx prisma migrate deploy && npm run dev"
+
+  # One account-scoped Hermes MCP gateway. Start explicitly with:
+  # docker compose -f docker-compose.dev.yml --profile hermes up -d finance-mcp
+  finance-mcp:
+    profiles: ["hermes"]
+    build:
+      context: ./services/finance-mcp
+      dockerfile: Dockerfile.dev
+    container_name: finance-mcp-dev
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${FINANCE_MCP_PORT:-4002}:4002"
+    environment:
+      - PORT=4002
+      - HOST=0.0.0.0
+      - DATA_SERVICE_URL=http://data-service:4001
+      - PARSER_SERVICE_URL=http://file-parser:4000
+      - FINANCE_API_TOKEN=${FINANCE_API_TOKEN:-}
+      - MCP_CLIENT_TOKEN=${MCP_CLIENT_TOKEN:-}
+      - MCP_ALLOWED_HOSTS=localhost,127.0.0.1,finance-mcp,finance-mcp-dev
+      - STATEMENT_INBOX=/inbox
+    volumes:
+      - ./services/finance-mcp/src:/app/src
+      - ./services/finance-mcp/tsconfig.json:/app/tsconfig.json
+      - ./hermes-inbox:/inbox:ro
+      - /app/node_modules
+    depends_on:
+      data-service:
+        condition: service_healthy
+      file-parser:
+        condition: service_healthy
+    networks:
+      - finance-network
 
   # Next.js Frontend Application
   frontend:
@@ -99,6 +184,13 @@ services:
       - PARSER_SERVICE_URL=http://file-parser:4000
       - DATA_SERVICE_URL=http://data-service:4001
       - NODE_ENV=development
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-development-only-internal-service-token}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     volumes:
       # Mount source code for hot reload
       - ./frontend/src:/app/src
@@ -113,9 +205,9 @@ services:
       postgres:
         condition: service_healthy
       file-parser:
-        condition: service_started
+        condition: service_healthy
       data-service:
-        condition: service_started
+        condition: service_healthy
     networks:
       - finance-network
     command: npm run dev -- --hostname 0.0.0.0
@@ -123,3 +215,7 @@ services:
 networks:
   finance-network:
     driver: bridge
+
+volumes:
+  statement-data:
+  parser-sandbox-queue:

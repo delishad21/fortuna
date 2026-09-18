@@ -1,6 +1,5 @@
 "use client";
 
-import { BadgeDollarSign } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface BrandMarkProps {
@@ -12,11 +11,11 @@ export function BrandMark({ className, iconClassName }: BrandMarkProps) {
   return (
     <div
       className={cn(
-        "flex items-center justify-center rounded-full bg-primary text-white",
+        "relative flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-black",
         className,
       )}
     >
-      <BadgeDollarSign className={cn("size-6", iconClassName)} />
+      <img src="/images/brand/fortuna.png" alt="" aria-hidden="true" className="absolute h-[170%] w-[170%] max-w-none object-cover" />
     </div>
   );
 }
