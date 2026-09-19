@@ -12,10 +12,10 @@ docker compose -f docker-compose.dev.yml up -d
 cd mobile
 nvm use
 npm ci
-npm start
+npm run start:lan
 ```
 
-Scan the QR code with an Expo Go version supporting SDK 57. The phone and computer must be on the same network. At sign-in, enter the **web app** domain or URL reachable from the phone, for example `http://192.168.1.10:3001`. Bare domains automatically use HTTPS. Use the actual LAN address and the `APP_PORT` configured for your Docker stack; this machine currently uses port **3001**. `localhost` on a physical phone refers to the phone itself.
+Scan the QR code with an Expo Go version supporting SDK 57. The phone and computer must be on the same network. At sign-in, enter the **web app** domain or URL reachable from the phone, for example `https://fortuna.delishad.com`. Bare domains automatically use HTTPS. For local development, use the computer's LAN address and the `APP_PORT` configured for your Docker stack. `localhost` on a physical phone refers to the phone itself.
 
 To prefill the server address, copy `.env.example` to `.env.local` and set `EXPO_PUBLIC_API_URL`. This public variable must never contain credentials. Local HTTP is accepted only in development; production requires HTTPS. Sign in with your existing Fortuna account or register in the app.
 
@@ -26,6 +26,10 @@ npm run start:dev-client    # An installed custom development build
 ```
 
 The optional Expo web preview needs a same-origin API proxy when the backend is on another port; the end-to-end test provides it. Next.js remains the web product.
+
+## Expo Go development loop
+
+Set `EXPO_PUBLIC_API_URL` in `.env.local` to the HTTPS domain of the Fortuna server, then run `npm run start:lan` from `mobile/`. With the phone on the same LAN, open Expo Go and scan the displayed QR code. Source edits update the running app without compiling another APK. The server field remains editable on the sign-in screen, and the selected host is stored with the mobile session.
 
 ## Features and interactions
 
@@ -85,4 +89,4 @@ The real folder is `/Users/johansoo/Projects/fortuna`. A compatibility symlink a
 
 ## Downloadable Android test APK
 
-The `Build Android test APK` GitHub Actions workflow runs for mobile changes on `main` and can also be started manually from the Actions tab. Open a successful run, download the `Fortuna-Android-test-*` artifact, unzip it, and install the APK on Android. Android may ask you to allow installs from your browser or file manager. This test APK uses debug signing and is intended for direct device testing, not Play Store release.
+The `Build Android test APK` GitHub Actions workflow is manual-only so Expo Go iterations do not create unnecessary APKs. Start it from the Actions tab when a tested mobile version is ready to package. Open a successful run, download the `Fortuna-Android-test-*` artifact, unzip it, and install the APK on Android. Android may ask you to allow installs from your browser or file manager. This test APK uses debug signing and is intended for direct device testing, not Play Store release.

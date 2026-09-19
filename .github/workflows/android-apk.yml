@@ -2,11 +2,6 @@ name: Build Android test APK
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "mobile/**"
-      - ".github/workflows/android-apk.yml"
 
 permissions:
   contents: read

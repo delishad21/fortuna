@@ -45,7 +45,8 @@
     "export": "expo export --platform all",
     "test:e2e": "playwright test",
     "start:dev-client": "expo start --dev-client",
-    "brand:sync": "node tooling/sync-brand.mjs"
+    "brand:sync": "node tooling/sync-brand.mjs",
+    "start:lan": "expo start --go --lan"
   },
   "private": true,
   "engines": {
