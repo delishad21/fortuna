@@ -5,6 +5,8 @@ export interface TransactionLinkage {
   reimbursesAllocations?: Array<{
     transactionId?: string;
     pendingBatchIndex?: number;
+    stagedDraftId?: string;
+    stagedRowId?: string;
     amount: number;
     amountBase?: number;
     reimbursingFxRate?: number;
@@ -138,4 +140,5 @@ export interface TransactionTableProps {
     transaction: Transaction,
   ) => ReactNode;
   reviewActionLeft?: ReactNode;
+  primaryActionLabel?: string;
 }

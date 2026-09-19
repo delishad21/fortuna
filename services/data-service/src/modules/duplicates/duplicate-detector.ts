@@ -11,6 +11,10 @@ export interface TransactionLinkage {
   reimbursesAllocations?: Array<{
     transactionId?: string;
     pendingBatchIndex?: number;
+    stagedDraftId?: string;
+    stagedRowId?: string;
+    targetDescription?: string;
+    targetDate?: string;
     amount: number;
   }>;
   reimbursedByAllocations?: Array<{

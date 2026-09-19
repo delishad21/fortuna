@@ -30,6 +30,32 @@ export interface ImportResult {
   error?: string;
 }
 
+export function detachStagedReimbursementAllocations<
+  T extends {
+    stagedDraftId?: string;
+    stagedRowId?: string;
+    amount: number;
+  },
+>(allocations: T[], leftoverAmount = 0) {
+  const stagedAmount = allocations
+    .filter(
+      (allocation) =>
+        typeof allocation.stagedDraftId === "string" &&
+        typeof allocation.stagedRowId === "string",
+    )
+    .reduce((sum, allocation) => sum + Number(allocation.amount || 0), 0);
+  return {
+    linkedAllocations: allocations.filter(
+      (allocation) =>
+        !(
+          typeof allocation.stagedDraftId === "string" &&
+          typeof allocation.stagedRowId === "string"
+        ),
+    ),
+    leftoverAmount: Number((leftoverAmount + stagedAmount).toFixed(2)),
+  };
+}
+
 const IMPORT_ORIGINAL_INDEX_KEY = "__importOriginalIndex";
 
 export function stripImportOrderMetadata(metadata: unknown) {
@@ -748,13 +774,19 @@ export class TransactionService {
       .map((item) => ({
         transactionId: item.transactionId,
         pendingBatchIndex: item.pendingBatchIndex,
+        stagedDraftId: item.stagedDraftId,
+        stagedRowId: item.stagedRowId,
+        targetDescription: item.targetDescription,
+        targetDate: item.targetDate,
         amount: Number(item.amount || 0),
       }))
       .filter(
         (item) =>
           item.amount > 0 &&
           (typeof item.transactionId === "string" ||
-            typeof item.pendingBatchIndex === "number"),
+            typeof item.pendingBatchIndex === "number" ||
+            (typeof item.stagedDraftId === "string" &&
+              typeof item.stagedRowId === "string")),
       );
   }
 
@@ -1489,8 +1521,12 @@ export class TransactionService {
             const normalizedAllocations = this.normalizeReimbursementAllocations(
               originalLinkage,
             );
+            const detached = detachStagedReimbursementAllocations(
+              normalizedAllocations,
+              Number(baseLinkage.leftoverAmount || 0),
+            );
 
-            const resolvedAllocations = normalizedAllocations
+            const resolvedAllocations = detached.linkedAllocations
               .map((allocation) => {
                 if (allocation.transactionId) return allocation;
                 if (
@@ -1525,8 +1561,9 @@ export class TransactionService {
                   type: "reimbursement",
                   reimbursesAllocations: resolvedAllocations,
                   leftoverAmount:
-                    baseLinkage.leftoverAmount !== undefined
-                      ? Number(baseLinkage.leftoverAmount)
+                    baseLinkage.leftoverAmount !== undefined ||
+                    detached.leftoverAmount > 0
+                      ? detached.leftoverAmount
                       : undefined,
                   leftoverCategoryId: baseLinkage.leftoverCategoryId ?? null,
                   autoDetected: baseLinkage.autoDetected,
@@ -1657,7 +1694,12 @@ export class TransactionService {
             "Only positive inflow transactions can be marked as reimbursement",
           );
         }
-        normalizedAllocations = this.normalizeReimbursementAllocations(linkage)
+        const allAllocations = this.normalizeReimbursementAllocations(linkage);
+        const totalAllocatedIncludingStaged = allAllocations.reduce(
+          (sum, allocation) => sum + allocation.amount,
+          0,
+        );
+        normalizedAllocations = allAllocations
           .map((allocation) =>
             typeof allocation.transactionId === "string"
               ? {
@@ -1674,7 +1716,7 @@ export class TransactionService {
           (sum, allocation) => sum + allocation.amount,
           0,
         );
-        if (totalAllocated - amountIn > 0.01) {
+        if (totalAllocatedIncludingStaged - amountIn > 0.01) {
           throw new Error("Total reimbursed amount cannot exceed reimbursement amount");
         }
         for (const allocation of normalizedAllocations) {

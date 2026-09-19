@@ -30,6 +30,7 @@ interface TransactionTableToolbarProps {
   onAccountColorChange?: (color: string) => void;
   onAddAccountIdentifier?: () => void;
   reviewActionLeft?: ReactNode;
+  primaryActionLabel?: string;
 }
 
 export function TransactionTableToolbar({
@@ -52,6 +53,7 @@ export function TransactionTableToolbar({
   onAccountColorChange,
   onAddAccountIdentifier,
   reviewActionLeft,
+  primaryActionLabel,
 }: TransactionTableToolbarProps) {
   return (
     <div className="shrink-0 py-3 mb-3">
@@ -121,7 +123,7 @@ export function TransactionTableToolbar({
               >
                 {isCheckingDuplicates
                   ? "Checking..."
-                  : `Import Selected (${selectedCount})`}
+                  : primaryActionLabel || `Import Selected (${selectedCount})`}
               </Button>
             </div>
           )}

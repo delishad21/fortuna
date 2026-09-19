@@ -4,6 +4,7 @@ import { useApi, useResource } from "./api";
 import {
   Button,
   Card,
+  Chips,
   Choice,
   confirm,
   Form,
@@ -560,6 +561,8 @@ export function ReimbursementScreen({ navigation, route }: any) {
     Record<string, { item: any; amount: string }>
   >({});
   const [busy, setBusy] = useState(false);
+  const [targetTab, setTargetTab] = useState("Saved expenses");
+  const stagedTargets = useResource("getStagedReimbursementTargets");
   const candidates = useResource(
     tripId
       ? "searchTripEntriesForReimbursement"
@@ -592,20 +595,32 @@ export function ReimbursementScreen({ navigation, route }: any) {
           setOffset(0);
         }}
       />
-      <State {...candidates} />
-      {(candidates.data?.transactions || [])
+      {!tripId && (
+        <Chips
+          values={["Saved expenses", "Staged"]}
+          value={targetTab}
+          onChange={setTargetTab}
+        />
+      )}
+      <State {...(targetTab === "Staged" && !tripId ? stagedTargets : candidates)} />
+      {(targetTab === "Staged" && !tripId
+        ? stagedTargets.data?.transactions || []
+        : candidates.data?.transactions || [])
         .filter((c: any) => c.id !== item.id)
         .map((c: any) => (
           <TransactionRow
-            key={c.id}
+            key={c.stagedRowId || c.id}
             item={c}
-            selected={!!allocations[c.id]}
+            selected={!!allocations[c.stagedRowId ? `staged:${c.stagedDraftId}:${c.stagedRowId}` : c.id]}
             onPress={() =>
               setAllocations((old) => {
                 const next = { ...old };
-                if (next[c.id]) delete next[c.id];
+                const key = c.stagedRowId
+                  ? `staged:${c.stagedDraftId}:${c.stagedRowId}`
+                  : c.id;
+                if (next[key]) delete next[key];
                 else
-                  next[c.id] = {
+                  next[key] = {
                     item: c,
                     amount: String(
                       Math.max(
@@ -624,7 +639,7 @@ export function ReimbursementScreen({ navigation, route }: any) {
             }
           />
         ))}
-      <View style={styles.between}>
+      {targetTab === "Saved expenses" && <View style={styles.between}>
         <Button
           title="Previous"
           secondary
@@ -637,7 +652,7 @@ export function ReimbursementScreen({ navigation, route }: any) {
           disabled={offset + 20 >= (candidates.data?.total || 0)}
           onPress={() => setOffset(offset + 20)}
         />
-      </View>
+      </View>}
       {Object.entries(allocations).map(([id, a]) => (
         <Input
           key={id}
@@ -661,16 +676,21 @@ export function ReimbursementScreen({ navigation, route }: any) {
         onPress={async () => {
           setBusy(true);
           try {
-            const values = Object.entries(allocations).map(
-              ([transactionId, a]) => ({
-                transactionId,
-                amount: Number(a.amount),
-              }),
-            );
+            const values = Object.entries(allocations).map(([key, a]) => ({
+              ...(a.item.stagedDraftId && a.item.stagedRowId
+                ? {
+                    stagedDraftId: a.item.stagedDraftId,
+                    stagedRowId: a.item.stagedRowId,
+                    targetDescription: a.item.label || a.item.description,
+                    targetDate: a.item.date,
+                  }
+                : { transactionId: key }),
+              amount: Number(a.amount),
+            }));
             if (tripId)
               await call("createTripReimbursementLink", tripId, item.id, {
                 reimbursedAllocations: values.map((v) => ({
-                  transactionId: v.transactionId,
+                  transactionId: "transactionId" in v ? v.transactionId : "",
                   amountBase: v.amount,
                 })),
               });

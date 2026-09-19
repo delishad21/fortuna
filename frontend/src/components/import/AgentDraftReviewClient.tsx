@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Bot, Check, RefreshCw, X } from "lucide-react";
+import { Bot, Check, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
+import { TransactionTable } from "@/components/transaction-table/TransactionTable";
+import { ReimbursementSelectorModal } from "./ReimbursementSelectorModal";
+import type { Transaction, TransactionLinkage } from "@/components/transaction-table/types";
 import {
   commitAgentDraft,
   decideAgentProposal,
@@ -12,468 +14,332 @@ import {
   updateAgentDraftRow,
   validateAgentDraft,
 } from "@/app/actions/agentDrafts";
-
 import { getCategories } from "@/app/actions/categories";
 import { getAccountNumbers } from "@/app/actions/accountNumbers";
 
-type Draft = Record<string, any> & { rows: Array<Record<string, any>> };
+type DraftRow = Record<string, any>;
+type Draft = Record<string, any> & { rows: DraftRow[] };
 
-function amount(payload: Record<string, any>) {
-  const value = Number(
-    payload.amountOut || payload.amountIn || payload.localAmount || 0,
+function rowTone(row: DraftRow) {
+  if (row.review?.labelling) return "needs_label";
+  if (
+    (row.proposals || []).some((proposal: Record<string, any>) =>
+      ["proposed", "accepted", "auto_applied"].includes(proposal.status),
+    )
+  ) return "llm";
+  const payload = row.currentPayload || {};
+  if (
+    payload.suggestionApplied ||
+    payload.suggestionSource ||
+    payload.suggestedLabel ||
+    payload.suggestedCategoryId
+  ) return "algorithm";
+  return "";
+}
+
+function tableTransaction(draft: Draft, row: DraftRow): Transaction {
+  const payload = row.currentPayload || {};
+  const acceptedProposal = (row.proposals || []).find(
+    (proposal: Record<string, any>) =>
+      proposal.status === "accepted" || proposal.status === "auto_applied",
   );
-  return new Intl.NumberFormat("en-SG", {
-    style: "currency",
-    currency: payload.currency || payload.localCurrency || "SGD",
-  }).format(value);
+  return {
+    ...payload,
+    date: String(payload.date || "").slice(0, 10),
+    description: payload.description || "",
+    metadata: {
+      ...(payload.metadata || {}),
+      sourceFilename: draft.sourceFilename,
+      reviewStatus: row.reviewStatus,
+      reviewTint: rowTone(row),
+    },
+    suggestedLabel: acceptedProposal?.proposedLabel || payload.suggestedLabel,
+    suggestedCategoryId:
+      acceptedProposal?.proposedCategoryId || payload.suggestedCategoryId,
+    suggestionApplied: rowTone(row) === "algorithm",
+    suggestionSource: payload.suggestionSource || "heuristic",
+  };
 }
 
 export function AgentDraftReviewClient({
   initialDraft,
+  initialDrafts,
+  embedded = false,
 }: {
-  initialDraft: Draft;
+  initialDraft?: Draft;
+  initialDrafts?: Draft[];
+  embedded?: boolean;
 }) {
-  const [draft, setDraft] = useState(initialDraft);
-  const [filter, setFilter] = useState("Needs review");
-  const [search, setSearch] = useState("");
-  const [editing, setEditing] = useState<string | null>(null);
-  const [edit, setEdit] = useState<Record<string, any>>({});
-  const [categories, setCategories] = useState<
-    Array<{ id: string; name: string }>
-  >([]);
-  const [accounts, setAccounts] = useState<
-    Array<{ accountIdentifier: string }>
-  >([]);
+  const [drafts, setDrafts] = useState<Draft[]>(
+    initialDrafts || (initialDraft ? [initialDraft] : []),
+  );
+  const [categories, setCategories] = useState<any[]>([]);
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [reimbursement, setReimbursement] = useState<null | {
+    globalIndex: number;
+    transactions: Transaction[];
+    currentIndex: number;
+  }>(null);
+
   useEffect(() => {
     Promise.all([getCategories({ scope: "settings" }), getAccountNumbers()])
-      .then(([c, a]) => {
-        setCategories(c);
-        setAccounts(a);
+      .then(([nextCategories, nextAccounts]) => {
+        setCategories(nextCategories);
+        setAccounts(nextAccounts);
       })
       .catch((error) => setMessage(error.message));
   }, []);
-  const closed =
-    ["committed", "discarded", "expired"].includes(draft.status) ||
-    new Date(draft.expiresAt) <= new Date();
-  const rows = draft.rows.filter((row) => {
-    const review = row.review || {};
-    const match =
-      filter === "All" ||
-      (filter === "Needs review" && review.needsReview) ||
-      (filter === "Labelling" && review.labelling) ||
-      (filter === "Reconciliation" && review.reconciliation) ||
-      (filter === "Ready" && !review.needsReview);
-    return (
-      match &&
-      `${row.currentPayload?.label || ""} ${row.currentPayload?.description || ""}`
-        .toLowerCase()
-        .includes(search.toLowerCase())
-    );
-  });
-  const [busy, setBusy] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+
+  const flatRows = useMemo(
+    () => drafts.flatMap((draft) =>
+      (draft.rows || []).map((row) => ({
+        draft,
+        row,
+        transaction: tableTransaction(draft, row),
+      })),
+    ),
+    [drafts],
+  );
+  const transactions = flatRows.map((item) => item.transaction);
+  const selectedIndices = new Set(
+    flatRows.flatMap((item, index) => (item.row.selected ? [index] : [])),
+  );
 
   const refresh = async () => {
-    const next = await getAgentDraft(draft.id);
-    setDraft(next.draft as Draft);
+    setDrafts(await Promise.all(
+      drafts.map((draft) =>
+        getAgentDraft(draft.id).then((result) => result.draft as Draft),
+      ),
+    ));
   };
 
-  const decide = async (proposalId: string, decision: "accept" | "reject") => {
-    setBusy(proposalId);
-    setMessage(null);
+  const updateRow = async (
+    index: number,
+    input: { currentPayload?: Record<string, unknown>; selected?: boolean },
+  ) => {
+    const item = flatRows[index];
+    if (!item) return;
+    setBusy(true);
+    setMessage("");
     try {
-      await decideAgentProposal(proposalId, decision);
-      await refresh();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Decision failed");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const toggleSelected = async (row: Record<string, any>) => {
-    setBusy(row.id);
-    try {
-      await updateAgentDraftRow(draft.id, row.id, {
-        expectedVersion: row.version,
-        selected: !row.selected,
+      await updateAgentDraftRow(item.draft.id, item.row.id, {
+        expectedVersion: item.row.version,
+        ...input,
+        ...(input.currentPayload ? { reviewStatus: "edited" as const } : {}),
       });
       await refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Update failed");
+      setMessage(error instanceof Error ? error.message : "Could not update row");
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   };
 
-  const validateAndCommit = async () => {
-    setBusy("commit");
-    setMessage(null);
+  const updateField = (index: number, field: string, value: any) => {
+    const item = flatRows[index];
+    if (!item) return;
+    void updateRow(index, {
+      currentPayload: { ...item.row.currentPayload, [field]: value },
+    });
+  };
+
+  const setAllSelected = async (selected: boolean) => {
+    setBusy(true);
+    setMessage("");
     try {
-      const validation = await validateAgentDraft(draft.id);
-      if (!validation.valid) {
-        setMessage(
-          [...(validation.errors || []), ...(validation.warnings || [])]
-            .map(
-              (item: any) =>
-                `${item.rowIndex !== undefined ? `Row ${item.rowIndex + 1}: ` : ""}${item.message}`,
-            )
-            .join("\n") || "Review the flagged rows before committing.",
-        );
+      await Promise.all(
+        flatRows
+          .filter((item) => item.row.selected !== selected)
+          .map((item) =>
+            updateAgentDraftRow(item.draft.id, item.row.id, {
+              expectedVersion: item.row.version,
+              selected,
+            }),
+          ),
+      );
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not update rows");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const commitSelectedDrafts = async () => {
+    setBusy(true);
+    setMessage("");
+    try {
+      const candidates = drafts.filter((draft) =>
+        draft.rows.some((row: DraftRow) => row.selected),
+      );
+      const validations = await Promise.all(candidates.map(async (draft) => ({
+        draft,
+        validation: await validateAgentDraft(draft.id),
+      })));
+      const invalid = validations.filter((item) => !item.validation.valid);
+      if (invalid.length) {
+        setMessage(invalid.flatMap(({ draft, validation }) =>
+          [...(validation.errors || []), ...(validation.warnings || [])].map(
+            (item: any) =>
+              `${draft.sourceFilename}${item.rowIndex !== undefined ? ` row ${item.rowIndex + 1}` : ""}: ${item.message}`,
+          ),
+        ).join("\n") || "Resolve the flagged rows before committing.");
         await refresh();
         return;
       }
-      if (
-        !window.confirm(
-          `${validation.duplicates?.length ? `${validation.duplicates.length} possible duplicates found. Review these before continuing.\n` : ""}Commit ${validation.summary.selected} selected rows? This writes financial records and cannot be automatically undone.`,
-        )
-      )
-        return;
-      await commitAgentDraft(draft.id, validation.confirmationToken);
-      setMessage("Import committed successfully.");
+      const selected = validations.reduce(
+        (sum, item) => sum + Number(item.validation.summary?.selected || 0), 0,
+      );
+      if (!window.confirm(
+        `Commit ${selected} selected rows across ${validations.length} staged import${validations.length === 1 ? "" : "s"}?`,
+      )) return;
+      for (const { draft, validation } of validations) {
+        await commitAgentDraft(draft.id, validation.confirmationToken);
+      }
+      setMessage("Selected staged imports committed successfully.");
       await refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Commit failed");
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   };
 
+  const openReimbursement = (globalIndex: number) => {
+    const source = flatRows[globalIndex];
+    if (!source) return;
+    const sourceRows = flatRows.filter((item) => item.draft.id === source.draft.id);
+    setReimbursement({
+      globalIndex,
+      transactions: sourceRows.map((item) => item.transaction),
+      currentIndex: sourceRows.findIndex((item) => item.row.id === source.row.id),
+    });
+  };
+
+  const legend = (
+    <div className="hidden items-center gap-3 text-xs text-dark-5 xl:flex dark:text-dark-6">
+      <span className="rounded bg-blue-50 px-2 py-1 dark:bg-blue-950/20">Algorithm</span>
+      <span className="rounded bg-primary/10 px-2 py-1">LLM confirmed</span>
+      <span className="rounded bg-orange-light-4 px-2 py-1 dark:bg-orange-dark-3/20">Needs labelling</span>
+    </div>
+  );
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <Link
-            href="/imports"
-            className="mb-2 inline-flex items-center gap-1 text-sm text-primary"
-          >
-            <ArrowLeft className="size-4" /> Imports
-          </Link>
-          <h1 className="font-display text-3xl font-bold text-dark dark:text-white">
-            Agent Import Draft
-          </h1>
-          <p className="text-sm text-dark-5 dark:text-dark-6">
-            {draft.sourceFilename} · {draft.mode} · version {draft.version} ·{" "}
-            {draft.status}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button
-            variant="secondary"
-            disabled={!!busy}
-            onClick={() =>
-              void refresh().catch((error) => setMessage(error.message))
-            }
-            leftIcon={<RefreshCw className="size-4" />}
-          >
+    <div className={embedded ? "h-[68vh]" : "h-[calc(100vh-9rem)] space-y-3"}>
+      {!embedded && (
+        <div className="flex items-end justify-between">
+          <div>
+            <Link href="/imports" className="text-sm text-primary">← Imports</Link>
+            <h1 className="font-display text-2xl font-bold text-dark dark:text-white">
+              {drafts.length === 1 ? drafts[0].sourceFilename : "Staged imports"}
+            </h1>
+          </div>
+          <Button variant="secondary" disabled={busy} onClick={() => void refresh()}
+            leftIcon={<RefreshCw className="size-4" />}>
             Refresh
           </Button>
-          {!closed && (
-            <Button
-              disabled={!!busy}
-              onClick={validateAndCommit}
-              isLoading={busy === "commit"}
-              leftIcon={<Check className="size-4" />}
-            >
-              Validate and Commit
-            </Button>
-          )}
         </div>
-      </div>
-
+      )}
       {message && (
         <div className="whitespace-pre-wrap rounded-lg border border-stroke p-3 text-sm text-dark dark:border-dark-3 dark:text-white">
           {message}
         </div>
       )}
-
-      <div className="flex flex-wrap gap-2">
-        {["Needs review", "Labelling", "Reconciliation", "Ready", "All"].map(
-          (value) => (
-            <button
-              key={value}
-              onClick={() => setFilter(value)}
-              className={`min-h-11 rounded-lg border px-4 text-sm ${filter === value ? "border-primary bg-primary/10 text-primary" : "border-stroke text-dark dark:border-dark-3 dark:text-white"}`}
-            >
-              {value}
-            </button>
-          ),
-        )}
-      </div>
-      <input
-        aria-label="Search staged transactions"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search description or label"
-        className="min-h-11 w-full rounded-lg border border-stroke bg-white px-3 text-dark dark:border-dark-3 dark:bg-gray-dark dark:text-white"
-      />
-      <p className="text-sm text-dark-5 dark:text-dark-6">
-        {draft.reviewSummary?.needsReview || 0} need review ·{" "}
-        {draft.reviewSummary?.ready || 0} ready ·{" "}
-        {draft.rows.filter((r) => r.selected).length} selected. Ready rows are
-        still staged until you commit.
-      </p>
-      <Card>
-        <CardHeader>
-          <CardTitle>Review Rows ({draft.rows.length})</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {rows.length === 0 && (
-            <p className="py-6 text-dark-5 dark:text-dark-6">
-              No transactions match this view. Choose All to see every staged
-              row.
-            </p>
-          )}
-          {rows.map((row) => {
-            const payload = row.currentPayload || {};
-            const proposals = (row.proposals || []) as Array<
-              Record<string, any>
-            >;
-            return (
-              <div
-                key={row.id}
-                className="rounded-lg border border-stroke p-4 dark:border-dark-3"
-              >
-                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={row.selected}
-                        aria-label={`Select row ${row.rowIndex + 1}`}
-                        disabled={!!busy || closed}
-                        onChange={() => toggleSelected(row)}
-                      />
-                      <span className="font-semibold text-dark dark:text-white">
-                        {payload.label || payload.description}
-                      </span>
-                      <span className="rounded bg-gray-2 px-2 py-0.5 text-xs dark:bg-dark-3">
-                        {row.reviewStatus}
-                      </span>
+      <TransactionTable
+        parsedData={{
+          success: true,
+          filename: drafts.map((draft) => draft.sourceFilename).join("; "),
+          parserId: `${drafts.length} staged group${drafts.length === 1 ? "" : "s"}`,
+          transactions,
+          count: transactions.length,
+        }}
+        transactions={transactions}
+        categories={categories}
+        accountIdentifier=""
+        accountIdentifiers={accounts}
+        selectedIndices={selectedIndices}
+        isCheckingDuplicates={false}
+        isImporting={busy}
+        showAccountSelector={false}
+        onUpdateTransaction={updateField}
+        onAccountIdentifierChange={() => undefined}
+        onTransactionAccountIdentifierChange={(index, value) =>
+          updateField(index, "accountIdentifier", value)
+        }
+        onImport={() => void commitSelectedDrafts()}
+        primaryActionLabel={`Validate & commit (${selectedIndices.size})`}
+        onSelectAll={() => void setAllSelected(true)}
+        onDeselectAll={() => void setAllSelected(false)}
+        onToggleSelection={(index) =>
+          void updateRow(index, { selected: !flatRows[index]?.row.selected })
+        }
+        onAddCategoryClick={() =>
+          setMessage("Create new categories in Settings, then refresh this review.")
+        }
+        onLinkageChange={(index, linkage) => updateField(index, "linkage", linkage)}
+        onOpenReimbursementSelector={openReimbursement}
+        deferCellCommit
+        lockLinkedReimbursements={false}
+        allowReservedCategorySelection
+        reviewActionLeft={legend}
+        renderExpandedActions={(index) => {
+          const item = flatRows[index];
+          if (!item) return null;
+          return (
+            <div className="space-y-3">
+              {(item.row.review?.reasons || []).map((reason: string) => (
+                <p key={reason} className="text-sm text-primary">{reason}</p>
+              ))}
+              {(item.row.proposals || []).map((proposal: Record<string, any>) => (
+                <div key={proposal.id} className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+                  <div className="flex items-start gap-2">
+                    <Bot className="mt-0.5 size-4 text-primary" />
+                    <div className="flex-1">
+                      <p className="font-medium text-dark dark:text-white">
+                        LLM suggestion · {Math.round(Number(proposal.confidence) * 100)}% · {proposal.status}
+                      </p>
+                      <p className="mt-1 text-dark-5 dark:text-dark-6">{proposal.reason}</p>
+                      <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
+                        Label: {proposal.proposedLabel || "unchanged"} · Category: {categories.find((category) => category.id === proposal.proposedCategoryId)?.name || "unchanged"}
+                      </p>
                     </div>
-                    <p className="mt-1 text-sm text-dark-5 dark:text-dark-6">
-                      {payload.date} · {payload.description} · {amount(payload)}
-                    </p>
-                    <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
-                      Category:{" "}
-                      {categories.find((c) => c.id === payload.categoryId)
-                        ?.name || "Unassigned"}
-                      {payload.tripId ? ` · Trip: ${payload.tripId}` : ""}
-                    </p>
                   </div>
+                  {proposal.status === "proposed" && (
+                    <div className="mt-3 flex gap-2">
+                      <Button size="sm" disabled={busy} leftIcon={<Check className="size-3" />}
+                        onClick={() => void decideAgentProposal(proposal.id, "accept").then(refresh)}>
+                        Accept
+                      </Button>
+                      <Button size="sm" variant="secondary" disabled={busy}
+                        leftIcon={<X className="size-3" />}
+                        onClick={() => void decideAgentProposal(proposal.id, "reject").then(refresh)}>
+                        Reject
+                      </Button>
+                    </div>
+                  )}
                 </div>
-                {row.review?.reasons?.map((reason: string) => (
-                  <p key={reason} className="mt-2 text-sm text-primary">
-                    {reason}
-                  </p>
-                ))}
-                {!closed && (
-                  <div className="mt-3">
-                    <Button
-                      variant="secondary"
-                      disabled={!!busy}
-                      onClick={() => {
-                        setEditing(row.id);
-                        setEdit({ ...payload });
-                      }}
-                    >
-                      Edit label, category & account
-                    </Button>
-                  </div>
-                )}
-                {editing === row.id && (
-                  <div className="mt-4 space-y-3">
-                    {[
-                      { key: "label", name: "Label" },
-                      { key: "description", name: "Description" },
-                    ].map((f) => (
-                      <label
-                        key={f.key}
-                        className="block text-sm text-dark dark:text-white"
-                      >
-                        {f.name}
-                        <input
-                          value={edit[f.key] || ""}
-                          onChange={(e) =>
-                            setEdit((old) => ({
-                              ...old,
-                              [f.key]: e.target.value,
-                            }))
-                          }
-                          className="mt-1 min-h-11 w-full rounded border border-stroke bg-transparent px-3 dark:border-dark-3"
-                        />
-                      </label>
-                    ))}
-                    <label className="block text-sm text-dark dark:text-white">
-                      Category
-                      <select
-                        value={edit.categoryId || ""}
-                        onChange={(e) =>
-                          setEdit((old) => ({
-                            ...old,
-                            categoryId: e.target.value || null,
-                          }))
-                        }
-                        className="mt-1 min-h-11 w-full rounded border border-stroke bg-white px-3 dark:border-dark-3 dark:bg-gray-dark"
-                      >
-                        <option value="">Unassigned</option>
-                        {categories.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    {draft.mode === "main" && (
-                      <label className="block text-sm text-dark dark:text-white">
-                        Account
-                        <select
-                          value={edit.accountIdentifier || ""}
-                          onChange={(e) =>
-                            setEdit((old) => ({
-                              ...old,
-                              accountIdentifier: e.target.value,
-                            }))
-                          }
-                          className="mt-1 min-h-11 w-full rounded border border-stroke bg-white px-3 dark:border-dark-3 dark:bg-gray-dark"
-                        >
-                          <option value="">Choose account</option>
-                          {accounts.map((a) => (
-                            <option
-                              key={a.accountIdentifier}
-                              value={a.accountIdentifier}
-                            >
-                              {a.accountIdentifier}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-                    {draft.mode === "main" && (
-                      <label className="flex items-center gap-2 text-sm text-dark dark:text-white">
-                        <input
-                          type="checkbox"
-                          checked={edit.linkage?.type === "internal"}
-                          onChange={(e) =>
-                            setEdit((old) => ({
-                              ...old,
-                              linkage: e.target.checked
-                                ? { type: "internal" }
-                                : null,
-                            }))
-                          }
-                        />
-                        Internal transfer
-                      </label>
-                    )}
-                    {edit.linkage && (
-                      <Button
-                        variant="secondary"
-                        onClick={() =>
-                          setEdit((old) => ({ ...old, linkage: null }))
-                        }
-                      >
-                        Clear reconciliation links
-                      </Button>
-                    )}
-                    <div className="flex gap-2">
-                      <Button
-                        disabled={!!busy}
-                        onClick={async () => {
-                          setBusy(row.id);
-                          try {
-                            if (!edit.description?.trim())
-                              throw new Error("Description is required");
-                            await updateAgentDraftRow(draft.id, row.id, {
-                              expectedVersion: row.version,
-                              currentPayload: edit,
-                              reviewStatus: "edited",
-                            });
-                            setEditing(null);
-                            await refresh();
-                          } catch (error) {
-                            setMessage(
-                              error instanceof Error
-                                ? error.message
-                                : "Save failed",
-                            );
-                          } finally {
-                            setBusy(null);
-                          }
-                        }}
-                      >
-                        Save row
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        onClick={() => setEditing(null)}
-                      >
-                        Cancel
-                      </Button>
-                    </div>
-                  </div>
-                )}
-                {proposals.map((proposal) => (
-                  <div
-                    key={proposal.id}
-                    className="mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3"
-                  >
-                    <div className="flex items-start gap-2">
-                      <Bot className="mt-0.5 size-4 text-primary" />
-                      <div className="flex-1">
-                        <p className="text-sm font-medium text-dark dark:text-white">
-                          Hermes proposal ·{" "}
-                          {Math.round(Number(proposal.confidence) * 100)}% ·{" "}
-                          {proposal.status}
-                        </p>
-                        <p className="mt-1 text-sm text-dark-5 dark:text-dark-6">
-                          {proposal.reason}
-                        </p>
-                        <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
-                          Label: {proposal.proposedLabel || "unchanged"} ·
-                          Category:{" "}
-                          {categories.find(
-                            (c) => c.id === proposal.proposedCategoryId,
-                          )?.name || "unchanged"}{" "}
-                          · Trip: {proposal.proposedTripId || "none"} · Entry:{" "}
-                          {proposal.proposedTripEntryType || "unchanged"}
-                        </p>
-                      </div>
-                    </div>
-                    {proposal.proposedLinkage && (
-                      <pre className="mt-2 whitespace-pre-wrap break-words text-xs text-dark dark:text-white">
-                        {JSON.stringify(proposal.proposedLinkage, null, 2)}
-                      </pre>
-                    )}
-                    {proposal.status === "proposed" && !closed && (
-                      <div className="mt-3 flex gap-2">
-                        <Button
-                          size="sm"
-                          disabled={!!busy}
-                          onClick={() => decide(proposal.id, "accept")}
-                          isLoading={busy === proposal.id}
-                          leftIcon={<Check className="size-3" />}
-                        >
-                          Accept
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => decide(proposal.id, "reject")}
-                          disabled={!!busy}
-                          leftIcon={<X className="size-3" />}
-                        >
-                          Reject
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            );
-          })}
-        </CardContent>
-      </Card>
+              ))}
+            </div>
+          );
+        }}
+      />
+      {reimbursement && (
+        <ReimbursementSelectorModal
+          isOpen
+          onClose={() => setReimbursement(null)}
+          currentIndex={reimbursement.currentIndex}
+          transactions={reimbursement.transactions}
+          currentLinkage={reimbursement.transactions[reimbursement.currentIndex]?.linkage}
+          categories={categories}
+          excludeStagedDraftId={flatRows[reimbursement.globalIndex]?.draft.id}
+          onConfirm={(linkage: TransactionLinkage) => {
+            updateField(reimbursement.globalIndex, "linkage", linkage);
+            setReimbursement(null);
+          }}
+        />
+      )}
     </div>
   );
 }

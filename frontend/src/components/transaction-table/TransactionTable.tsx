@@ -206,6 +206,7 @@ function TransactionTableComponent({
   allowReservedCategorySelection = false,
   renderExpandedActions,
   reviewActionLeft,
+  primaryActionLabel,
 }: TransactionTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
@@ -496,6 +497,7 @@ function TransactionTableComponent({
         onAccountColorChange={onAccountColorChange}
         onAddAccountIdentifier={onAddAccountIdentifier}
         reviewActionLeft={reviewActionLeft}
+        primaryActionLabel={primaryActionLabel}
       />
 
       {showDuplicatesOnly && duplicates && duplicates.size > 0 && (
@@ -789,6 +791,18 @@ function TransactionTableComponent({
               const suggestionReason = String(
                 (transaction.metadata as Record<string, unknown>)?.suggestionReason || "",
               ).trim();
+              const reviewTint = String(metadata.reviewTint || "");
+              const requiresLabelling =
+                !String(transaction.label || "").trim() ||
+                (!transaction.categoryId && !transaction.linkage);
+              const rowTintClass =
+                reviewTint === "needs_label" || requiresLabelling
+                  ? "bg-orange-light-4/70 dark:bg-orange-dark-3/15"
+                  : reviewTint === "llm"
+                    ? "bg-primary/10 dark:bg-primary/10"
+                    : reviewTint === "algorithm" || transaction.suggestionApplied
+                      ? "bg-blue-50/70 dark:bg-blue-950/15"
+                      : "";
               const labelMatchesSuggestion =
                 !!transaction.suggestedLabel &&
                 String(transaction.label || "").trim().toLowerCase() ===
@@ -852,7 +866,7 @@ function TransactionTableComponent({
                     data-index={virtualRow.index}
                     ref={rowVirtualizer.measureElement}
                     title={hasValidationErrors ? validationMessages.join("\n") : undefined}
-                    className={`border-b hover:bg-gray-1 dark:hover:bg-dark-3/50 transition-colors group ${
+                    className={`border-b hover:bg-gray-1 dark:hover:bg-dark-3/50 transition-colors group ${rowTintClass} ${
                       hasValidationErrors
                         ? "border-2 border-red bg-red/5 dark:border-red-light dark:bg-red/10"
                         : hasDuplicates

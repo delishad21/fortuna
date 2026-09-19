@@ -33,6 +33,64 @@ export async function getAgentDraft(draftId: string) {
   return request<{ draft: Record<string, any> }>(`/api/agent/drafts/${encodeURIComponent(draftId)}`);
 }
 
+export async function getStagedReimbursementTargets() {
+  const { drafts } = await getAgentDrafts();
+  const active = drafts.filter(
+    (draft) =>
+      draft.mode === "main" &&
+      !["committed", "discarded", "expired"].includes(String(draft.status)) &&
+      new Date(String(draft.expiresAt)).getTime() > Date.now(),
+  );
+  const detailed = await Promise.all(
+    active.map((draft) => getAgentDraft(String(draft.id)).then((result) => result.draft)),
+  );
+  const allocatedByTarget = new Map<string, number>();
+  detailed.forEach((draft) => {
+    (draft.rows || []).forEach((row: Record<string, any>) => {
+      const linkage = row.currentPayload?.linkage;
+      if (linkage?.type !== "reimbursement") return;
+      (linkage.reimbursesAllocations || []).forEach((allocation: Record<string, any>) => {
+        if (!allocation.stagedDraftId || !allocation.stagedRowId) return;
+        const key = `${allocation.stagedDraftId}:${allocation.stagedRowId}`;
+        allocatedByTarget.set(
+          key,
+          (allocatedByTarget.get(key) || 0) + Number(allocation.amount || 0),
+        );
+      });
+    });
+  });
+  return {
+    transactions: detailed.flatMap((draft) =>
+      (draft.rows || []).flatMap((row: Record<string, any>) => {
+        const payload = row.currentPayload || {};
+        const amount = Number(payload.amountOut || payload.amountIn || 0);
+        if (!row.selected || !(amount > 0) || payload.linkage?.type === "reimbursement") {
+          return [];
+        }
+        const key = `${draft.id}:${row.id}`;
+        return [
+          {
+            id: key,
+            stagedDraftId: draft.id,
+            stagedRowId: row.id,
+            sourceFilename: draft.sourceFilename,
+            date: payload.date,
+            description: payload.description,
+            label: payload.label || null,
+            amountIn: payload.amountIn ?? null,
+            amountOut: payload.amountOut ?? null,
+            categoryId: payload.categoryId || null,
+            remainingAmount: Math.max(
+              amount - (allocatedByTarget.get(key) || 0),
+              0,
+            ),
+          },
+        ];
+      }),
+    ),
+  };
+}
+
 export async function decideAgentProposal(proposalId: string, decision: "accept" | "reject") {
   return request<{ proposal: Record<string, any> }>(`/api/agent/proposals/${encodeURIComponent(proposalId)}/decision`, {
     method: "POST",

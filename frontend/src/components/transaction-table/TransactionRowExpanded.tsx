@@ -44,6 +44,8 @@ export function TransactionRowExpanded({
   onSplitTransaction,
 }: TransactionRowExpandedProps) {
   const canMarkReimbursement = (transaction.amountIn ?? 0) > 0;
+  const suggestionReason = String(transaction.metadata?.suggestionReason || "");
+  const reviewStatus = String(transaction.metadata?.reviewStatus || "");
 
   const handleMarkInternal = () => {
     if (!onLinkageChange) return;
@@ -196,6 +198,26 @@ export function TransactionRowExpanded({
           )}
 
           {renderExpandedActions && <div className="mb-4">{renderExpandedActions()}</div>}
+
+          {(transaction.suggestionSource || suggestionReason || reviewStatus) && (
+            <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
+              <div className="mb-1 font-medium text-dark dark:text-white">
+                Review details
+              </div>
+              {reviewStatus && (
+                <p className="text-dark-5 dark:text-dark-6">Status: {reviewStatus}</p>
+              )}
+              {transaction.suggestionSource && (
+                <p className="text-dark-5 dark:text-dark-6">
+                  Suggested by {transaction.suggestionSource} · {Math.round(Number(transaction.suggestionConfidence || 0) * 100)}% confidence
+                  {transaction.suggestionApplied ? " · applied" : " · awaiting review"}
+                </p>
+              )}
+              {suggestionReason && (
+                <p className="mt-1 text-dark-5 dark:text-dark-6">{suggestionReason}</p>
+              )}
+            </div>
+          )}
 
           <div className="space-y-1">
             <div className="font-medium text-dark dark:text-white mb-2">

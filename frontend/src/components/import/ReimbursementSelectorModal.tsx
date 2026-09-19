@@ -18,6 +18,7 @@ import {
 } from "@/components/transaction-table/types";
 import { TransactionCard } from "@/components/transactions/TransactionCard";
 import { searchTransactionsForReimbursement } from "@/app/actions/transactions";
+import { getStagedReimbursementTargets } from "@/app/actions/agentDrafts";
 
 interface Category {
   id: string;
@@ -53,6 +54,7 @@ interface ReimbursementSelectorModalProps {
   excludeTransactionId?: string;
   categories?: Category[];
   currentReimbursementId?: string;
+  excludeStagedDraftId?: string;
   initialSelectedDbTransactions?: DatabaseTransaction[];
 }
 
@@ -62,7 +64,7 @@ const DEFAULT_INITIAL_SELECTED_DB_TRANSACTIONS: DatabaseTransaction[] = [];
 export const getDefaultInitialSelectedDbTransactions = () =>
   DEFAULT_INITIAL_SELECTED_DB_TRANSACTIONS;
 
-type SelectorTab = "current" | "existing";
+type SelectorTab = "current" | "staged" | "existing";
 type AmountType = "all" | "in" | "out";
 
 const toNumber = (value: unknown) => {
@@ -93,6 +95,8 @@ const formatAmount = (amount: number) => `$${amount.toFixed(2)}`;
 type TargetKey = string;
 const toDbKey = (id: string) => `db:${id}`;
 const toBatchKey = (index: number) => `batch:${index}`;
+const toStagedKey = (draftId: string, rowId: string) =>
+  `staged:${draftId}:${rowId}`;
 
 export function buildCurrentImportReimbursementItems(
   transactions: Transaction[],
@@ -122,6 +126,7 @@ export function ReimbursementSelectorModal({
   excludeTransactionId,
   categories = [],
   currentReimbursementId,
+  excludeStagedDraftId,
   initialSelectedDbTransactions = getDefaultInitialSelectedDbTransactions(),
 }: ReimbursementSelectorModalProps) {
   const currentImportListRef = useRef<HTMLDivElement>(null);
@@ -135,6 +140,7 @@ export function ReimbursementSelectorModal({
     new Set(),
   );
   const [selectedDbIds, setSelectedDbIds] = useState<Set<string>>(new Set());
+  const [selectedStagedIds, setSelectedStagedIds] = useState<Set<string>>(new Set());
   const [selectedDbCache, setSelectedDbCache] = useState<
     Record<string, DatabaseTransaction>
   >({});
@@ -144,10 +150,13 @@ export function ReimbursementSelectorModal({
   const [leftoverCategoryId, setLeftoverCategoryId] = useState("");
 
   const [selectorTab, setSelectorTab] = useState<SelectorTab>(
-    includeCurrentImport ? "current" : "existing",
+    includeCurrentImport ? "current" : "staged",
   );
 
   const [currentSearch, setCurrentSearch] = useState("");
+  const [stagedSearch, setStagedSearch] = useState("");
+  const [stagedTransactions, setStagedTransactions] = useState<any[]>([]);
+  const [isLoadingStaged, setIsLoadingStaged] = useState(false);
   const [currentTypeFilter, setCurrentTypeFilter] = useState<AmountType>("all");
   const [currentCategoryFilter, setCurrentCategoryFilter] = useState("");
   const [currentDateFrom, setCurrentDateFrom] = useState("");
@@ -206,6 +215,7 @@ export function ReimbursementSelectorModal({
 
     const initialBatch = new Set<number>();
     const initialDb = new Set<string>();
+    const initialStaged = new Set<string>();
     const initialAllocations: Record<TargetKey, number> = {};
     const initialDbCache: Record<string, DatabaseTransaction> = Object.fromEntries(
       initialSelectedDbTransactions.map((transaction) => [
@@ -238,18 +248,24 @@ export function ReimbursementSelectorModal({
       } else if (typeof item.pendingBatchIndex === "number") {
         initialBatch.add(item.pendingBatchIndex);
         initialAllocations[toBatchKey(item.pendingBatchIndex)] = toNumber(item.amount);
+      } else if (item.stagedDraftId && item.stagedRowId) {
+        const key = toStagedKey(item.stagedDraftId, item.stagedRowId);
+        initialStaged.add(key);
+        initialAllocations[key] = toNumber(item.amount);
       }
     });
 
     setSelectedBatchIndices(initialBatch);
     setSelectedDbIds(initialDb);
+    setSelectedStagedIds(initialStaged);
     setSelectedDbCache(initialDbCache);
     setAllocationByTarget(initialAllocations);
     setLeftoverCategoryId(currentLinkage?.leftoverCategoryId || "");
 
-    setSelectorTab(includeCurrentImport ? "current" : "existing");
+    setSelectorTab(includeCurrentImport ? "current" : "staged");
 
     setCurrentSearch("");
+    setStagedSearch("");
     setCurrentTypeFilter("all");
     setCurrentCategoryFilter("");
     setCurrentDateFrom("");
@@ -265,6 +281,14 @@ export function ReimbursementSelectorModal({
     setDbSameAmountOnly(false);
     setDbPage(1);
   }, [isOpen, currentLinkage, includeCurrentImport, initialSelectedDbTransactions]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setIsLoadingStaged(true);
+    void getStagedReimbursementTargets()
+      .then((result) => setStagedTransactions(result.transactions || []))
+      .finally(() => setIsLoadingStaged(false));
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -445,6 +469,9 @@ export function ReimbursementSelectorModal({
         .filter((item): item is DatabaseTransaction => !!item),
     [selectedDbIds, selectedDbCache, dbTransactions],
   );
+  const selectedStagedItems = stagedTransactions.filter((item) =>
+    selectedStagedIds.has(toStagedKey(item.stagedDraftId, item.stagedRowId)),
+  );
 
   const selectedItems = [
     ...selectedBatchItems.map((item) => ({
@@ -463,6 +490,24 @@ export function ReimbursementSelectorModal({
         });
       },
     })),
+    ...selectedStagedItems.map((item) => {
+      const key = toStagedKey(item.stagedDraftId, item.stagedRowId);
+      return {
+        key,
+        title: item.label?.trim() || item.description,
+        subtitle: `${formatDate(item.date)} · Staged in ${item.sourceFilename}`,
+        reimbursableAmount:
+          Number(item.remainingAmount || 0) + Number(allocationByTarget[key] || 0),
+        alreadyAllocated: 0,
+        onRemove: () => {
+          setSelectedStagedIds((prev) => {
+            const next = new Set(prev);
+            next.delete(key);
+            return next;
+          });
+        },
+      };
+    }),
     ...selectedDbItems.map((item) => ({
       key: toDbKey(item.id),
       title: item.label?.trim() || item.description,
@@ -638,6 +683,30 @@ export function ReimbursementSelectorModal({
     }
   };
 
+  const handleToggleStaged = (item: any) => {
+    const key = toStagedKey(item.stagedDraftId, item.stagedRowId);
+    if (selectedStagedIds.has(key)) {
+      setSelectedStagedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+      setAllocationByTarget((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      return;
+    }
+    setSelectedStagedIds((prev) => new Set(prev).add(key));
+    if (allocationByTarget[key] === undefined) {
+      setAllocation(
+        key,
+        Math.min(Number(item.remainingAmount || 0), getBudgetForKey(key)),
+      );
+    }
+  };
+
   const toCardTransaction = useCallback(
     (transaction: Transaction, index?: number) => ({
       id: String(index ?? transaction.description),
@@ -721,6 +790,20 @@ export function ReimbursementSelectorModal({
             targetRemainingReimbursable: committedRemaining,
           };
         }
+        if (item.key.startsWith("staged:")) {
+          const target = selectedStagedItems.find(
+            (candidate) =>
+              toStagedKey(candidate.stagedDraftId, candidate.stagedRowId) ===
+              item.key,
+          );
+          return {
+            stagedDraftId: target?.stagedDraftId,
+            stagedRowId: target?.stagedRowId,
+            amount,
+            targetDescription: target?.label?.trim() || target?.description,
+            targetDate: target?.date,
+          };
+        }
         return {
           pendingBatchIndex: Number(item.key.slice(6)),
           amount,
@@ -741,6 +824,26 @@ export function ReimbursementSelectorModal({
   };
 
   const dbTotalPages = Math.max(1, Math.ceil(dbTotal / PAGE_SIZE));
+  const filteredStagedTransactions = stagedTransactions.filter((item) => {
+    const query = stagedSearch.trim().toLowerCase();
+    const amountIn = toNumber(item.amountIn);
+    const amountOut = toNumber(item.amountOut);
+    return (
+      item.stagedDraftId !== excludeStagedDraftId &&
+      (!query ||
+        String(item.description || "").toLowerCase().includes(query) ||
+        String(item.label || "").toLowerCase().includes(query)) &&
+      (currentTypeFilter === "all" ||
+        (currentTypeFilter === "in" && amountIn > 0) ||
+        (currentTypeFilter === "out" && amountOut > 0)) &&
+      (!currentCategoryFilter || item.categoryId === currentCategoryFilter) &&
+      (!currentDateFrom || item.date >= currentDateFrom) &&
+      (!currentDateTo || item.date <= currentDateTo) &&
+      (!currentSameAmountOnly ||
+        Math.abs(toAbsTransactionAmount(amountIn, amountOut) - reimbursementAmount) <=
+          0.01)
+    );
+  });
 
   if (!isOpen) return null;
 
@@ -775,9 +878,9 @@ export function ReimbursementSelectorModal({
 
         <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden px-6 py-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(380px,1fr)]">
           <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-stroke dark:border-dark-3">
-            {includeCurrentImport ? (
-              <div className="border-b border-stroke px-3 pt-2 dark:border-dark-3">
-                <div className="flex gap-2">
+            <div className="border-b border-stroke px-3 pt-2 dark:border-dark-3">
+              <div className="flex gap-2">
+                {includeCurrentImport && (
                   <button
                     type="button"
                     onClick={() => setSelectorTab("current")}
@@ -788,6 +891,18 @@ export function ReimbursementSelectorModal({
                     }`}
                   >
                     Current Import
+                  </button>
+                )}
+                  <button
+                    type="button"
+                    onClick={() => setSelectorTab("staged")}
+                    className={`rounded-t-md px-3 py-2 text-sm font-medium transition-colors ${
+                      selectorTab === "staged"
+                        ? "bg-primary/10 text-primary"
+                        : "text-dark-5 hover:bg-gray-1 dark:text-dark-6 dark:hover:bg-dark-3"
+                    }`}
+                  >
+                    Staged Transactions
                   </button>
                   <button
                     type="button"
@@ -800,21 +915,30 @@ export function ReimbursementSelectorModal({
                   >
                     Existing Transactions
                   </button>
-                </div>
               </div>
-            ) : null}
+            </div>
 
             <div className="border-b border-stroke p-3 dark:border-dark-3">
               <div className="space-y-2">
                 <div className="flex flex-wrap items-end gap-2">
                   <SearchBar
                     placeholder="Search label or description"
-                    value={selectorTab === "current" ? currentSearch : dbSearchInput}
+                    value={
+                      selectorTab === "current"
+                        ? currentSearch
+                        : selectorTab === "staged"
+                          ? stagedSearch
+                          : dbSearchInput
+                    }
                     onChange={
-                      selectorTab === "current" ? setCurrentSearch : setDbSearchInput
+                      selectorTab === "current"
+                        ? setCurrentSearch
+                        : selectorTab === "staged"
+                          ? setStagedSearch
+                          : setDbSearchInput
                     }
                     onSearch={
-                      selectorTab === "current"
+                      selectorTab !== "existing"
                         ? undefined
                         : () => setDbSearchQuery(dbSearchInput.trim())
                     }
@@ -826,14 +950,14 @@ export function ReimbursementSelectorModal({
                     type="button"
                     size="sm"
                     variant={
-                      (selectorTab === "current"
+                      (selectorTab !== "existing"
                         ? currentSameAmountOnly
                         : dbSameAmountOnly)
                         ? "primary"
                         : "secondary"
                     }
                     onClick={() => {
-                      if (selectorTab === "current") {
+                      if (selectorTab !== "existing") {
                         setCurrentSameAmountOnly((prev) => !prev);
                         return;
                       }
@@ -848,8 +972,9 @@ export function ReimbursementSelectorModal({
                     size="sm"
                     variant="ghost"
                     onClick={() => {
-                      if (selectorTab === "current") {
+                      if (selectorTab !== "existing") {
                         setCurrentSearch("");
+                        setStagedSearch("");
                         setCurrentTypeFilter("all");
                         setCurrentCategoryFilter("");
                         setCurrentDateFrom("");
@@ -874,9 +999,9 @@ export function ReimbursementSelectorModal({
                 <div className="grid grid-cols-1 overflow-hidden rounded-lg border border-stroke bg-white dark:border-dark-3 dark:bg-dark-2 md:grid-cols-4 md:divide-x md:divide-stroke md:dark:divide-dark-3">
                   <div className="border-b border-stroke dark:border-dark-3 md:border-b-0">
                     <Select
-                      value={selectorTab === "current" ? currentTypeFilter : dbTypeFilter}
+                      value={selectorTab !== "existing" ? currentTypeFilter : dbTypeFilter}
                       onChange={(value) => {
-                        if (selectorTab === "current") {
+                        if (selectorTab !== "existing") {
                           setCurrentTypeFilter(value as AmountType);
                         } else {
                           setDbTypeFilter(value as AmountType);
@@ -896,10 +1021,10 @@ export function ReimbursementSelectorModal({
                   <div className="border-b border-stroke dark:border-dark-3 md:border-b-0">
                     <Select
                       value={
-                        selectorTab === "current" ? currentCategoryFilter : dbCategoryFilter
+                        selectorTab !== "existing" ? currentCategoryFilter : dbCategoryFilter
                       }
                       onChange={(value) => {
-                        if (selectorTab === "current") {
+                        if (selectorTab !== "existing") {
                           setCurrentCategoryFilter(value);
                         } else {
                           setDbCategoryFilter(value);
@@ -914,9 +1039,9 @@ export function ReimbursementSelectorModal({
 
                   <div className="border-b border-stroke dark:border-dark-3 md:border-b-0">
                     <DatePicker
-                      value={selectorTab === "current" ? currentDateFrom : dbDateFrom}
+                      value={selectorTab !== "existing" ? currentDateFrom : dbDateFrom}
                       onChange={(value) => {
-                        if (selectorTab === "current") {
+                        if (selectorTab !== "existing") {
                           setCurrentDateFrom(value);
                         } else {
                           setDbDateFrom(value);
@@ -926,9 +1051,9 @@ export function ReimbursementSelectorModal({
                     />
                   </div>
                   <DatePicker
-                    value={selectorTab === "current" ? currentDateTo : dbDateTo}
+                    value={selectorTab !== "existing" ? currentDateTo : dbDateTo}
                     onChange={(value) => {
-                      if (selectorTab === "current") {
+                      if (selectorTab !== "existing") {
                         setCurrentDateTo(value);
                       } else {
                         setDbDateTo(value);
@@ -984,6 +1109,40 @@ export function ReimbursementSelectorModal({
                         <div style={{ height: currentImportBottomSpacer }} />
                       )}
                     </>
+                  )
+                ) : selectorTab === "staged" ? (
+                  isLoadingStaged ? (
+                    <div className="py-8 text-center text-sm text-dark-5 dark:text-dark-6">
+                      Loading staged transactions...
+                    </div>
+                  ) : filteredStagedTransactions.length === 0 ? (
+                    <div className="py-8 text-center text-sm text-dark-5 dark:text-dark-6">
+                      No staged transactions found.
+                    </div>
+                  ) : (
+                    filteredStagedTransactions.map((item) => {
+                      const key = toStagedKey(item.stagedDraftId, item.stagedRowId);
+                      return (
+                        <TransactionCard
+                          key={key}
+                          transaction={{
+                            id: key,
+                            date: item.date,
+                            description: item.description,
+                            label: item.label || undefined,
+                            amountIn: item.amountIn,
+                            amountOut: item.amountOut,
+                            balance: null,
+                            metadata: { sourceFilename: item.sourceFilename },
+                          }}
+                          selected={selectedStagedIds.has(key)}
+                          selectionTone="success"
+                          onToggleSelect={() => handleToggleStaged(item)}
+                          wrapText
+                          showDate
+                        />
+                      );
+                    })
                   )
                 ) : isLoadingDb ? (
                   <div className="py-8 text-center text-sm text-dark-5 dark:text-dark-6">

@@ -12,6 +12,10 @@ const TransactionLinkageSchema = z.object({
       z.object({
         transactionId: z.string().optional(),
         pendingBatchIndex: z.number().optional(),
+        stagedDraftId: z.string().optional(),
+        stagedRowId: z.string().optional(),
+        targetDescription: z.string().optional(),
+        targetDate: z.string().optional(),
         amount: z.number(),
       }),
     )

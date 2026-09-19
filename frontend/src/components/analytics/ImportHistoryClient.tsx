@@ -7,6 +7,8 @@ import { Bot, FileText } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { ImportSummaryCard } from "@/components/analytics/ImportSummaryCard";
+import { getAgentDraft } from "@/app/actions/agentDrafts";
+import { AgentDraftReviewClient } from "@/components/import/AgentDraftReviewClient";
 
 type ImportSummary = {
   key: string;
@@ -22,21 +24,6 @@ type ImportSummary = {
   transactionCount: number;
 };
 
-function SummaryMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <Card>
-      <CardContent className="py-5">
-        <p className="text-xs font-semibold uppercase text-dark-5 dark:text-dark-6">
-          {label}
-        </p>
-        <p className="mt-2 text-2xl font-bold text-dark dark:text-white">
-          {value}
-        </p>
-      </CardContent>
-    </Card>
-  );
-}
-
 export function ImportHistoryClient({
   imports,
   agentDrafts = [],
@@ -45,38 +32,16 @@ export function ImportHistoryClient({
   agentDrafts?: Array<Record<string, any>>;
 }) {
   const [tab, setTab] = useState("staged");
+  const [showTogether, setShowTogether] = useState(false);
+  const [detailedDrafts, setDetailedDrafts] = useState<Array<Record<string, any>>>([]);
+  const [loadingTogether, setLoadingTogether] = useState(false);
   const staged = agentDrafts.filter(
     (d) =>
       !["committed", "discarded", "expired"].includes(d.status) &&
       new Date(d.expiresAt) > new Date(),
   );
-  const needsReview = staged.reduce(
-    (sum, d) => sum + (d.reviewSummary?.needsReview || 0),
-    0,
-  );
-
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="font-display text-3xl font-bold text-dark dark:text-white">
-            Imports
-          </h1>
-          <p className="text-sm text-dark-5 dark:text-dark-6">
-            Review staged transactions, resolve agent flags, and browse saved
-            imports.
-          </p>
-        </div>
-        <Link href="/import">
-          <Button
-            variant="secondary"
-            leftIcon={<FileText className="size-4" />}
-          >
-            Import File
-          </Button>
-        </Link>
-      </div>
-
       <PageTabs
         tabs={[
           { key: "staged", label: `Staged (${staged.length})` },
@@ -85,22 +50,48 @@ export function ImportHistoryClient({
         activeTab={tab}
         onChange={setTab}
       />
+      <div className="flex justify-end">
+        <Link href="/import">
+          <Button variant="secondary" leftIcon={<FileText className="size-4" />}>
+            Import File
+          </Button>
+        </Link>
+      </div>
       {tab === "staged" && (
         <>
-          <div className="grid gap-4 md:grid-cols-3">
-            <SummaryMetric
-              label="Staged groups"
-              value={String(staged.length)}
+          <label className="flex min-h-11 items-center gap-3 rounded-lg border border-stroke px-4 text-sm font-medium text-dark dark:border-dark-3 dark:text-white">
+            <input
+              type="checkbox"
+              checked={showTogether}
+              onChange={async (event) => {
+                const checked = event.target.checked;
+                setShowTogether(checked);
+                if (!checked || detailedDrafts.length) return;
+                setLoadingTogether(true);
+                try {
+                  setDetailedDrafts(
+                    await Promise.all(
+                      staged.map((draft) =>
+                        getAgentDraft(draft.id).then((result) => result.draft),
+                      ),
+                    ),
+                  );
+                } finally {
+                  setLoadingTogether(false);
+                }
+              }}
             />
-            <SummaryMetric
-              label="Transactions"
-              value={String(
-                staged.reduce((s, d) => s + (d._count?.rows || 0), 0),
-              )}
-            />
-            <SummaryMetric label="Needs review" value={String(needsReview)} />
-          </div>
-          <Card>
+            View and label all staged imports together
+          </label>
+          {showTogether ? (
+            loadingTogether ? (
+              <p className="py-8 text-center text-dark-5 dark:text-dark-6">
+                Loading staged transactions…
+              </p>
+            ) : (
+              <AgentDraftReviewClient initialDrafts={detailedDrafts as any} embedded />
+            )
+          ) : <Card>
             <CardHeader>
               <CardTitle>Staged imports</CardTitle>
             </CardHeader>
@@ -140,7 +131,7 @@ export function ImportHistoryClient({
                 </Link>
               ))}
             </CardContent>
-          </Card>
+          </Card>}
         </>
       )}
       {tab === "history" && (

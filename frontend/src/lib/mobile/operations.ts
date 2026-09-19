@@ -94,6 +94,7 @@ import {
 import {
   getAgentDrafts,
   getAgentDraft,
+  getStagedReimbursementTargets,
   decideAgentProposal,
   updateAgentDraftRow,
   validateAgentDraft,
@@ -204,6 +205,7 @@ export const mobileOperations = {
   rotateApiToken,
   getAgentDrafts,
   getAgentDraft,
+  getStagedReimbursementTargets,
   decideAgentProposal,
   updateAgentDraftRow,
   validateAgentDraft,

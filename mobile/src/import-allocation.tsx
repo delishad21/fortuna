@@ -1,4 +1,4 @@
-import React, { useContext, useState } from "react";
+import React, { useContext, useEffect, useState } from "react";
 import { DraftContext } from "./imports";
 import { useApi, useResource } from "./api";
 import {
@@ -45,6 +45,7 @@ export function ImportAllocationScreen({ route, navigation }: any) {
   const [rate, setRate] = useState(
     String(item?.linkage?.reimbursingFxRate ?? 1),
   );
+  const [initializedItem, setInitializedItem] = useState("");
   const saved = useResource(
     batch?.tripId
       ? "searchTripEntriesForReimbursement"
@@ -53,6 +54,41 @@ export function ImportAllocationScreen({ route, navigation }: any) {
       ? [batch.tripId, { search, offset, limit: 20 }]
       : [search, 20, offset, { transactionType: "out" }]),
   );
+  const stagedTargets = useResource("getStagedReimbursementTargets");
+  useEffect(() => {
+    if (!item) return;
+    const itemKey = draftId
+      ? `${draftId}:${route.params.rowId}:${draftRow?.version || ""}`
+      : `batch:${index}`;
+    if (initializedItem === itemKey) return;
+    const next: Record<string, any> = {};
+    for (const allocation of item.linkage?.reimbursesAllocations || []) {
+      const target = typeof allocation.pendingBatchIndex === "number"
+        ? batch?.transactions[allocation.pendingBatchIndex]
+        : allocation.stagedDraftId && allocation.stagedRowId
+          ? {
+              stagedDraftId: allocation.stagedDraftId,
+              stagedRowId: allocation.stagedRowId,
+              description: allocation.targetDescription || "Staged transaction",
+              date: allocation.targetDate,
+            }
+          : {
+              id: allocation.transactionId,
+              description: allocation.targetDescription || "Saved transaction",
+              date: allocation.targetDate,
+            };
+      const key = typeof allocation.pendingBatchIndex === "number"
+        ? `pending:${allocation.pendingBatchIndex}`
+        : allocation.stagedDraftId && allocation.stagedRowId
+          ? `staged:${allocation.stagedDraftId}:${allocation.stagedRowId}`
+          : String(allocation.transactionId);
+      next[key] = { row: target, amount: String(allocation.amount) };
+    }
+    setAllocations(next);
+    setBaseAmount(String(item.linkage?.reimbursementBaseAmount ?? item.amountIn ?? ""));
+    setRate(String(item.linkage?.reimbursingFxRate ?? 1));
+    setInitializedItem(itemKey);
+  }, [batch, draftId, draftRow?.version, index, initializedItem, item, route.params.rowId]);
   if (!batch || !item)
     return (
       <Screen>
@@ -82,7 +118,21 @@ export function ImportAllocationScreen({ route, navigation }: any) {
   const rows =
     tab === "This statement"
       ? pending
-      : (saved.data?.transactions || []).map((t: any) => ({
+      : tab === "Staged"
+        ? (stagedTargets.data?.transactions || [])
+            .filter(
+              (t: any) =>
+                (!draftId || t.stagedDraftId !== draftId) &&
+                `${t.label || ""} ${t.description}`
+                  .toLowerCase()
+                  .includes(search.toLowerCase()),
+            )
+            .map((t: any) => ({
+              ...t,
+              candidateKey: `staged:${t.stagedDraftId}:${t.stagedRowId}`,
+              amountOut: t.amountOut || t.amountIn,
+            }))
+        : (saved.data?.transactions || []).map((t: any) => ({
           ...t,
           candidateKey: t.id,
         }));
@@ -111,7 +161,11 @@ export function ImportAllocationScreen({ route, navigation }: any) {
       )}
       <Txt bold>{money(total - allocated)} remaining</Txt>
       <Chips
-        values={["This statement", "Saved expenses"]}
+        values={
+          batch.tripId
+            ? ["This statement", "Saved expenses"]
+            : ["This statement", "Staged", "Saved expenses"]
+        }
         value={tab}
         onChange={setTab}
       />
@@ -124,6 +178,7 @@ export function ImportAllocationScreen({ route, navigation }: any) {
         }}
       />
       {tab === "Saved expenses" && <State {...saved} />}
+      {tab === "Staged" && <State {...stagedTargets} />}
       {rows.map((row: any) => (
         <TransactionRow
           key={row.candidateKey}
@@ -198,7 +253,14 @@ export function ImportAllocationScreen({ route, navigation }: any) {
               (a) => ({
                 ...(a.row.pendingBatchIndex !== undefined
                   ? { pendingBatchIndex: a.row.pendingBatchIndex }
-                  : { transactionId: a.row.id }),
+                  : a.row.stagedDraftId && a.row.stagedRowId
+                    ? {
+                        stagedDraftId: a.row.stagedDraftId,
+                        stagedRowId: a.row.stagedRowId,
+                        targetDescription: a.row.label || a.row.description,
+                        targetDate: a.row.date,
+                      }
+                    : { transactionId: a.row.id }),
                 amount: Number(a.amount),
                 ...(batch.tripId ? { amountBase: Number(a.amount) } : {}),
               }),
