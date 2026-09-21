@@ -30,6 +30,14 @@ export interface ImportResult {
   error?: string;
 }
 
+export function compatibleImportRuleParserIds(parserId?: string) {
+  if (!parserId) return [];
+  if (["dbs_paylah_statement", "dbs_paylah_statement_new"].includes(parserId)) {
+    return ["dbs_paylah_statement", "dbs_paylah_statement_new"];
+  }
+  return [parserId];
+}
+
 export function detachStagedReimbursementAllocations<
   T extends {
     stagedDraftId?: string;
@@ -274,11 +282,17 @@ export class TransactionService {
   ): Promise<ImportTransactionInput[]> {
     if (transactions.length === 0) return transactions;
 
+    const compatibleParserIds = compatibleImportRuleParserIds(parserId);
     const rules = await prisma.importRule.findMany({
       where: {
         userId,
         enabled: true,
-        OR: [{ parserId: null }, { parserId: parserId || null }],
+        OR: [
+          { parserId: null },
+          ...(compatibleParserIds.length
+            ? [{ parserId: { in: compatibleParserIds } }]
+            : []),
+        ],
       },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
     });
