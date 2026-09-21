@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Bot, Check, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -22,6 +22,10 @@ import { getAccountNumbers } from "@/app/actions/accountNumbers";
 
 type DraftRow = Record<string, any>;
 type Draft = Record<string, any> & { rows: DraftRow[] };
+type RowUpdate = {
+  currentPayload?: Record<string, unknown>;
+  selected?: boolean;
+};
 
 function rowTone(row: DraftRow) {
   if (row.review?.labelling) return "needs_label";
@@ -78,6 +82,9 @@ export function AgentDraftReviewClient({
   const [drafts, setDrafts] = useState<Draft[]>(
     initialDrafts || (initialDraft ? [initialDraft] : []),
   );
+  const draftsRef = useRef(drafts);
+  const rowUpdateQueuesRef = useRef(new Map<string, Promise<void>>());
+  const pendingUpdateCountRef = useRef(0);
   const [categories, setCategories] = useState<any[]>([]);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
@@ -96,6 +103,10 @@ export function AgentDraftReviewClient({
       })
       .catch((error) => setMessage(error.message));
   }, []);
+
+  useEffect(() => {
+    draftsRef.current = drafts;
+  }, [drafts]);
 
   const flatRows = useMemo(
     () =>
@@ -127,45 +138,100 @@ export function AgentDraftReviewClient({
   );
 
   const refresh = async () => {
-    setDrafts(
-      await Promise.all(
-        drafts.map((draft) =>
-          getAgentDraft(draft.id).then((result) => result.draft as Draft),
-        ),
+    const nextDrafts = await Promise.all(
+      draftsRef.current.map((draft) =>
+        getAgentDraft(draft.id).then((result) => result.draft as Draft),
       ),
     );
+    draftsRef.current = nextDrafts;
+    setDrafts(nextDrafts);
   };
 
-  const updateRow = async (
+  const replaceDraft = (draftId: string, nextDraft: Draft) => {
+    const nextDrafts = draftsRef.current.map((draft) =>
+      draft.id === draftId ? nextDraft : draft,
+    );
+    draftsRef.current = nextDrafts;
+    setDrafts(nextDrafts);
+  };
+
+  const updateRow = (
     index: number,
-    input: { currentPayload?: Record<string, unknown>; selected?: boolean },
+    createInput: (latestRow: DraftRow) => RowUpdate,
   ) => {
     const item = flatRows[index];
     if (!item) return;
+    const draftId = String(item.draft.id);
+    const rowId = String(item.row.id);
+    const queueKey = `${draftId}:${rowId}`;
+    const previous = rowUpdateQueuesRef.current.get(queueKey) ||
+      Promise.resolve();
+
+    pendingUpdateCountRef.current += 1;
     setBusy(true);
     setMessage("");
-    try {
-      await updateAgentDraftRow(item.draft.id, item.row.id, {
-        expectedVersion: item.row.version,
-        ...input,
-        ...(input.currentPayload ? { reviewStatus: "edited" as const } : {}),
+
+    const run = previous
+      .catch(() => undefined)
+      .then(async () => {
+        let latestDraft = draftsRef.current.find(
+          (draft) => String(draft.id) === draftId,
+        );
+        let latestRow = latestDraft?.rows.find(
+          (row) => String(row.id) === rowId,
+        );
+        if (!latestDraft || !latestRow) return;
+
+        const save = (row: DraftRow) => {
+          const input = createInput(row);
+          return updateAgentDraftRow(draftId, rowId, {
+            expectedVersion: row.version,
+            ...input,
+            ...(input.currentPayload
+              ? { reviewStatus: "edited" as const }
+              : {}),
+          });
+        };
+
+        try {
+          await save(latestRow);
+        } catch (error) {
+          if (!(error instanceof Error) || error.message !== "Draft row is stale") {
+            throw error;
+          }
+          const refreshed = (await getAgentDraft(draftId)).draft as Draft;
+          replaceDraft(draftId, refreshed);
+          latestDraft = refreshed;
+          latestRow = refreshed.rows.find((row) => String(row.id) === rowId);
+          if (!latestRow) return;
+          await save(latestRow);
+        }
+
+        const refreshed = (await getAgentDraft(draftId)).draft as Draft;
+        replaceDraft(draftId, refreshed);
+      })
+      .catch((error) => {
+        setMessage(
+          error instanceof Error ? error.message : "Could not update row",
+        );
+      })
+      .finally(() => {
+        if (rowUpdateQueuesRef.current.get(queueKey) === run) {
+          rowUpdateQueuesRef.current.delete(queueKey);
+        }
+        pendingUpdateCountRef.current -= 1;
+        if (pendingUpdateCountRef.current === 0) setBusy(false);
       });
-      await refresh();
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Could not update row",
-      );
-    } finally {
-      setBusy(false);
-    }
+
+    rowUpdateQueuesRef.current.set(queueKey, run);
   };
 
   const updateField = (index: number, field: string, value: any) => {
     const item = flatRows[index];
     if (!item) return;
-    void updateRow(index, {
-      currentPayload: { ...item.row.currentPayload, [field]: value },
-    });
+    updateRow(index, (latestRow) => ({
+      currentPayload: { ...latestRow.currentPayload, [field]: value },
+    }));
   };
 
   const setAllSelected = async (selected: boolean) => {
@@ -315,7 +381,7 @@ export function AgentDraftReviewClient({
         onSelectAll={() => void setAllSelected(true)}
         onDeselectAll={() => void setAllSelected(false)}
         onToggleSelection={(index) =>
-          void updateRow(index, { selected: !flatRows[index]?.row.selected })
+          updateRow(index, (latestRow) => ({ selected: !latestRow.selected }))
         }
         onAddCategoryClick={() =>
           setMessage(

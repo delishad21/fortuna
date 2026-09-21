@@ -56,10 +56,11 @@ export function CategorySelect({
     width: 0,
   });
   const [showAbove, setShowAbove] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const typeaheadRef = useRef("");
-  const typeaheadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const pointerFocusRef = useRef(false);
 
   const reservedNames = ["internal", "reimbursement"];
@@ -70,6 +71,11 @@ export function CategorySelect({
     return true;
   });
   const selectedCategory = filteredCategories.find((c) => c.id === value);
+  const visibleCategories = searchQuery.trim()
+    ? filteredCategories.filter((category) =>
+        category.name.toLowerCase().includes(searchQuery.trim().toLowerCase()),
+      )
+    : filteredCategories;
 
   const updateDropdownPosition = () => {
     if (!containerRef.current) return;
@@ -96,6 +102,8 @@ export function CategorySelect({
   useEffect(() => {
     if (!isOpen) return;
 
+    const focusFrame = requestAnimationFrame(() => searchRef.current?.focus());
+
     function handleClickOutside(event: MouseEvent) {
       if (
         containerRef.current &&
@@ -108,7 +116,14 @@ export function CategorySelect({
     }
 
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    return () => {
+      cancelAnimationFrame(focusFrame);
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) setSearchQuery("");
   }, [isOpen]);
 
   useEffect(() => {
@@ -141,29 +156,6 @@ export function CategorySelect({
     onAddClick();
   };
 
-  const handleTypeahead = (key: string) => {
-    if (disabled || lockedByLinkage || key.length !== 1 || !/\S/.test(key)) {
-      return false;
-    }
-
-    const nextQuery = `${typeaheadRef.current}${key}`.toLowerCase();
-    typeaheadRef.current = nextQuery;
-    if (typeaheadTimerRef.current) {
-      clearTimeout(typeaheadTimerRef.current);
-    }
-    typeaheadTimerRef.current = setTimeout(() => {
-      typeaheadRef.current = "";
-    }, 2000);
-
-    const match = filteredCategories.find((category) =>
-      category.name.toLowerCase().startsWith(nextQuery),
-    );
-    if (match) {
-      onChange(match.id);
-    }
-    return true;
-  };
-
   const {
     className: triggerClassNameProp,
     onKeyDown: triggerOnKeyDown,
@@ -189,6 +181,7 @@ export function CategorySelect({
     <div ref={containerRef} className="relative w-full h-full">
       {/* Trigger Button */}
       <button
+        ref={triggerRef}
         type="button"
         onMouseDown={() => {
           pointerFocusRef.current = true;
@@ -216,8 +209,20 @@ export function CategorySelect({
             setIsOpen(false);
             return;
           }
-          if (handleTypeahead(event.key)) {
+          if (event.key === "Enter" || event.key === "ArrowDown") {
             event.preventDefault();
+            setIsOpen(true);
+            return;
+          }
+          if (
+            !disabled &&
+            !lockedByLinkage &&
+            event.key.length === 1 &&
+            /\S/.test(event.key)
+          ) {
+            event.preventDefault();
+            setSearchQuery(event.key);
+            setIsOpen(true);
           }
         }}
         disabled={disabled}
@@ -291,6 +296,30 @@ export function CategorySelect({
                 }
           }
         >
+          <div className="sticky top-0 z-10 border-b border-stroke bg-white p-2 dark:border-dark-3 dark:bg-dark-2">
+            <input
+              ref={searchRef}
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setIsOpen(false);
+                  requestAnimationFrame(() => triggerRef.current?.focus());
+                  return;
+                }
+                if (event.key === "Enter" && visibleCategories[0]) {
+                  event.preventDefault();
+                  handleSelect(visibleCategories[0].id);
+                }
+              }}
+              placeholder="Search categories..."
+              aria-label="Search categories"
+              className="w-full rounded-md border border-stroke bg-transparent px-3 py-2 text-sm text-dark outline-none focus:border-primary dark:border-dark-3 dark:text-white"
+            />
+          </div>
+
           {/* Uncategorized Option */}
           <button
             type="button"
@@ -306,7 +335,7 @@ export function CategorySelect({
           <div className="h-px bg-stroke dark:bg-dark-3 my-1" />
 
           {/* Category Options */}
-          {filteredCategories.map((cat) => (
+          {visibleCategories.map((cat) => (
             <button
               key={cat.id}
               type="button"
@@ -325,6 +354,11 @@ export function CategorySelect({
               )}
             </button>
           ))}
+          {visibleCategories.length === 0 && (
+            <p className="px-4 py-3 text-sm text-dark-5 dark:text-dark-6">
+              No categories found
+            </p>
+          )}
 
           {/* Divider */}
           <div className="h-px bg-stroke dark:bg-dark-3 my-1" />
