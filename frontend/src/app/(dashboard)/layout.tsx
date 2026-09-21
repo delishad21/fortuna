@@ -16,6 +16,9 @@ const pageConfig: Record<
   "/import": {
     title: "Import Transactions",
   },
+  "/imports": {
+    title: "Imports",
+  },
   "/transactions": {
     title: "Transactions",
   },

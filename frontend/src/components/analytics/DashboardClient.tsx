@@ -144,13 +144,13 @@ export function DashboardClient({ initialOverview, initialReview, categories }: 
             <EmptyState
               title="No transactions imported yet"
               description="Import a statement to unlock dashboard analytics and review queues."
-              action={<Link href="/import"><Button leftIcon={<Upload className="size-4" />}>Import Statement</Button></Link>}
+              action={<Link href="/imports"><Button leftIcon={<Upload className="size-4" />}>Import Statement</Button></Link>}
             />
           ) : !overview.selectedMonth ? (
             <EmptyState
               title="No completed statement month detected"
               description="A month appears here after it has at least one transaction dated after the 15th."
-              action={<Link href="/import"><Button>Import Another Statement</Button></Link>}
+              action={<Link href="/imports"><Button>Import Another Statement</Button></Link>}
             />
           ) : (
             <>
@@ -174,7 +174,7 @@ export function DashboardClient({ initialOverview, initialReview, categories }: 
                 <Card>
                   <CardHeader><CardTitle>Quick Actions</CardTitle></CardHeader>
                   <CardContent className="flex flex-col gap-3">
-                    <Link href="/import"><Button className="w-full" leftIcon={<Upload className="size-4" />}>Import Statement</Button></Link>
+                    <Link href="/imports"><Button className="w-full" leftIcon={<Upload className="size-4" />}>Import Statement</Button></Link>
                     <Link href="/analytics"><Button className="w-full" variant="secondary">Open Analytics</Button></Link>
                     <Link href="/transactions"><Button className="w-full" variant="secondary">Review Transactions</Button></Link>
                     <Link href="/settings"><Button className="w-full" variant="secondary">Manage Categories</Button></Link>

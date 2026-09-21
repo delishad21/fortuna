@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { useState } from "react";
 import { PageTabs } from "@/components/ui/PageTabs";
-import { Bot, FileText } from "lucide-react";
+import { Bot } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { ImportSummaryCard } from "@/components/analytics/ImportSummaryCard";
 import { getAgentDraft } from "@/app/actions/agentDrafts";
 import { AgentDraftReviewClient } from "@/components/import/AgentDraftReviewClient";
+import { ImportClient } from "@/components/import/ImportClient";
 
 type ImportSummary = {
   key: string;
@@ -27,11 +28,25 @@ type ImportSummary = {
 export function ImportHistoryClient({
   imports,
   agentDrafts = [],
+  categories,
+  accountNumbers,
+  parserOptions,
 }: {
   imports: ImportSummary[];
   agentDrafts?: Array<Record<string, any>>;
+  categories: Array<{ id: string; name: string; color: string }>;
+  accountNumbers: Array<{
+    id: string;
+    accountIdentifier: string;
+    color: string;
+  }>;
+  parserOptions: Array<{
+    value: string;
+    label: string;
+    description: string;
+  }>;
 }) {
-  const [tab, setTab] = useState("staged");
+  const [tab, setTab] = useState("import");
   const [selectedDraftIds, setSelectedDraftIds] = useState<Set<string>>(
     new Set(),
   );
@@ -75,25 +90,25 @@ export function ImportHistoryClient({
     }
   };
   return (
-    <div className="space-y-6">
+    <div className="flex h-full flex-col gap-6">
       <PageTabs
         tabs={[
+          { key: "import", label: "Import" },
           { key: "staged", label: `Staged (${staged.length})` },
           { key: "history", label: "Imported history" },
         ]}
         activeTab={tab}
         onChange={setTab}
       />
-      <div className="flex justify-end">
-        <Link href="/import">
-          <Button
-            variant="secondary"
-            leftIcon={<FileText className="size-4" />}
-          >
-            Import File
-          </Button>
-        </Link>
-      </div>
+      {tab === "import" && (
+        <div className="min-h-0 flex-1">
+          <ImportClient
+            initialCategories={categories}
+            initialAccountNumbers={accountNumbers}
+            parserOptions={parserOptions}
+          />
+        </div>
+      )}
       {tab === "staged" && (
         <>
           {showTogether ? (

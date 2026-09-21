@@ -51,8 +51,8 @@ export function ImportProvider({ children }: any) {
     </DraftContext.Provider>
   );
 }
-export function ImportScreen({ navigation, route }: any) {
-  const { tripId, walletId } = route.params || {};
+export function ImportScreen({ navigation, route, embedded = false }: any) {
+  const { tripId, walletId } = route?.params || {};
   const { batches, setBatches } = useContext(DraftContext);
   const { parse, call } = useApi();
   const parsers = useResource("getAvailableParsers", tripId ? "trip" : "bank");
@@ -96,10 +96,12 @@ export function ImportScreen({ navigation, route }: any) {
     : parsers.data?.parsers || [];
   return (
     <Screen>
-      <Heading
-        title="Bring it all together"
-        subtitle="Import a statement. Review every detail before saving."
-      />
+      {!embedded && (
+        <Heading
+          title="Bring it all together"
+          subtitle="Import a statement. Review every detail before saving."
+        />
+      )}
       <Card>
         <Txt bold size={19}>
           1. Choose your statement type
@@ -215,16 +217,20 @@ export function ImportScreen({ navigation, route }: any) {
           onPress={() => navigation.navigate("ImportReview")}
         />
       )}
-      <Button
-        title="Import history"
-        secondary
-        onPress={() => navigation.navigate("ImportHistory")}
-      />
-      <Button
-        title="Review agent drafts"
-        secondary
-        onPress={() => navigation.navigate("Drafts")}
-      />
+      {!embedded && (
+        <>
+          <Button
+            title="Import history"
+            secondary
+            onPress={() => navigation.navigate("ImportHistory")}
+          />
+          <Button
+            title="Review agent drafts"
+            secondary
+            onPress={() => navigation.navigate("Drafts")}
+          />
+        </>
+      )}
     </Screen>
   );
 }
@@ -804,9 +810,8 @@ export function ImportManagementScreen({ navigation }: any) {
   const categories = useResource("getCategories", { scope: "settings" });
   const accounts = useResource("getAccountNumbers");
   const { call } = useApi();
-  const { batches } = useContext(DraftContext);
   const { colors } = useTheme();
-  const [tab, setTab] = useState("Staged");
+  const [tab, setTab] = useState("Import");
   const [showTogether, setShowTogether] = useState(false);
   const [selectedDraftIds, setSelectedDraftIds] = useState<string[]>([]);
   const [detailedDrafts, setDetailedDrafts] = useState<any[]>([]);
@@ -857,6 +862,20 @@ export function ImportManagementScreen({ navigation }: any) {
   const allDraftsSelected =
     staged.length > 0 &&
     staged.every((draft: any) => selectedDraftIds.includes(draft.id));
+  if (tab === "Import") {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.bg }}>
+        <View style={{ paddingHorizontal: 20, paddingTop: 20 }}>
+          <Chips
+            values={["Import", "Staged", "History"]}
+            value={tab}
+            onChange={setTab}
+          />
+        </View>
+        <ImportScreen navigation={navigation} route={{ params: {} }} embedded />
+      </View>
+    );
+  }
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <FlatList
@@ -870,22 +889,10 @@ export function ImportManagementScreen({ navigation }: any) {
         ListHeaderComponent={
           <View style={styles.stack}>
             <Chips
-              values={["Staged", "History"]}
+              values={["Import", "Staged", "History"]}
               value={tab}
               onChange={setTab}
             />
-            <Button
-              title="Import a statement"
-              icon="add-outline"
-              onPress={() => navigation.navigate("StatementImport")}
-            />
-            {!!batches.length && (
-              <Button
-                title={`Resume ${batches.length} pending statements`}
-                secondary
-                onPress={() => navigation.navigate("ImportReview")}
-              />
-            )}
             {tab === "Staged" &&
               (showTogether ? (
                 <Button
