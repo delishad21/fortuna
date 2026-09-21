@@ -140,6 +140,8 @@ export class TransactionService {
     "PayLah top-up from account is Internal",
     "DBS/POSB top-up to PayLah is Internal",
     "DBS/POSB legacy top-up to PayLah is Internal",
+    "DBS/POSB PayLah max-out is Internal",
+    "DBS/POSB legacy PayLah max-out is Internal",
     "PayLah send back to bank is Internal",
     "DBS/POSB receive back from PayLah is Internal",
     "DBS/POSB legacy receive back from PayLah is Internal",
@@ -147,6 +149,7 @@ export class TransactionService {
 
   private static readonly DBS_PAYLAH_INTERNAL_PATTERNS = [
     "TOP-UP TO PAYLAH!",
+    "MAXED OUT FROM PAYLAH!",
     "SEND BACK FROM PAYLAH!",
   ] as const;
 
@@ -186,6 +189,30 @@ export class TransactionService {
       setCategoryName: null,
       markInternal: true,
       sortOrder: 21,
+    },
+    {
+      name: "DBS/POSB PayLah max-out is Internal",
+      parserId: "dbs_posb_consolidated",
+      matchType: "description_contains",
+      matchValue: "MAXED OUT FROM PAYLAH!",
+      caseSensitive: false,
+      enabled: false,
+      setLabel: null,
+      setCategoryName: null,
+      markInternal: true,
+      sortOrder: 25,
+    },
+    {
+      name: "DBS/POSB legacy PayLah max-out is Internal",
+      parserId: "dbs_posb_consolidated_legacy",
+      matchType: "description_contains",
+      matchValue: "MAXED OUT FROM PAYLAH!",
+      caseSensitive: false,
+      enabled: false,
+      setLabel: null,
+      setCategoryName: null,
+      markInternal: true,
+      sortOrder: 26,
     },
     {
       name: "PayLah send back to bank is Internal",
