@@ -6,7 +6,10 @@ import { Bot, Check, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { TransactionTable } from "@/components/transaction-table/TransactionTable";
 import { ReimbursementSelectorModal } from "./ReimbursementSelectorModal";
-import type { Transaction, TransactionLinkage } from "@/components/transaction-table/types";
+import type {
+  Transaction,
+  TransactionLinkage,
+} from "@/components/transaction-table/types";
 import {
   commitAgentDraft,
   decideAgentProposal,
@@ -26,14 +29,16 @@ function rowTone(row: DraftRow) {
     (row.proposals || []).some((proposal: Record<string, any>) =>
       ["proposed", "accepted", "auto_applied"].includes(proposal.status),
     )
-  ) return "llm";
+  )
+    return "llm";
   const payload = row.currentPayload || {};
   if (
     payload.suggestionApplied ||
     payload.suggestionSource ||
     payload.suggestedLabel ||
     payload.suggestedCategoryId
-  ) return "algorithm";
+  )
+    return "algorithm";
   return "";
 }
 
@@ -93,13 +98,27 @@ export function AgentDraftReviewClient({
   }, []);
 
   const flatRows = useMemo(
-    () => drafts.flatMap((draft) =>
-      (draft.rows || []).map((row) => ({
-        draft,
-        row,
-        transaction: tableTransaction(draft, row),
-      })),
-    ),
+    () =>
+      drafts
+        .flatMap((draft) =>
+          (draft.rows || []).map((row) => ({
+            draft,
+            row,
+            transaction: tableTransaction(draft, row),
+          })),
+        )
+        .sort((left, right) => {
+          const dateOrder = String(left.transaction.date || "").localeCompare(
+            String(right.transaction.date || ""),
+          );
+          if (dateOrder !== 0) return dateOrder;
+          const draftOrder = String(
+            left.draft.sourceFilename || "",
+          ).localeCompare(String(right.draft.sourceFilename || ""));
+          return draftOrder !== 0
+            ? draftOrder
+            : Number(left.row.rowIndex || 0) - Number(right.row.rowIndex || 0);
+        }),
     [drafts],
   );
   const transactions = flatRows.map((item) => item.transaction);
@@ -108,11 +127,13 @@ export function AgentDraftReviewClient({
   );
 
   const refresh = async () => {
-    setDrafts(await Promise.all(
-      drafts.map((draft) =>
-        getAgentDraft(draft.id).then((result) => result.draft as Draft),
+    setDrafts(
+      await Promise.all(
+        drafts.map((draft) =>
+          getAgentDraft(draft.id).then((result) => result.draft as Draft),
+        ),
       ),
-    ));
+    );
   };
 
   const updateRow = async (
@@ -131,7 +152,9 @@ export function AgentDraftReviewClient({
       });
       await refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not update row");
+      setMessage(
+        error instanceof Error ? error.message : "Could not update row",
+      );
     } finally {
       setBusy(false);
     }
@@ -161,7 +184,9 @@ export function AgentDraftReviewClient({
       );
       await refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not update rows");
+      setMessage(
+        error instanceof Error ? error.message : "Could not update rows",
+      );
     } finally {
       setBusy(false);
     }
@@ -174,27 +199,40 @@ export function AgentDraftReviewClient({
       const candidates = drafts.filter((draft) =>
         draft.rows.some((row: DraftRow) => row.selected),
       );
-      const validations = await Promise.all(candidates.map(async (draft) => ({
-        draft,
-        validation: await validateAgentDraft(draft.id),
-      })));
+      const validations = await Promise.all(
+        candidates.map(async (draft) => ({
+          draft,
+          validation: await validateAgentDraft(draft.id),
+        })),
+      );
       const invalid = validations.filter((item) => !item.validation.valid);
       if (invalid.length) {
-        setMessage(invalid.flatMap(({ draft, validation }) =>
-          [...(validation.errors || []), ...(validation.warnings || [])].map(
-            (item: any) =>
-              `${draft.sourceFilename}${item.rowIndex !== undefined ? ` row ${item.rowIndex + 1}` : ""}: ${item.message}`,
-          ),
-        ).join("\n") || "Resolve the flagged rows before committing.");
+        setMessage(
+          invalid
+            .flatMap(({ draft, validation }) =>
+              [
+                ...(validation.errors || []),
+                ...(validation.warnings || []),
+              ].map(
+                (item: any) =>
+                  `${draft.sourceFilename}${item.rowIndex !== undefined ? ` row ${item.rowIndex + 1}` : ""}: ${item.message}`,
+              ),
+            )
+            .join("\n") || "Resolve the flagged rows before committing.",
+        );
         await refresh();
         return;
       }
       const selected = validations.reduce(
-        (sum, item) => sum + Number(item.validation.summary?.selected || 0), 0,
+        (sum, item) => sum + Number(item.validation.summary?.selected || 0),
+        0,
       );
-      if (!window.confirm(
-        `Commit ${selected} selected rows across ${validations.length} staged import${validations.length === 1 ? "" : "s"}?`,
-      )) return;
+      if (
+        !window.confirm(
+          `Commit ${selected} selected rows across ${validations.length} staged import${validations.length === 1 ? "" : "s"}?`,
+        )
+      )
+        return;
       for (const { draft, validation } of validations) {
         await commitAgentDraft(draft.id, validation.confirmationToken);
       }
@@ -210,34 +248,38 @@ export function AgentDraftReviewClient({
   const openReimbursement = (globalIndex: number) => {
     const source = flatRows[globalIndex];
     if (!source) return;
-    const sourceRows = flatRows.filter((item) => item.draft.id === source.draft.id);
+    const sourceRows = flatRows.filter(
+      (item) => item.draft.id === source.draft.id,
+    );
     setReimbursement({
       globalIndex,
       transactions: sourceRows.map((item) => item.transaction),
-      currentIndex: sourceRows.findIndex((item) => item.row.id === source.row.id),
+      currentIndex: sourceRows.findIndex(
+        (item) => item.row.id === source.row.id,
+      ),
     });
   };
-
-  const legend = (
-    <div className="hidden items-center gap-3 text-xs text-dark-5 xl:flex dark:text-dark-6">
-      <span className="rounded bg-blue-50 px-2 py-1 dark:bg-blue-950/20">Algorithm</span>
-      <span className="rounded bg-primary/10 px-2 py-1">LLM confirmed</span>
-      <span className="rounded bg-orange-light-4 px-2 py-1 dark:bg-orange-dark-3/20">Needs labelling</span>
-    </div>
-  );
 
   return (
     <div className={embedded ? "h-[68vh]" : "h-[calc(100vh-9rem)] space-y-3"}>
       {!embedded && (
         <div className="flex items-end justify-between">
           <div>
-            <Link href="/imports" className="text-sm text-primary">← Imports</Link>
+            <Link href="/imports" className="text-sm text-primary">
+              ← Imports
+            </Link>
             <h1 className="font-display text-2xl font-bold text-dark dark:text-white">
-              {drafts.length === 1 ? drafts[0].sourceFilename : "Staged imports"}
+              {drafts.length === 1
+                ? drafts[0].sourceFilename
+                : "Staged imports"}
             </h1>
           </div>
-          <Button variant="secondary" disabled={busy} onClick={() => void refresh()}
-            leftIcon={<RefreshCw className="size-4" />}>
+          <Button
+            variant="secondary"
+            disabled={busy}
+            onClick={() => void refresh()}
+            leftIcon={<RefreshCw className="size-4" />}
+          >
             Refresh
           </Button>
         </div>
@@ -276,51 +318,88 @@ export function AgentDraftReviewClient({
           void updateRow(index, { selected: !flatRows[index]?.row.selected })
         }
         onAddCategoryClick={() =>
-          setMessage("Create new categories in Settings, then refresh this review.")
+          setMessage(
+            "Create new categories in Settings, then refresh this review.",
+          )
         }
-        onLinkageChange={(index, linkage) => updateField(index, "linkage", linkage)}
+        onLinkageChange={(index, linkage) =>
+          updateField(index, "linkage", linkage)
+        }
         onOpenReimbursementSelector={openReimbursement}
         deferCellCommit
         lockLinkedReimbursements={false}
         allowReservedCategorySelection
-        reviewActionLeft={legend}
         renderExpandedActions={(index) => {
           const item = flatRows[index];
           if (!item) return null;
           return (
             <div className="space-y-3">
               {(item.row.review?.reasons || []).map((reason: string) => (
-                <p key={reason} className="text-sm text-primary">{reason}</p>
+                <p key={reason} className="text-sm text-primary">
+                  {reason}
+                </p>
               ))}
-              {(item.row.proposals || []).map((proposal: Record<string, any>) => (
-                <div key={proposal.id} className="rounded-lg border border-primary/20 bg-primary/5 p-3">
-                  <div className="flex items-start gap-2">
-                    <Bot className="mt-0.5 size-4 text-primary" />
-                    <div className="flex-1">
-                      <p className="font-medium text-dark dark:text-white">
-                        LLM suggestion · {Math.round(Number(proposal.confidence) * 100)}% · {proposal.status}
-                      </p>
-                      <p className="mt-1 text-dark-5 dark:text-dark-6">{proposal.reason}</p>
-                      <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
-                        Label: {proposal.proposedLabel || "unchanged"} · Category: {categories.find((category) => category.id === proposal.proposedCategoryId)?.name || "unchanged"}
-                      </p>
+              {(item.row.proposals || []).map(
+                (proposal: Record<string, any>) => (
+                  <div
+                    key={proposal.id}
+                    className="rounded-lg border border-primary/20 bg-primary/5 p-3"
+                  >
+                    <div className="flex items-start gap-2">
+                      <Bot className="mt-0.5 size-4 text-primary" />
+                      <div className="flex-1">
+                        <p className="font-medium text-dark dark:text-white">
+                          LLM suggestion ·{" "}
+                          {Math.round(Number(proposal.confidence) * 100)}% ·{" "}
+                          {proposal.status}
+                        </p>
+                        <p className="mt-1 text-dark-5 dark:text-dark-6">
+                          {proposal.reason}
+                        </p>
+                        <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
+                          Label: {proposal.proposedLabel || "unchanged"} ·
+                          Category:{" "}
+                          {categories.find(
+                            (category) =>
+                              category.id === proposal.proposedCategoryId,
+                          )?.name || "unchanged"}
+                        </p>
+                      </div>
                     </div>
+                    {proposal.status === "proposed" && (
+                      <div className="mt-3 flex gap-2">
+                        <Button
+                          size="sm"
+                          disabled={busy}
+                          leftIcon={<Check className="size-3" />}
+                          onClick={() =>
+                            void decideAgentProposal(
+                              proposal.id,
+                              "accept",
+                            ).then(refresh)
+                          }
+                        >
+                          Accept
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={busy}
+                          leftIcon={<X className="size-3" />}
+                          onClick={() =>
+                            void decideAgentProposal(
+                              proposal.id,
+                              "reject",
+                            ).then(refresh)
+                          }
+                        >
+                          Reject
+                        </Button>
+                      </div>
+                    )}
                   </div>
-                  {proposal.status === "proposed" && (
-                    <div className="mt-3 flex gap-2">
-                      <Button size="sm" disabled={busy} leftIcon={<Check className="size-3" />}
-                        onClick={() => void decideAgentProposal(proposal.id, "accept").then(refresh)}>
-                        Accept
-                      </Button>
-                      <Button size="sm" variant="secondary" disabled={busy}
-                        leftIcon={<X className="size-3" />}
-                        onClick={() => void decideAgentProposal(proposal.id, "reject").then(refresh)}>
-                        Reject
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              ))}
+                ),
+              )}
             </div>
           );
         }}
@@ -331,7 +410,9 @@ export function AgentDraftReviewClient({
           onClose={() => setReimbursement(null)}
           currentIndex={reimbursement.currentIndex}
           transactions={reimbursement.transactions}
-          currentLinkage={reimbursement.transactions[reimbursement.currentIndex]?.linkage}
+          currentLinkage={
+            reimbursement.transactions[reimbursement.currentIndex]?.linkage
+          }
           categories={categories}
           excludeStagedDraftId={flatRows[reimbursement.globalIndex]?.draft.id}
           onConfirm={(linkage: TransactionLinkage) => {

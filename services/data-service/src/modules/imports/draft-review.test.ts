@@ -17,6 +17,13 @@ test("flags incomplete classification even on edited rows", () => {
     true,
   );
 });
+test("treats deterministic internal linkage as a completed category assignment", () => {
+  const review = reviewDraftRow({
+    ...ready,
+    currentPayload: { label: "PayLah transfer", linkage: { type: "internal" } },
+  });
+  assert.equal(review.labelling, false);
+});
 test("separates pending reconciliation and pending classification", () => {
   const review = reviewDraftRow({
     ...ready,

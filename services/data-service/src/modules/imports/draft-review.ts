@@ -23,7 +23,8 @@ export function reviewDraftRow(row: Row) {
       ),
   );
   const missingClassification =
-    !String(payload.label || "").trim() || !payload.categoryId;
+    !String(payload.label || "").trim() ||
+    (!payload.categoryId && !payload.linkage);
   const labelling =
     missingClassification ||
     pending.some((p) => Boolean(p.proposedLabel || p.proposedCategoryId));

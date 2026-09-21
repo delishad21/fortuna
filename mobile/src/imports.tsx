@@ -1,5 +1,12 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
-import { FlatList, Modal, Platform, Pressable, ScrollView, Switch, View } from "react-native";
+import React, { createContext, useContext, useState } from "react";
+import {
+  FlatList,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  View,
+} from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import { useApi, useResource } from "./api";
 import {
@@ -325,7 +332,9 @@ export function ImportReviewScreen({ navigation }: any) {
         }
         renderItem={({ item, index }) => {
           const expanded = expandedRows.includes(index);
-          const needsLabel = !String(item.label || "").trim() || (!item.categoryId && !item.linkage);
+          const needsLabel =
+            !String(item.label || "").trim() ||
+            (!item.categoryId && !item.linkage);
           const tone = needsLabel
             ? "#F59E0B18"
             : item.metadata?.llmSuggested
@@ -333,53 +342,69 @@ export function ImportReviewScreen({ navigation }: any) {
               : item.suggestionApplied
                 ? "#3B82F618"
                 : undefined;
-          return <Card style={{ marginTop: 12, ...(tone ? { backgroundColor: tone } : {}) }}>
-            <View style={styles.between}>
-              <Txt bold size={16} style={{ flex: 1 }}>
-                {item.label || item.description}
-              </Txt>
-              <Pressable onPress={() => setEditingIndex(index)} style={{ padding: 8 }}>
-                <Txt bold style={{ color: colors.purple }}>Edit</Txt>
-              </Pressable>
-            </View>
-            <TransactionRow
-              item={item}
-              selected={batch.selected.includes(index)}
-              onPress={() =>
-                update((b) => ({
-                  ...b,
-                  selected: b.selected.includes(index)
-                    ? b.selected.filter((i) => i !== index)
-                    : [...b.selected, index],
-                }))
-              }
-            />
-            {expanded && batch.duplicates
-              .find((d) => d.index === index)
-              ?.matches.map((m: any) => (
-                <Txt key={m.transaction.id} size={12} muted>
-                  Possible duplicate: {m.transaction.description} ·{" "}
-                  {String(m.transaction.date).slice(0, 10)} ·{" "}
-                  {money(m.transaction.amountOut || m.transaction.amountIn)} —{" "}
-                  {m.matchReasons.join(", ")}
+          return (
+            <Card
+              style={{
+                marginTop: 12,
+                ...(tone ? { backgroundColor: tone } : {}),
+              }}
+            >
+              <View style={styles.between}>
+                <Txt bold size={16} style={{ flex: 1 }}>
+                  {item.label || item.description}
                 </Txt>
-              ))}
-            {expanded && item.suggestionSource && (
-              <Txt muted size={12}>
-                Suggestion: {item.suggestionSource} ·{" "}
-                {Math.round((item.suggestionConfidence || 0) * 100)}% confidence
-              </Txt>
-            )}
-            <Button
-              title={expanded ? "Hide details" : "More details"}
-              secondary
-              onPress={() => setExpandedRows((old) =>
-                old.includes(index)
-                  ? old.filter((value) => value !== index)
-                  : [...old, index],
+                <Pressable
+                  onPress={() => setEditingIndex(index)}
+                  style={{ padding: 8 }}
+                >
+                  <Txt bold style={{ color: colors.purple }}>
+                    Edit
+                  </Txt>
+                </Pressable>
+              </View>
+              <TransactionRow
+                item={item}
+                selected={batch.selected.includes(index)}
+                onPress={() =>
+                  update((b) => ({
+                    ...b,
+                    selected: b.selected.includes(index)
+                      ? b.selected.filter((i) => i !== index)
+                      : [...b.selected, index],
+                  }))
+                }
+              />
+              {expanded &&
+                batch.duplicates
+                  .find((d) => d.index === index)
+                  ?.matches.map((m: any) => (
+                    <Txt key={m.transaction.id} size={12} muted>
+                      Possible duplicate: {m.transaction.description} ·{" "}
+                      {String(m.transaction.date).slice(0, 10)} ·{" "}
+                      {money(m.transaction.amountOut || m.transaction.amountIn)}{" "}
+                      — {m.matchReasons.join(", ")}
+                    </Txt>
+                  ))}
+              {expanded && item.suggestionSource && (
+                <Txt muted size={12}>
+                  Suggestion: {item.suggestionSource} ·{" "}
+                  {Math.round((item.suggestionConfidence || 0) * 100)}%
+                  confidence
+                </Txt>
               )}
-            />
-          </Card>;
+              <Button
+                title={expanded ? "Hide details" : "More details"}
+                secondary
+                onPress={() =>
+                  setExpandedRows((old) =>
+                    old.includes(index)
+                      ? old.filter((value) => value !== index)
+                      : [...old, index],
+                  )
+                }
+              />
+            </Card>
+          );
         }}
         ListFooterComponent={
           <View style={{ gap: 12, marginTop: 20 }}>
@@ -455,28 +480,38 @@ export function ImportReviewScreen({ navigation }: any) {
           <ScrollView contentContainerStyle={styles.content}>
             <View style={styles.between}>
               <Heading title="Edit transaction" />
-              <Pressable onPress={() => setEditingIndex(null)} style={{ padding: 10 }}>
-                <Txt bold style={{ color: colors.purple }}>Close</Txt>
+              <Pressable
+                onPress={() => setEditingIndex(null)}
+                style={{ padding: 10 }}
+              >
+                <Txt bold style={{ color: colors.purple }}>
+                  Close
+                </Txt>
               </Pressable>
             </View>
-            {editingIndex !== null && Number(batch.transactions[editingIndex]?.amountIn) > 0 && (
-              <Button
-                title="Allocate reimbursement"
-                secondary
-                onPress={() => {
-                  const index = editingIndex;
-                  setEditingIndex(null);
-                  navigation.navigate("ImportAllocation", { index });
-                }}
-              />
-            )}
+            {editingIndex !== null &&
+              Number(batch.transactions[editingIndex]?.amountIn) > 0 && (
+                <Button
+                  title="Allocate reimbursement"
+                  secondary
+                  onPress={() => {
+                    const index = editingIndex;
+                    setEditingIndex(null);
+                    navigation.navigate("ImportAllocation", { index });
+                  }}
+                />
+              )}
             {editingIndex !== null && (
               <Form
                 key={editingIndex}
                 initial={{
                   ...batch.transactions[editingIndex],
-                  date: String(batch.transactions[editingIndex]?.date || "").slice(0, 10),
-                  internal: batch.transactions[editingIndex]?.linkage?.type === "internal",
+                  date: String(
+                    batch.transactions[editingIndex]?.date || "",
+                  ).slice(0, 10),
+                  internal:
+                    batch.transactions[editingIndex]?.linkage?.type ===
+                    "internal",
                 }}
                 fields={[
                   { key: "date", label: "Date", type: "date", required: true },
@@ -497,7 +532,13 @@ export function ImportReviewScreen({ navigation }: any) {
                     ],
                   },
                   ...(!batch.tripId
-                    ? [{ key: "internal", label: "Internal transfer", type: "boolean" as const }]
+                    ? [
+                        {
+                          key: "internal",
+                          label: "Internal transfer",
+                          type: "boolean" as const,
+                        },
+                      ]
                     : []),
                 ]}
                 onSave={async (value) => {
@@ -506,23 +547,24 @@ export function ImportReviewScreen({ navigation }: any) {
                   const { internal, ...payload } = value;
                   update((current) => ({
                     ...current,
-                    transactions: current.transactions.map((transaction, rowIndex) =>
-                      rowIndex === index
-                        ? {
-                            ...original,
-                            ...payload,
-                            categoryId: value.categoryId || null,
-                            ...(!batch.tripId
-                              ? {
-                                  linkage: internal
-                                    ? { type: "internal" }
-                                    : original.linkage?.type === "internal"
-                                      ? null
-                                      : original.linkage,
-                                }
-                              : {}),
-                          }
-                        : transaction,
+                    transactions: current.transactions.map(
+                      (transaction, rowIndex) =>
+                        rowIndex === index
+                          ? {
+                              ...original,
+                              ...payload,
+                              categoryId: value.categoryId || null,
+                              ...(!batch.tripId
+                                ? {
+                                    linkage: internal
+                                      ? { type: "internal" }
+                                      : original.linkage?.type === "internal"
+                                        ? null
+                                        : original.linkage,
+                                  }
+                                : {}),
+                            }
+                          : transaction,
                     ),
                   }));
                   setEditingIndex(null);
@@ -717,6 +759,45 @@ export function ImportDetailScreen({ navigation, route }: any) {
     </Screen>
   );
 }
+function DraftSelectionCheckbox({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+}) {
+  const { colors } = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked }}
+      accessibilityLabel={label}
+      onPress={() => onChange(!checked)}
+      style={{ padding: 8 }}
+    >
+      <View
+        style={{
+          width: 24,
+          height: 24,
+          borderRadius: 6,
+          borderWidth: 2,
+          borderColor: checked ? colors.purple : colors.line,
+          backgroundColor: checked ? colors.purple : colors.card,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {checked && (
+          <Txt bold style={{ color: "#FFFFFF", lineHeight: 18 }}>
+            ✓
+          </Txt>
+        )}
+      </View>
+    </Pressable>
+  );
+}
 export function ImportManagementScreen({ navigation }: any) {
   const drafts = useResource("getAgentDrafts");
   const history = useResource("getImportSummaries");
@@ -727,6 +808,7 @@ export function ImportManagementScreen({ navigation }: any) {
   const { colors } = useTheme();
   const [tab, setTab] = useState("Staged");
   const [showTogether, setShowTogether] = useState(false);
+  const [selectedDraftIds, setSelectedDraftIds] = useState<string[]>([]);
   const [detailedDrafts, setDetailedDrafts] = useState<any[]>([]);
   const [loadingTogether, setLoadingTogether] = useState(false);
   const [editing, setEditing] = useState<any>(null);
@@ -740,30 +822,47 @@ export function ImportManagementScreen({ navigation }: any) {
   const imported = Array.isArray(history.data)
     ? history.data
     : history.data?.imports || history.data?.importSummaries || [];
-  const loadDetailed = async () => {
+  const loadDetailed = async (draftIds = selectedDraftIds) => {
     setLoadingTogether(true);
     try {
       setDetailedDrafts(
         await Promise.all(
-          staged.map((draft: any) =>
-            call("getAgentDraft", draft.id).then((value: any) => value.draft),
-          ),
+          staged
+            .filter((draft: any) => draftIds.includes(draft.id))
+            .map((draft: any) =>
+              call("getAgentDraft", draft.id).then((value: any) => value.draft),
+            ),
         ),
       );
     } finally {
       setLoadingTogether(false);
     }
   };
-  useEffect(() => {
-    if (tab === "Staged" && showTogether) void loadDetailed();
-  }, [showTogether, tab, staged.map((draft: any) => draft.id).join(",")]);
-  const combinedRows = detailedDrafts.flatMap((draft: any) =>
-    (draft.rows || []).map((row: any) => ({ draft, row })),
-  );
+  const combinedRows = detailedDrafts
+    .flatMap((draft: any) =>
+      (draft.rows || []).map((row: any) => ({ draft, row })),
+    )
+    .sort((left: any, right: any) => {
+      const dateOrder = String(
+        left.row.currentPayload?.date || "",
+      ).localeCompare(String(right.row.currentPayload?.date || ""));
+      if (dateOrder !== 0) return dateOrder;
+      const draftOrder = String(left.draft.sourceFilename || "").localeCompare(
+        String(right.draft.sourceFilename || ""),
+      );
+      return draftOrder !== 0
+        ? draftOrder
+        : Number(left.row.rowIndex || 0) - Number(right.row.rowIndex || 0);
+    });
+  const allDraftsSelected =
+    staged.length > 0 &&
+    staged.every((draft: any) => selectedDraftIds.includes(draft.id));
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <FlatList
-        data={tab === "Staged" ? (showTogether ? combinedRows : staged) : imported}
+        data={
+          tab === "Staged" ? (showTogether ? combinedRows : staged) : imported
+        }
         keyExtractor={(item: any) => item.row?.id || item.id || item.key}
         contentContainerStyle={styles.content}
         refreshing={result.loading}
@@ -787,12 +886,37 @@ export function ImportManagementScreen({ navigation }: any) {
                 onPress={() => navigation.navigate("ImportReview")}
               />
             )}
-            {tab === "Staged" && (
-              <View style={styles.between}>
-                <Txt bold>View and label together</Txt>
-                <Switch value={showTogether} onValueChange={setShowTogether} />
-              </View>
-            )}
+            {tab === "Staged" &&
+              (showTogether ? (
+                <Button
+                  title="Change staged imports"
+                  secondary
+                  onPress={() => setShowTogether(false)}
+                />
+              ) : (
+                <>
+                  <View style={styles.between}>
+                    <Txt bold>Select all staged imports</Txt>
+                    <DraftSelectionCheckbox
+                      checked={allDraftsSelected}
+                      label="Select all staged imports"
+                      onChange={(checked) =>
+                        setSelectedDraftIds(
+                          checked ? staged.map((draft: any) => draft.id) : [],
+                        )
+                      }
+                    />
+                  </View>
+                  <Button
+                    title={`Review selected (${selectedDraftIds.length})`}
+                    disabled={!selectedDraftIds.length || loadingTogether}
+                    onPress={async () => {
+                      await loadDetailed(selectedDraftIds);
+                      setShowTogether(true);
+                    }}
+                  />
+                </>
+              ))}
             <State {...result} />
             {loadingTogether && <Txt muted>Loading staged transactions…</Txt>}
           </View>
@@ -813,104 +937,152 @@ export function ImportManagementScreen({ navigation }: any) {
             </Card>
           ) : null
         }
-        renderItem={({ item: d }: any) => showTogether && tab === "Staged" ? (
-          <Card style={{
-            marginTop: 12,
-            backgroundColor: d.row.review?.labelling
-              ? "#F59E0B18"
-              : (d.row.proposals || []).some((p: any) => ["proposed", "accepted", "auto_applied"].includes(p.status))
-                ? `${colors.purple}18`
-                : d.row.currentPayload?.suggestionApplied || d.row.currentPayload?.suggestionSource
-                  ? "#3B82F618"
-                  : colors.card,
-          }}>
-            <View style={styles.between}>
-              <Txt bold size={17} style={{ flex: 1 }}>
-                {d.row.currentPayload?.label || d.row.currentPayload?.description}
+        renderItem={({ item: d }: any) =>
+          showTogether && tab === "Staged" ? (
+            <Card
+              style={{
+                marginTop: 12,
+                backgroundColor: d.row.review?.labelling
+                  ? "#F59E0B18"
+                  : (d.row.proposals || []).some((p: any) =>
+                        ["proposed", "accepted", "auto_applied"].includes(
+                          p.status,
+                        ),
+                      )
+                    ? `${colors.purple}18`
+                    : d.row.currentPayload?.suggestionApplied ||
+                        d.row.currentPayload?.suggestionSource
+                      ? "#3B82F618"
+                      : colors.card,
+              }}
+            >
+              <View style={styles.between}>
+                <Txt bold size={17} style={{ flex: 1 }}>
+                  {d.row.currentPayload?.label ||
+                    d.row.currentPayload?.description}
+                </Txt>
+                <Pressable onPress={() => setEditing(d)} style={{ padding: 8 }}>
+                  <Txt bold style={{ color: colors.purple }}>
+                    Edit
+                  </Txt>
+                </Pressable>
+              </View>
+              <TransactionRow
+                item={d.row.currentPayload}
+                selected={d.row.selected}
+              />
+              <Txt muted>
+                {d.draft.sourceFilename} · {d.row.reviewStatus}
               </Txt>
-              <Pressable onPress={() => setEditing(d)} style={{ padding: 8 }}>
-                <Txt bold style={{ color: colors.purple }}>Edit</Txt>
-              </Pressable>
-            </View>
-            <TransactionRow item={d.row.currentPayload} selected={d.row.selected} />
-            <Txt muted>{d.draft.sourceFilename} · {d.row.reviewStatus}</Txt>
-            <View style={styles.row}>
-              <Button
-                title={d.row.selected ? "Exclude" : "Include"}
-                secondary
-                onPress={async () => {
-                  await call("updateAgentDraftRow", d.draft.id, d.row.id, {
-                    expectedVersion: d.row.version,
-                    selected: !d.row.selected,
-                  });
-                  await loadDetailed();
-                }}
-              />
-              <Button
-                title={expanded.includes(d.row.id) ? "Hide details" : "More details"}
-                secondary
-                onPress={() => setExpanded((old) =>
-                  old.includes(d.row.id)
-                    ? old.filter((id) => id !== d.row.id)
-                    : [...old, d.row.id],
-                )}
-              />
-            </View>
-            {expanded.includes(d.row.id) && (d.row.review?.reasons || []).map((reason: string) => (
-              <Txt key={reason} style={{ color: colors.purple }}>{reason}</Txt>
-            ))}
-            {expanded.includes(d.row.id) && (d.row.proposals || []).map((proposal: any) => (
-              <Card key={proposal.id}>
-                <Txt bold>LLM suggestion · {Math.round(Number(proposal.confidence) * 100)}%</Txt>
-                <Txt>{proposal.reason}</Txt>
-              </Card>
-            ))}
-          </Card>
-        ) : (
-          <Card style={{ marginTop: 12 }}>
-            <Txt bold size={18}>
-              {d.sourceFilename || d.filename}
-            </Txt>
-            {tab === "Staged" ? (
-              <>
-                <Txt muted>
-                  {d.reviewSummary?.total ?? d._count?.rows ?? 0} transactions ·{" "}
-                  {d.mode} · {d.status}
-                </Txt>
-                <Txt bold>
-                  {d.reviewSummary?.needsReview || 0} need review ·{" "}
-                  {d.reviewSummary?.ready || 0} ready
-                </Txt>
-                <Txt muted>
-                  {d.reviewSummary?.labelling || 0} need labelling ·{" "}
-                  {d.reviewSummary?.reconciliation || 0} need reconciliation
-                </Txt>
+              <View style={styles.row}>
                 <Button
-                  title="Review staged transactions"
+                  title={d.row.selected ? "Exclude" : "Include"}
                   secondary
-                  onPress={() => navigation.navigate("Draft", { id: d.id })}
+                  onPress={async () => {
+                    await call("updateAgentDraftRow", d.draft.id, d.row.id, {
+                      expectedVersion: d.row.version,
+                      selected: !d.row.selected,
+                    });
+                    await loadDetailed();
+                  }}
                 />
-              </>
-            ) : (
-              <>
-                <Txt muted>
-                  {d.transactionCount} transactions ·{" "}
-                  {String(d.importedAt || d.latestTransactionDate).slice(0, 10)}
-                </Txt>
-                <Txt>
-                  {money(d.totalOut)} out · {money(d.totalIn)} in
-                </Txt>
                 <Button
-                  title="View statement"
+                  title={
+                    expanded.includes(d.row.id)
+                      ? "Hide details"
+                      : "More details"
+                  }
                   secondary
                   onPress={() =>
-                    navigation.navigate("ImportDetail", { key: d.key })
+                    setExpanded((old) =>
+                      old.includes(d.row.id)
+                        ? old.filter((id) => id !== d.row.id)
+                        : [...old, d.row.id],
+                    )
                   }
                 />
-              </>
-            )}
-          </Card>
-        )}
+              </View>
+              {expanded.includes(d.row.id) &&
+                (d.row.review?.reasons || []).map((reason: string) => (
+                  <Txt key={reason} style={{ color: colors.purple }}>
+                    {reason}
+                  </Txt>
+                ))}
+              {expanded.includes(d.row.id) &&
+                (d.row.proposals || []).map((proposal: any) => (
+                  <Card key={proposal.id}>
+                    <Txt bold>
+                      LLM suggestion ·{" "}
+                      {Math.round(Number(proposal.confidence) * 100)}%
+                    </Txt>
+                    <Txt>{proposal.reason}</Txt>
+                  </Card>
+                ))}
+            </Card>
+          ) : (
+            <Card style={{ marginTop: 12 }}>
+              <View style={styles.between}>
+                <Txt bold size={18} style={{ flex: 1 }}>
+                  {d.sourceFilename || d.filename}
+                </Txt>
+                {tab === "Staged" && (
+                  <DraftSelectionCheckbox
+                    checked={selectedDraftIds.includes(d.id)}
+                    label={`Select ${d.sourceFilename}`}
+                    onChange={(checked) =>
+                      setSelectedDraftIds((current) =>
+                        checked
+                          ? [...current.filter((id) => id !== d.id), d.id]
+                          : current.filter((id) => id !== d.id),
+                      )
+                    }
+                  />
+                )}
+              </View>
+              {tab === "Staged" ? (
+                <>
+                  <Txt muted>
+                    {d.reviewSummary?.total ?? d._count?.rows ?? 0} transactions
+                    · {d.mode} · {d.status}
+                  </Txt>
+                  <Txt bold>
+                    {d.reviewSummary?.needsReview || 0} need review ·{" "}
+                    {d.reviewSummary?.ready || 0} ready
+                  </Txt>
+                  <Txt muted>
+                    {d.reviewSummary?.labelling || 0} need labelling ·{" "}
+                    {d.reviewSummary?.reconciliation || 0} need reconciliation
+                  </Txt>
+                  <Button
+                    title="Review staged transactions"
+                    secondary
+                    onPress={() => navigation.navigate("Draft", { id: d.id })}
+                  />
+                </>
+              ) : (
+                <>
+                  <Txt muted>
+                    {d.transactionCount} transactions ·{" "}
+                    {String(d.importedAt || d.latestTransactionDate).slice(
+                      0,
+                      10,
+                    )}
+                  </Txt>
+                  <Txt>
+                    {money(d.totalOut)} out · {money(d.totalIn)} in
+                  </Txt>
+                  <Button
+                    title="View statement"
+                    secondary
+                    onPress={() =>
+                      navigation.navigate("ImportDetail", { key: d.key })
+                    }
+                  />
+                </>
+              )}
+            </Card>
+          )
+        }
       />
       <Modal
         visible={!!editing}
@@ -922,8 +1094,13 @@ export function ImportManagementScreen({ navigation }: any) {
           <ScrollView contentContainerStyle={styles.content}>
             <View style={styles.between}>
               <Heading title="Edit staged transaction" />
-              <Pressable onPress={() => setEditing(null)} style={{ padding: 10 }}>
-                <Txt bold style={{ color: colors.purple }}>Close</Txt>
+              <Pressable
+                onPress={() => setEditing(null)}
+                style={{ padding: 10 }}
+              >
+                <Txt bold style={{ color: colors.purple }}>
+                  Close
+                </Txt>
               </Pressable>
             </View>
             {editing && Number(editing.row.currentPayload?.amountIn) > 0 && (
@@ -943,8 +1120,12 @@ export function ImportManagementScreen({ navigation }: any) {
                 key={`${editing.row.id}:${editing.row.version}`}
                 initial={{
                   ...editing.row.currentPayload,
-                  date: String(editing.row.currentPayload?.date || "").slice(0, 10),
-                  internal: editing.row.currentPayload?.linkage?.type === "internal",
+                  date: String(editing.row.currentPayload?.date || "").slice(
+                    0,
+                    10,
+                  ),
+                  internal:
+                    editing.row.currentPayload?.linkage?.type === "internal",
                 }}
                 fields={[
                   { key: "date", label: "Date", type: "date", required: true },
@@ -957,10 +1138,17 @@ export function ImportManagementScreen({ navigation }: any) {
                     label: "Category",
                     options: [
                       { label: "Unassigned", value: "" },
-                      ...(categories.data || []).map((c: any) => ({ label: c.name, value: c.id })),
+                      ...(categories.data || []).map((c: any) => ({
+                        label: c.name,
+                        value: c.id,
+                      })),
                     ],
                   },
-                  { key: "internal", label: "Internal transfer", type: "boolean" },
+                  {
+                    key: "internal",
+                    label: "Internal transfer",
+                    type: "boolean",
+                  },
                   {
                     key: "accountIdentifier",
                     label: "Account",
@@ -972,20 +1160,26 @@ export function ImportManagementScreen({ navigation }: any) {
                 ]}
                 onSave={async (value) => {
                   const { internal, ...payload } = value;
-                  await call("updateAgentDraftRow", editing.draft.id, editing.row.id, {
-                    expectedVersion: editing.row.version,
-                    currentPayload: {
-                      ...editing.row.currentPayload,
-                      ...payload,
-                      categoryId: value.categoryId || null,
-                      linkage: internal
-                        ? { type: "internal" }
-                        : editing.row.currentPayload?.linkage?.type === "internal"
-                          ? null
-                          : editing.row.currentPayload?.linkage || null,
+                  await call(
+                    "updateAgentDraftRow",
+                    editing.draft.id,
+                    editing.row.id,
+                    {
+                      expectedVersion: editing.row.version,
+                      currentPayload: {
+                        ...editing.row.currentPayload,
+                        ...payload,
+                        categoryId: value.categoryId || null,
+                        linkage: internal
+                          ? { type: "internal" }
+                          : editing.row.currentPayload?.linkage?.type ===
+                              "internal"
+                            ? null
+                            : editing.row.currentPayload?.linkage || null,
+                      },
+                      reviewStatus: "edited",
                     },
-                    reviewStatus: "edited",
-                  });
+                  );
                   setEditing(null);
                   await loadDetailed();
                 }}
@@ -1139,130 +1333,141 @@ export function DraftScreen({ route, navigation }: any) {
                   ["proposed", "accepted", "auto_applied"].includes(p.status),
                 )
               ? `${colors.purple}18`
-              : row.currentPayload?.suggestionApplied || row.currentPayload?.suggestionSource
+              : row.currentPayload?.suggestionApplied ||
+                  row.currentPayload?.suggestionSource
                 ? "#3B82F618"
                 : colors.card;
-          return <Card style={{ marginTop: 12, backgroundColor: tone }}>
-            <View style={styles.between}>
-              <Txt bold size={16} style={{ flex: 1 }}>
-                {row.currentPayload?.label || row.currentPayload?.description}
-              </Txt>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Edit transaction"
-                disabled={busy || closed}
-                onPress={() => setEditingRow(row)}
-                style={{ padding: 8 }}
-              >
-                <Txt bold style={{ color: colors.purple }}>Edit</Txt>
-              </Pressable>
-            </View>
-            <TransactionRow
-              item={{
-                ...row.currentPayload,
-                category: {
-                  name: categoryName(row.currentPayload?.categoryId),
-                },
-              }}
-              selected={row.selected}
-            />
-            <Txt muted>
-              Category: {categoryName(row.currentPayload?.categoryId)} ·{" "}
-              {row.reviewStatus}
-            </Txt>
-            <View style={styles.row}>
-              <Button
-                title={row.selected ? "Exclude row" : "Include row"}
-                secondary
-                disabled={busy || closed}
-                onPress={() =>
-                  void run(() =>
-                    call("updateAgentDraftRow", d.id, row.id, {
-                      expectedVersion: row.version,
-                      selected: !row.selected,
-                    }),
-                  )
-                }
-              />
-              <Button
-                title={expanded ? "Hide details" : "More details"}
-                secondary
-                onPress={() => setExpandedRows((old) =>
-                  old.includes(row.id)
-                    ? old.filter((id) => id !== row.id)
-                    : [...old, row.id],
-                )}
-              />
-            </View>
-            {expanded && (row.review?.reasons || []).map((reason: string) => (
-              <Txt key={reason} style={{ color: colors.purple }}>{reason}</Txt>
-            ))}
-            {expanded && (row.proposals || []).map((p: any) => (
-              <View key={p.id} style={styles.stack}>
-                <Txt bold>
-                  Agent suggestion · {Math.round(Number(p.confidence) * 100)}% ·{" "}
-                  {p.status}
+          return (
+            <Card style={{ marginTop: 12, backgroundColor: tone }}>
+              <View style={styles.between}>
+                <Txt bold size={16} style={{ flex: 1 }}>
+                  {row.currentPayload?.label || row.currentPayload?.description}
                 </Txt>
-                <Txt>{p.reason}</Txt>
-                {!!p.proposedLabel && <Txt>Label: {p.proposedLabel}</Txt>}
-                {!!p.proposedCategoryId && (
-                  <Txt>Category: {categoryName(p.proposedCategoryId)}</Txt>
-                )}
-                {!!p.proposedTripEntryType && (
-                  <Txt>
-                    Entry: {p.proposedTripEntryType.replaceAll("_", " ")}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit transaction"
+                  disabled={busy || closed}
+                  onPress={() => setEditingRow(row)}
+                  style={{ padding: 8 }}
+                >
+                  <Txt bold style={{ color: colors.purple }}>
+                    Edit
                   </Txt>
-                )}
-                {!!p.proposedLinkage && (
-                  <Card>
-                    <Txt bold>Reconciliation</Txt>
-                    <Txt>
-                      {p.proposedLinkage.type === "internal"
-                        ? "Mark as an internal transfer"
-                        : "Allocate this reimbursement to the following expenses"}
-                    </Txt>
-                    {(
-                      p.proposedLinkage.reimbursesAllocations ||
-                      p.proposedLinkage.allocations ||
-                      []
-                    ).map((a: any, i: number) => (
-                      <Txt key={i}>
-                        {money(a.amount)} ·{" "}
-                        {a.label ||
-                          a.description ||
-                          a.transactionId ||
-                          a.targetTransactionId ||
-                          "Linked expense"}
-                      </Txt>
-                    ))}
-                  </Card>
-                )}
-                {p.status === "proposed" && !closed && (
-                  <View style={styles.row}>
-                    <Button
-                      title="Accept"
-                      disabled={busy}
-                      onPress={() =>
-                        void run(() =>
-                          call("decideAgentProposal", p.id, "accept"),
-                        )
-                      }
-                    />
-                    <Button
-                      title="Reject"
-                      disabled={busy}
-                      secondary
-                      onPress={() =>
-                        void run(() =>
-                          call("decideAgentProposal", p.id, "reject"),
-                        )
-                      }
-                    />
-                  </View>
-                )}
+                </Pressable>
               </View>
-            ))}
-          </Card>;
+              <TransactionRow
+                item={{
+                  ...row.currentPayload,
+                  category: {
+                    name: categoryName(row.currentPayload?.categoryId),
+                  },
+                }}
+                selected={row.selected}
+              />
+              <Txt muted>
+                Category: {categoryName(row.currentPayload?.categoryId)} ·{" "}
+                {row.reviewStatus}
+              </Txt>
+              <View style={styles.row}>
+                <Button
+                  title={row.selected ? "Exclude row" : "Include row"}
+                  secondary
+                  disabled={busy || closed}
+                  onPress={() =>
+                    void run(() =>
+                      call("updateAgentDraftRow", d.id, row.id, {
+                        expectedVersion: row.version,
+                        selected: !row.selected,
+                      }),
+                    )
+                  }
+                />
+                <Button
+                  title={expanded ? "Hide details" : "More details"}
+                  secondary
+                  onPress={() =>
+                    setExpandedRows((old) =>
+                      old.includes(row.id)
+                        ? old.filter((id) => id !== row.id)
+                        : [...old, row.id],
+                    )
+                  }
+                />
+              </View>
+              {expanded &&
+                (row.review?.reasons || []).map((reason: string) => (
+                  <Txt key={reason} style={{ color: colors.purple }}>
+                    {reason}
+                  </Txt>
+                ))}
+              {expanded &&
+                (row.proposals || []).map((p: any) => (
+                  <View key={p.id} style={styles.stack}>
+                    <Txt bold>
+                      Agent suggestion ·{" "}
+                      {Math.round(Number(p.confidence) * 100)}% · {p.status}
+                    </Txt>
+                    <Txt>{p.reason}</Txt>
+                    {!!p.proposedLabel && <Txt>Label: {p.proposedLabel}</Txt>}
+                    {!!p.proposedCategoryId && (
+                      <Txt>Category: {categoryName(p.proposedCategoryId)}</Txt>
+                    )}
+                    {!!p.proposedTripEntryType && (
+                      <Txt>
+                        Entry: {p.proposedTripEntryType.replaceAll("_", " ")}
+                      </Txt>
+                    )}
+                    {!!p.proposedLinkage && (
+                      <Card>
+                        <Txt bold>Reconciliation</Txt>
+                        <Txt>
+                          {p.proposedLinkage.type === "internal"
+                            ? "Mark as an internal transfer"
+                            : "Allocate this reimbursement to the following expenses"}
+                        </Txt>
+                        {(
+                          p.proposedLinkage.reimbursesAllocations ||
+                          p.proposedLinkage.allocations ||
+                          []
+                        ).map((a: any, i: number) => (
+                          <Txt key={i}>
+                            {money(a.amount)} ·{" "}
+                            {a.label ||
+                              a.description ||
+                              a.transactionId ||
+                              a.targetTransactionId ||
+                              "Linked expense"}
+                          </Txt>
+                        ))}
+                      </Card>
+                    )}
+                    {p.status === "proposed" && !closed && (
+                      <View style={styles.row}>
+                        <Button
+                          title="Accept"
+                          disabled={busy}
+                          onPress={() =>
+                            void run(() =>
+                              call("decideAgentProposal", p.id, "accept"),
+                            )
+                          }
+                        />
+                        <Button
+                          title="Reject"
+                          disabled={busy}
+                          secondary
+                          onPress={() =>
+                            void run(() =>
+                              call("decideAgentProposal", p.id, "reject"),
+                            )
+                          }
+                        />
+                      </View>
+                    )}
+                  </View>
+                ))}
+            </Card>
+          );
         }}
       />
       <Modal
@@ -1275,28 +1480,42 @@ export function DraftScreen({ route, navigation }: any) {
           <ScrollView contentContainerStyle={styles.content}>
             <View style={styles.between}>
               <Heading title="Edit staged transaction" />
-              <Pressable onPress={() => setEditingRow(null)} style={{ padding: 10 }}>
-                <Txt bold style={{ color: colors.purple }}>Close</Txt>
+              <Pressable
+                onPress={() => setEditingRow(null)}
+                style={{ padding: 10 }}
+              >
+                <Txt bold style={{ color: colors.purple }}>
+                  Close
+                </Txt>
               </Pressable>
             </View>
-            {editingRow && d?.mode === "main" && Number(editingRow.currentPayload?.amountIn) > 0 && (
-              <Button
-                title="Allocate reimbursement"
-                secondary
-                onPress={() => {
-                  const rowId = editingRow.id;
-                  setEditingRow(null);
-                  navigation.navigate("ImportAllocation", { draftId: d.id, rowId });
-                }}
-              />
-            )}
+            {editingRow &&
+              d?.mode === "main" &&
+              Number(editingRow.currentPayload?.amountIn) > 0 && (
+                <Button
+                  title="Allocate reimbursement"
+                  secondary
+                  onPress={() => {
+                    const rowId = editingRow.id;
+                    setEditingRow(null);
+                    navigation.navigate("ImportAllocation", {
+                      draftId: d.id,
+                      rowId,
+                    });
+                  }}
+                />
+              )}
             {editingRow && (
               <Form
                 key={`${editingRow.id}:${editingRow.version}`}
                 initial={{
                   ...editingRow.currentPayload,
-                  date: String(editingRow.currentPayload?.date || "").slice(0, 10),
-                  internal: editingRow.currentPayload?.linkage?.type === "internal",
+                  date: String(editingRow.currentPayload?.date || "").slice(
+                    0,
+                    10,
+                  ),
+                  internal:
+                    editingRow.currentPayload?.linkage?.type === "internal",
                 }}
                 fields={[
                   { key: "date", label: "Date", type: "date", required: true },
@@ -1309,12 +1528,19 @@ export function DraftScreen({ route, navigation }: any) {
                     label: "Category",
                     options: [
                       { label: "Unassigned", value: "" },
-                      ...(categories.data || []).map((c: any) => ({ label: c.name, value: c.id })),
+                      ...(categories.data || []).map((c: any) => ({
+                        label: c.name,
+                        value: c.id,
+                      })),
                     ],
                   },
                   ...(d.mode === "main"
                     ? [
-                        { key: "internal", label: "Internal transfer", type: "boolean" as const },
+                        {
+                          key: "internal",
+                          label: "Internal transfer",
+                          type: "boolean" as const,
+                        },
                         {
                           key: "accountIdentifier",
                           label: "Account",
@@ -1338,7 +1564,8 @@ export function DraftScreen({ route, navigation }: any) {
                         ? {
                             linkage: internal
                               ? { type: "internal" }
-                              : editingRow.currentPayload?.linkage?.type === "internal"
+                              : editingRow.currentPayload?.linkage?.type ===
+                                  "internal"
                                 ? null
                                 : editingRow.currentPayload?.linkage || null,
                           }

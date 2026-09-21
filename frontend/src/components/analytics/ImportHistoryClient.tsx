@@ -32,14 +32,48 @@ export function ImportHistoryClient({
   agentDrafts?: Array<Record<string, any>>;
 }) {
   const [tab, setTab] = useState("staged");
+  const [selectedDraftIds, setSelectedDraftIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [showTogether, setShowTogether] = useState(false);
-  const [detailedDrafts, setDetailedDrafts] = useState<Array<Record<string, any>>>([]);
+  const [detailedDrafts, setDetailedDrafts] = useState<
+    Array<Record<string, any>>
+  >([]);
   const [loadingTogether, setLoadingTogether] = useState(false);
   const staged = agentDrafts.filter(
     (d) =>
       !["committed", "discarded", "expired"].includes(d.status) &&
       new Date(d.expiresAt) > new Date(),
   );
+  const allSelected =
+    staged.length > 0 &&
+    staged.every((draft) => selectedDraftIds.has(draft.id));
+  const toggleDraft = (draftId: string) => {
+    setSelectedDraftIds((current) => {
+      const next = new Set(current);
+      if (next.has(draftId)) next.delete(draftId);
+      else next.add(draftId);
+      return next;
+    });
+  };
+  const reviewSelected = async () => {
+    if (!selectedDraftIds.size) return;
+    setLoadingTogether(true);
+    try {
+      setDetailedDrafts(
+        await Promise.all(
+          staged
+            .filter((draft) => selectedDraftIds.has(draft.id))
+            .map((draft) =>
+              getAgentDraft(draft.id).then((result) => result.draft),
+            ),
+        ),
+      );
+      setShowTogether(true);
+    } finally {
+      setLoadingTogether(false);
+    }
+  };
   return (
     <div className="space-y-6">
       <PageTabs
@@ -52,86 +86,105 @@ export function ImportHistoryClient({
       />
       <div className="flex justify-end">
         <Link href="/import">
-          <Button variant="secondary" leftIcon={<FileText className="size-4" />}>
+          <Button
+            variant="secondary"
+            leftIcon={<FileText className="size-4" />}
+          >
             Import File
           </Button>
         </Link>
       </div>
       {tab === "staged" && (
         <>
-          <label className="flex min-h-11 items-center gap-3 rounded-lg border border-stroke px-4 text-sm font-medium text-dark dark:border-dark-3 dark:text-white">
-            <input
-              type="checkbox"
-              checked={showTogether}
-              onChange={async (event) => {
-                const checked = event.target.checked;
-                setShowTogether(checked);
-                if (!checked || detailedDrafts.length) return;
-                setLoadingTogether(true);
-                try {
-                  setDetailedDrafts(
-                    await Promise.all(
-                      staged.map((draft) =>
-                        getAgentDraft(draft.id).then((result) => result.draft),
-                      ),
-                    ),
-                  );
-                } finally {
-                  setLoadingTogether(false);
-                }
-              }}
-            />
-            View and label all staged imports together
-          </label>
           {showTogether ? (
-            loadingTogether ? (
-              <p className="py-8 text-center text-dark-5 dark:text-dark-6">
-                Loading staged transactions…
-              </p>
-            ) : (
-              <AgentDraftReviewClient initialDrafts={detailedDrafts as any} embedded />
-            )
-          ) : <Card>
-            <CardHeader>
-              <CardTitle>Staged imports</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {!staged.length && (
-                <p className="py-6 text-center text-dark-5 dark:text-dark-6">
-                  No staged imports. Transactions prepared through the MCP
-                  appear here.
-                </p>
-              )}
-              {staged.map((d) => (
-                <Link
-                  key={d.id}
-                  href={`/imports/drafts/${d.id}`}
-                  className="block rounded-lg border border-stroke p-4 hover:border-primary dark:border-dark-3"
+            <>
+              <div className="flex justify-end">
+                <Button
+                  variant="secondary"
+                  onClick={() => setShowTogether(false)}
                 >
-                  <div className="flex items-start gap-3">
-                    <Bot className="mt-1 size-5 shrink-0 text-primary" />
-                    <div className="min-w-0">
-                      <p className="break-words font-semibold text-dark dark:text-white">
-                        {d.sourceFilename}
-                      </p>
-                      <p className="mt-1 text-sm text-dark-5 dark:text-dark-6">
-                        {d._count?.rows || 0} transactions · {d.mode} ·{" "}
-                        {d.status}
-                      </p>
-                      <p className="mt-2 text-sm text-primary">
-                        {d.reviewSummary?.labelling || 0} need labelling ·{" "}
-                        {d.reviewSummary?.reconciliation || 0} need
-                        reconciliation · {d.reviewSummary?.ready || 0} ready
-                      </p>
-                      <p className="mt-2 text-sm font-medium text-primary">
-                        Review transactions →
-                      </p>
+                  Change staged imports
+                </Button>
+              </div>
+              <AgentDraftReviewClient
+                initialDrafts={detailedDrafts as any}
+                embedded
+              />
+            </>
+          ) : (
+            <Card>
+              <CardHeader>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <label className="flex min-h-11 items-center gap-3 text-sm font-medium text-dark dark:text-white">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={(event) =>
+                        setSelectedDraftIds(
+                          event.target.checked
+                            ? new Set(staged.map((draft) => draft.id))
+                            : new Set(),
+                        )
+                      }
+                    />
+                    Select all staged imports
+                  </label>
+                  <Button
+                    disabled={!selectedDraftIds.size || loadingTogether}
+                    isLoading={loadingTogether}
+                    onClick={() => void reviewSelected()}
+                  >
+                    Review selected ({selectedDraftIds.size})
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {!staged.length && (
+                  <p className="py-6 text-center text-dark-5 dark:text-dark-6">
+                    No staged imports. Transactions prepared through the MCP
+                    appear here.
+                  </p>
+                )}
+                {staged.map((d) => (
+                  <div
+                    key={d.id}
+                    className="rounded-lg border border-stroke p-4 dark:border-dark-3"
+                  >
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedDraftIds.has(d.id)}
+                        onChange={() => toggleDraft(d.id)}
+                        aria-label={`Select ${d.sourceFilename}`}
+                        className="mt-1"
+                      />
+                      <Bot className="mt-1 size-5 shrink-0 text-primary" />
+                      <div className="min-w-0">
+                        <p className="break-words font-semibold text-dark dark:text-white">
+                          {d.sourceFilename}
+                        </p>
+                        <p className="mt-1 text-sm text-dark-5 dark:text-dark-6">
+                          {d._count?.rows || 0} transactions · {d.mode} ·{" "}
+                          {d.status}
+                        </p>
+                        <p className="mt-2 text-sm text-primary">
+                          {d.reviewSummary?.labelling || 0} need labelling ·{" "}
+                          {d.reviewSummary?.reconciliation || 0} need
+                          reconciliation · {d.reviewSummary?.ready || 0} ready
+                        </p>
+                        <Link
+                          href={`/imports/drafts/${d.id}`}
+                          className="mt-2 inline-block text-sm font-medium text-primary"
+                        >
+                          Review transactions →
+                        </Link>
+                      </div>
                     </div>
                   </div>
-                </Link>
-              ))}
-            </CardContent>
-          </Card>}
+                ))}
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
       {tab === "history" && (

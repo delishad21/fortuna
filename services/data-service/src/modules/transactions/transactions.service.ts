@@ -267,7 +267,7 @@ export class TransactionService {
     return false;
   }
 
-  private static async applyImportRules(
+  static async applyImportRules(
     userId: string,
     parserId: string | undefined,
     transactions: ImportTransactionInput[],
@@ -316,7 +316,8 @@ export class TransactionService {
         const metadata = (tx.metadata || {}) as Record<string, any>;
         const hasLearnedClassification = !!metadata.classificationPatternId;
         const hasExplicitLinkage = !!tx.linkage && !hasLearnedClassification;
-        const hasExplicitCategory = !!tx.categoryId && !hasLearnedClassification;
+        const hasExplicitCategory =
+          !!tx.categoryId && !hasLearnedClassification;
         const hasExplicitLabel =
           !!tx.label && tx.label.trim().length > 0 && !hasLearnedClassification;
         let applied = false;
@@ -340,7 +341,9 @@ export class TransactionService {
           !hasExplicitCategory &&
           (!tx.linkage || tx.linkage.type === "reimbursed")
         ) {
-          const categoryId = categoryMap.get(rule.setCategoryName.toLowerCase());
+          const categoryId = categoryMap.get(
+            rule.setCategoryName.toLowerCase(),
+          );
           if (categoryId) {
             tx.categoryId = categoryId;
             applied = true;
@@ -465,12 +468,15 @@ export class TransactionService {
 
       await tx.classificationPattern.createMany({
         data: builtPatterns.map((pattern) => {
-          const existing = existingByKey.get(this.classificationPatternKey(pattern));
+          const existing = existingByKey.get(
+            this.classificationPatternKey(pattern),
+          );
           const existingMetadata =
             existing?.metadata && typeof existing.metadata === "object"
               ? (existing.metadata as Record<string, any>)
               : {};
-          const userStatusOverride = existingMetadata.userStatusOverride === true;
+          const userStatusOverride =
+            existingMetadata.userStatusOverride === true;
           const existingStatus = this.normalizeClassificationPatternStatus(
             existing?.status,
           );
@@ -489,7 +495,8 @@ export class TransactionService {
             matchCount: pattern.matchCount,
             conflictCount: pattern.conflictCount,
             appliedCount: existing?.appliedCount || 0,
-            status: userStatusOverride && existing ? existingStatus : pattern.status,
+            status:
+              userStatusOverride && existing ? existingStatus : pattern.status,
             lastSeenAt: pattern.lastSeenAt,
             metadata: {
               ...pattern.metadata,
@@ -526,9 +533,15 @@ export class TransactionService {
       where: { id: patternId },
       data: {
         ...(payload.status !== undefined && { status: payload.status }),
-        ...(payload.label !== undefined && { label: payload.label?.trim() || null }),
-        ...(payload.categoryId !== undefined && { categoryId: payload.categoryId || null }),
-        ...(payload.markInternal !== undefined && { markInternal: payload.markInternal }),
+        ...(payload.label !== undefined && {
+          label: payload.label?.trim() || null,
+        }),
+        ...(payload.categoryId !== undefined && {
+          categoryId: payload.categoryId || null,
+        }),
+        ...(payload.markInternal !== undefined && {
+          markInternal: payload.markInternal,
+        }),
         metadata: {
           ...existingMetadata,
           ...(payload.status !== undefined ? { userStatusOverride: true } : {}),
@@ -611,9 +624,14 @@ export class TransactionService {
         metadata.classificationPatternId || metadata.classificationPatternValue
           ? {
               key: `learned:${metadata.classificationPatternId || metadata.classificationPatternValue}`,
-              id: String(metadata.classificationPatternId || metadata.classificationPatternValue),
+              id: String(
+                metadata.classificationPatternId ||
+                  metadata.classificationPatternValue,
+              ),
               type: "learned" as const,
-              name: String(metadata.classificationPatternType || "Learned pattern"),
+              name: String(
+                metadata.classificationPatternType || "Learned pattern",
+              ),
               patternValue: String(metadata.classificationPatternValue || ""),
             }
           : null,
@@ -760,8 +778,10 @@ export class TransactionService {
   }) {
     const amountIn = input.amountIn ?? null;
     const amountOut = input.amountOut ?? null;
-    if (amountOut !== null && amountOut !== undefined && amountOut > 0) return amountOut;
-    if (amountIn !== null && amountIn !== undefined && amountIn > 0) return amountIn;
+    if (amountOut !== null && amountOut !== undefined && amountOut > 0)
+      return amountOut;
+    if (amountIn !== null && amountIn !== undefined && amountIn > 0)
+      return amountIn;
     return 0;
   }
 
@@ -801,7 +821,8 @@ export class TransactionService {
         select: { linkage: true },
       });
 
-      const reimbursedLinkage = reimbursed?.linkage as TransactionLinkage | null;
+      const reimbursedLinkage =
+        reimbursed?.linkage as TransactionLinkage | null;
       if (!reimbursedLinkage) continue;
 
       const updatedReimbursedByAllocations = (
@@ -850,14 +871,18 @@ export class TransactionService {
         (item) => item.transactionId !== reimbursementId,
       );
 
-      await TransactionRepository.updateLinkage(allocation.transactionId, userId, {
-        ...existingLinkage,
-        type: "reimbursed",
-        reimbursedByAllocations: [
-          ...withoutCurrent,
-          { transactionId: reimbursementId, amount: allocation.amount },
-        ],
-      });
+      await TransactionRepository.updateLinkage(
+        allocation.transactionId,
+        userId,
+        {
+          ...existingLinkage,
+          type: "reimbursed",
+          reimbursedByAllocations: [
+            ...withoutCurrent,
+            { transactionId: reimbursementId, amount: allocation.amount },
+          ],
+        },
+      );
     }
   }
 
@@ -881,7 +906,8 @@ export class TransactionService {
 
     const targetAmount = this.getAbsoluteTransactionAmount({
       amountIn: target.amountIn !== null ? Number(target.amountIn) : undefined,
-      amountOut: target.amountOut !== null ? Number(target.amountOut) : undefined,
+      amountOut:
+        target.amountOut !== null ? Number(target.amountOut) : undefined,
     });
 
     const targetLinkage = target.linkage as TransactionLinkage | null;
@@ -892,7 +918,9 @@ export class TransactionService {
     return {
       targetAmount,
       alreadyAllocated,
-      remaining: Number(Math.max(targetAmount - alreadyAllocated, 0).toFixed(2)),
+      remaining: Number(
+        Math.max(targetAmount - alreadyAllocated, 0).toFixed(2),
+      ),
     };
   }
 
@@ -947,7 +975,8 @@ export class TransactionService {
     }
 
     let remainingBudget = Number(amountIn.toFixed(2));
-    const nextAllocations: Array<{ transactionId: string; amount: number }> = [];
+    const nextAllocations: Array<{ transactionId: string; amount: number }> =
+      [];
     for (const allocation of normalized) {
       if (!(remainingBudget > 0)) break;
       const capacity = await this.getTargetReimbursementCapacity(
@@ -967,7 +996,9 @@ export class TransactionService {
         transactionId: allocation.transactionId,
         amount: allowed,
       });
-      remainingBudget = Number(Math.max(remainingBudget - allowed, 0).toFixed(2));
+      remainingBudget = Number(
+        Math.max(remainingBudget - allowed, 0).toFixed(2),
+      );
     }
 
     await TransactionRepository.updateLinkage(reimbursementId, userId, {
@@ -1023,7 +1054,9 @@ export class TransactionService {
   static async ensureReservedCategories(userId: string) {
     const [uncategorized, internal, reimbursement] = await Promise.all([
       prisma.category.upsert({
-        where: { userId_name: { userId, name: RESERVED_CATEGORIES.UNCATEGORIZED.name } },
+        where: {
+          userId_name: { userId, name: RESERVED_CATEGORIES.UNCATEGORIZED.name },
+        },
         update: {},
         create: {
           userId,
@@ -1032,7 +1065,9 @@ export class TransactionService {
         },
       }),
       prisma.category.upsert({
-        where: { userId_name: { userId, name: RESERVED_CATEGORIES.INTERNAL.name } },
+        where: {
+          userId_name: { userId, name: RESERVED_CATEGORIES.INTERNAL.name },
+        },
         update: {},
         create: {
           userId,
@@ -1041,7 +1076,9 @@ export class TransactionService {
         },
       }),
       prisma.category.upsert({
-        where: { userId_name: { userId, name: RESERVED_CATEGORIES.REIMBURSEMENT.name } },
+        where: {
+          userId_name: { userId, name: RESERVED_CATEGORIES.REIMBURSEMENT.name },
+        },
         update: {},
         create: {
           userId,
@@ -1110,7 +1147,9 @@ export class TransactionService {
     ]);
 
     const hasEnabledRule = paylahRules.some((rule) => rule.enabled);
-    const prompted = Boolean(settings?.paylahInternalPrompted || hasEnabledRule);
+    const prompted = Boolean(
+      settings?.paylahInternalPrompted || hasEnabledRule,
+    );
     const enabled = Boolean(settings?.paylahAutoInternal || hasEnabledRule);
 
     return {
@@ -1148,7 +1187,9 @@ export class TransactionService {
     const eligibleIds = candidates
       .filter((transaction) => {
         const linkage = transaction.linkage as TransactionLinkage | null;
-        return linkage?.type !== "reimbursement" && linkage?.type !== "reimbursed";
+        return (
+          linkage?.type !== "reimbursement" && linkage?.type !== "reimbursed"
+        );
       })
       .map((transaction) => transaction.id);
 
@@ -1269,7 +1310,8 @@ export class TransactionService {
         payload.caseSensitive !== undefined
           ? payload.caseSensitive
           : existing.caseSensitive,
-      enabled: payload.enabled !== undefined ? payload.enabled : existing.enabled,
+      enabled:
+        payload.enabled !== undefined ? payload.enabled : existing.enabled,
       setLabel:
         payload.setLabel !== undefined ? payload.setLabel : existing.setLabel,
       setCategoryName:
@@ -1281,7 +1323,9 @@ export class TransactionService {
           ? payload.markInternal
           : existing.markInternal,
       sortOrder:
-        payload.sortOrder !== undefined ? payload.sortOrder : existing.sortOrder,
+        payload.sortOrder !== undefined
+          ? payload.sortOrder
+          : existing.sortOrder,
     });
 
     if (!normalized.name) {
@@ -1376,11 +1420,14 @@ export class TransactionService {
       );
 
       // Filter transactions by selected indices and assign categories based on linkage
-      const selectedTransactions = ruleAppliedTransactions.map((transaction, index) => {
+      const selectedTransactions = ruleAppliedTransactions.map(
+        (transaction, index) => {
           let linkage = transaction.linkage as TransactionLinkage | null;
           let categoryId = transaction.categoryId;
           const amountIn =
-            transaction.amountIn !== undefined ? Number(transaction.amountIn) : null;
+            transaction.amountIn !== undefined
+              ? Number(transaction.amountIn)
+              : null;
 
           // Safety: treat reserved categories as reserved linkage semantics.
           if (!linkage && categoryId === internal.id) {
@@ -1401,7 +1448,8 @@ export class TransactionService {
               leftoverAmount: Number(amountIn.toFixed(2)),
               leftoverCategoryId: null,
               autoDetected: true,
-              detectionReason: "Reserved category mapped to reimbursement linkage",
+              detectionReason:
+                "Reserved category mapped to reimbursement linkage",
             };
           }
 
@@ -1466,12 +1514,15 @@ export class TransactionService {
             currency: resolvedCurrency || "SGD",
             metadata: {
               ...metadata,
-              ...(importSource ? { sourceFilename: importSource.filename } : {}),
+              ...(importSource
+                ? { sourceFilename: importSource.filename }
+                : {}),
               [IMPORT_ORIGINAL_INDEX_KEY]: selectedIndices[index],
             },
             linkage: cleanLinkage,
           };
-        });
+        },
+      );
 
       // Import selected transactions
       const result = await TransactionRepository.createMany(
@@ -1518,9 +1569,8 @@ export class TransactionService {
             const baseLinkage = (linkage || {
               type: "reimbursement",
             }) as TransactionLinkage;
-            const normalizedAllocations = this.normalizeReimbursementAllocations(
-              originalLinkage,
-            );
+            const normalizedAllocations =
+              this.normalizeReimbursementAllocations(originalLinkage);
             const detached = detachStagedReimbursementAllocations(
               normalizedAllocations,
               Number(baseLinkage.leftoverAmount || 0),
@@ -1550,7 +1600,9 @@ export class TransactionService {
                 };
               })
               .filter(
-                (allocation): allocation is { transactionId: string; amount: number } =>
+                (
+                  allocation,
+                ): allocation is { transactionId: string; amount: number } =>
                   !!allocation?.transactionId,
               );
 
@@ -1584,11 +1636,15 @@ export class TransactionService {
       try {
         const appliedPatternIds = selectedTransactions
           .map((transaction) => {
-            const metadata = transaction.metadata as Record<string, any> | undefined;
+            const metadata = transaction.metadata as
+              Record<string, any> | undefined;
             return String(metadata?.classificationPatternId || "");
           })
           .filter(Boolean);
-        await this.incrementClassificationPatternAppliedCounts(userId, appliedPatternIds);
+        await this.incrementClassificationPatternAppliedCounts(
+          userId,
+          appliedPatternIds,
+        );
         await this.rebuildClassificationPatterns(userId);
       } catch (classificationError) {
         console.error(
@@ -1709,7 +1765,9 @@ export class TransactionService {
               : null,
           )
           .filter(
-            (allocation): allocation is { transactionId: string; amount: number } =>
+            (
+              allocation,
+            ): allocation is { transactionId: string; amount: number } =>
               !!allocation,
           );
         const totalAllocated = normalizedAllocations.reduce(
@@ -1717,7 +1775,9 @@ export class TransactionService {
           0,
         );
         if (totalAllocatedIncludingStaged - amountIn > 0.01) {
-          throw new Error("Total reimbursed amount cannot exceed reimbursement amount");
+          throw new Error(
+            "Total reimbursed amount cannot exceed reimbursement amount",
+          );
         }
         for (const allocation of normalizedAllocations) {
           if (allocation.transactionId === id) {
@@ -1728,7 +1788,9 @@ export class TransactionService {
             userId,
           );
           if (!target) {
-            throw new Error("One or more reimbursed transactions were not found");
+            throw new Error(
+              "One or more reimbursed transactions were not found",
+            );
           }
           const capacity = await this.getTargetReimbursementCapacity(
             userId,
@@ -1736,7 +1798,9 @@ export class TransactionService {
             id,
           );
           if (allocation.amount - capacity.remaining > 0.01) {
-            throw new Error("Reimbursed amount cannot exceed target transaction amount");
+            throw new Error(
+              "Reimbursed amount cannot exceed target transaction amount",
+            );
           }
         }
         const { reimbursement } = await this.ensureReservedCategories(userId);
@@ -1778,12 +1842,13 @@ export class TransactionService {
           )
         : [];
     if (previousReimbursedIds.length > 0) {
-      await this.removeReimbursementBacklinks(userId, id, previousReimbursedIds);
+      await this.removeReimbursementBacklinks(
+        userId,
+        id,
+        previousReimbursedIds,
+      );
     }
-    if (
-      linkage?.type === "reimbursement" &&
-      normalizedAllocations.length > 0
-    ) {
+    if (linkage?.type === "reimbursement" && normalizedAllocations.length > 0) {
       await this.applyReimbursementBacklinks(
         userId,
         id,
@@ -1829,7 +1894,9 @@ export class TransactionService {
     }
 
     if (children.length !== 2) {
-      throw new Error("A transaction must be split into exactly two transactions");
+      throw new Error(
+        "A transaction must be split into exactly two transactions",
+      );
     }
 
     const originalNet = Number(
@@ -1848,7 +1915,9 @@ export class TransactionService {
         .toFixed(2),
     );
     if (Math.abs(originalNet - childNet) > 0.01) {
-      throw new Error("Split transactions must add up to the original net amount");
+      throw new Error(
+        "Split transactions must add up to the original net amount",
+      );
     }
 
     for (const child of children) {
@@ -1857,7 +1926,10 @@ export class TransactionService {
       if (!child.description?.trim()) {
         throw new Error("Each split transaction needs a description");
       }
-      if ((amountIn > 0 && amountOut > 0) || (amountIn <= 0 && amountOut <= 0)) {
+      if (
+        (amountIn > 0 && amountOut > 0) ||
+        (amountIn <= 0 && amountOut <= 0)
+      ) {
         throw new Error(
           "Each split transaction must have either amount in or amount out",
         );
@@ -2078,7 +2150,9 @@ export class TransactionService {
 
     const existingLinkage = existing?.linkage as TransactionLinkage | null;
     if (existingLinkage?.type === "internal") {
-      throw new Error("Internal transactions cannot be marked as reimbursements");
+      throw new Error(
+        "Internal transactions cannot be marked as reimbursements",
+      );
     }
     const previousReimbursedIds =
       existingLinkage?.type === "reimbursement"
@@ -2096,7 +2170,9 @@ export class TransactionService {
       0,
     );
     if (totalAllocated - amountIn > 0.01) {
-      throw new Error("Total reimbursed amount cannot exceed reimbursement amount");
+      throw new Error(
+        "Total reimbursed amount cannot exceed reimbursement amount",
+      );
     }
 
     for (const allocation of reimbursedAllocations) {
@@ -2187,14 +2263,15 @@ export class TransactionService {
           where: { id: reimburserId },
           select: { linkage: true },
         });
-        const reimburserLinkage = reimburser?.linkage as TransactionLinkage | null;
+        const reimburserLinkage =
+          reimburser?.linkage as TransactionLinkage | null;
         if (!reimburserLinkage || reimburserLinkage.type !== "reimbursement") {
           continue;
         }
 
-        const nextAllocations = (reimburserLinkage.reimbursesAllocations || []).filter(
-          (allocation) => allocation.transactionId !== id,
-        );
+        const nextAllocations = (
+          reimburserLinkage.reimbursesAllocations || []
+        ).filter((allocation) => allocation.transactionId !== id);
 
         if (nextAllocations.length === 0) {
           await TransactionRepository.updateLinkage(reimburserId, userId, {
@@ -2248,8 +2325,9 @@ export class TransactionService {
     ).filter((transactionId) => transactionId !== id);
     const reimbursedByIds = Array.from(
       new Set(
-        (linkage.reimbursedByAllocations || [])
-          .map((item) => item.transactionId),
+        (linkage.reimbursedByAllocations || []).map(
+          (item) => item.transactionId,
+        ),
       ),
     ).filter((transactionId) => transactionId !== id);
 
@@ -2265,7 +2343,10 @@ export class TransactionService {
     const reimbursesAmountMap = new Map(
       (linkage.reimbursesAllocations || [])
         .filter((item) => typeof item.transactionId === "string")
-        .map((item) => [item.transactionId as string, Number(item.amount || 0)]),
+        .map((item) => [
+          item.transactionId as string,
+          Number(item.amount || 0),
+        ]),
     );
     const reimbursedByAmountMap = new Map(
       (linkage.reimbursedByAllocations || []).map((item) => [
