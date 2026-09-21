@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
 import {
   FlatList,
   Modal,
@@ -818,6 +818,10 @@ export function ImportManagementScreen({ navigation }: any) {
   const [loadingTogether, setLoadingTogether] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [expanded, setExpanded] = useState<string[]>([]);
+  useEffect(
+    () => navigation.addListener("tabPress", () => setTab("Import")),
+    [navigation],
+  );
   const result = tab === "Staged" ? drafts : history;
   const staged = (drafts.data?.drafts || []).filter(
     (d: any) =>
