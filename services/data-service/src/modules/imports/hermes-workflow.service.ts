@@ -16,6 +16,7 @@ import {
   validateDraftAccountAssignment,
   validateDraftTransaction,
 } from "./hermes-workflow.utils";
+import { cleanupExpiredWorkflowData } from "./workflow-cleanup";
 
 const STORAGE_ROOT = path.resolve(
   process.env.STATEMENT_STORAGE_DIR || "/data/statements",
@@ -111,41 +112,7 @@ async function audit(
 
 export class HermesWorkflowService {
   static async cleanupExpiredData(now = new Date()) {
-    const files = await prisma.statementFile.findMany({
-      where: { retained: false, deletedAt: null, expiresAt: { lte: now } },
-      select: { id: true, storagePath: true },
-      take: 500,
-    });
-    if (files.length) {
-      await prisma.statementFile.updateMany({
-        where: { id: { in: files.map((file) => file.id) } },
-        data: { status: "deleted", deletedAt: now },
-      });
-      await Promise.all(
-        files.map((file) => unlink(file.storagePath).catch(() => undefined)),
-      );
-    }
-    const [drafts, workspaces] = await prisma.$transaction([
-      prisma.importDraft.updateMany({
-        where: {
-          expiresAt: { lte: now },
-          status: { notIn: ["committed", "discarded"] },
-        },
-        data: { status: "discarded", discardedAt: now },
-      }),
-      prisma.parserWorkspace.updateMany({
-        where: {
-          expiresAt: { lte: now },
-          status: { notIn: ["approved", "expired"] },
-        },
-        data: { status: "expired" },
-      }),
-    ]);
-    return {
-      deletedFiles: files.length,
-      expiredDrafts: drafts.count,
-      expiredWorkspaces: workspaces.count,
-    };
+    return cleanupExpiredWorkflowData(prisma, unlink, now);
   }
 
   static async registerStatement(
@@ -589,8 +556,7 @@ export class HermesWorkflowService {
       });
       if (
         !parent ||
-        ["committed", "discarded", "expired"].includes(parent.status) ||
-        parent.expiresAt <= new Date()
+        ["committed", "discarded", "expired"].includes(parent.status)
       )
         throw Object.assign(new Error("This draft is closed or expired"), {
           status: 409,
@@ -980,8 +946,7 @@ export class HermesWorkflowService {
       if (!proposal)
         throw Object.assign(new Error("Proposal not found"), { status: 404 });
       if (
-        ["committed", "discarded", "expired"].includes(proposal.draft.status) ||
-        proposal.draft.expiresAt <= new Date()
+        ["committed", "discarded", "expired"].includes(proposal.draft.status)
       )
         throw Object.assign(new Error("This draft is closed or expired"), {
           status: 409,

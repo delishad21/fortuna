@@ -56,9 +56,7 @@ export function ImportHistoryClient({
   >([]);
   const [loadingTogether, setLoadingTogether] = useState(false);
   const staged = agentDrafts.filter(
-    (d) =>
-      !["committed", "discarded", "expired"].includes(d.status) &&
-      new Date(d.expiresAt) > new Date(),
+    (d) => !["committed", "discarded", "expired"].includes(d.status),
   );
   const allSelected =
     staged.length > 0 &&

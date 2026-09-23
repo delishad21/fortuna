@@ -824,9 +824,7 @@ export function ImportManagementScreen({ navigation }: any) {
   );
   const result = tab === "Staged" ? drafts : history;
   const staged = (drafts.data?.drafts || []).filter(
-    (d: any) =>
-      !["committed", "discarded", "expired"].includes(d.status) &&
-      new Date(d.expiresAt) > new Date(),
+    (d: any) => !["committed", "discarded", "expired"].includes(d.status),
   );
   const imported = Array.isArray(history.data)
     ? history.data
@@ -1218,8 +1216,7 @@ export function DraftScreen({ route, navigation }: any) {
   const [expandedRows, setExpandedRows] = useState<string[]>([]);
   const closed =
     !d ||
-    ["committed", "discarded", "expired"].includes(d.status) ||
-    new Date(d.expiresAt) <= new Date();
+    ["committed", "discarded", "expired"].includes(d.status);
   const categoryName = (id: string) =>
     (categories.data || []).find((c: any) => c.id === id)?.name || "Unassigned";
   const run = async (fn: () => Promise<any>) => {

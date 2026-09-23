@@ -38,8 +38,7 @@ export async function getStagedReimbursementTargets() {
   const active = drafts.filter(
     (draft) =>
       draft.mode === "main" &&
-      !["committed", "discarded", "expired"].includes(String(draft.status)) &&
-      new Date(String(draft.expiresAt)).getTime() > Date.now(),
+      !["committed", "discarded", "expired"].includes(String(draft.status)),
   );
   const detailed = await Promise.all(
     active.map((draft) => getAgentDraft(String(draft.id)).then((result) => result.draft)),
