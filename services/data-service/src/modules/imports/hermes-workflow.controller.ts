@@ -123,6 +123,17 @@ hermesWorkflowRouter.get("/drafts", requireAccountAuth(["drafts:read"]), async (
   }
 });
 
+hermesWorkflowRouter.post("/drafts/validate-selection", requireAccountAuth(["drafts:read"]), async (request, response) => {
+  try {
+    const { draftIds } = z.object({
+      draftIds: z.array(z.string().min(1)).min(1).max(20).refine((ids) => new Set(ids).size === ids.length),
+    }).strict().parse(request.body);
+    return response.json(await HermesWorkflowService.prepareSelection(authenticatedUserId(request), draftIds, actor(request)));
+  } catch (error) {
+    return sendError(response, error);
+  }
+});
+
 hermesWorkflowRouter.get("/drafts/:draftId", requireAccountAuth(["drafts:read"]), async (request, response) => {
   try {
     return response.json({ draft: await HermesWorkflowService.getDraft(authenticatedUserId(request), request.params.draftId) });

@@ -98,6 +98,7 @@ import {
   decideAgentProposal,
   updateAgentDraftRow,
   validateAgentDraft,
+  validateAgentDraftSelection,
   commitAgentDraft,
 } from "@/app/actions/agentDrafts";
 import {
@@ -209,6 +210,7 @@ export const mobileOperations = {
   decideAgentProposal,
   updateAgentDraftRow,
   validateAgentDraft,
+  validateAgentDraftSelection,
   commitAgentDraft,
   getCurrentUser,
   updateUserProfile,

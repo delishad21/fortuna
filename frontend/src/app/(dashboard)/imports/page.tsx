@@ -5,7 +5,8 @@ import { getCategories } from "@/app/actions/categories";
 import { getAccountNumbers } from "@/app/actions/accountNumbers";
 import { getParserOptions } from "@/lib/parsers";
 
-export default async function ImportsPage() {
+export default async function ImportsPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+  const { tab } = await searchParams;
   const [data, agentData, categories, accountNumbers, bankParsers, tripParsers] =
     await Promise.all([
       getImportSummaries(),
@@ -22,6 +23,7 @@ export default async function ImportsPage() {
 
   return (
     <ImportHistoryClient
+      initialTab={tab === "history" ? "history" : "import"}
       imports={data.imports || []}
       agentDrafts={agentData.drafts || []}
       categories={categories}

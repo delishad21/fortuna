@@ -17,6 +17,7 @@ import {
   validateDraftTransaction,
 } from "./hermes-workflow.utils";
 import { cleanupExpiredWorkflowData } from "./workflow-cleanup";
+import { findStagedDuplicates, type DuplicateFinding, type StagedRowSummary } from "./staged-duplicates";
 
 const STORAGE_ROOT = path.resolve(
   process.env.STATEMENT_STORAGE_DIR || "/data/statements",
@@ -1262,6 +1263,72 @@ export class HermesWorkflowService {
       duplicates: duplicates.duplicates,
       confirmationToken,
       confirmationExpiresAt: expiresAt,
+    };
+  }
+
+  static async prepareSelection(userId: string, draftIds: string[], actor: Actor) {
+    const drafts = await Promise.all(draftIds.map((draftId) => this.getDraft(userId, draftId)));
+    for (const draft of drafts) {
+      if (["committed", "discarded", "expired"].includes(draft.status)) {
+        throw Object.assign(new Error(`${draft.sourceFilename} is already closed`), { status: 409 });
+      }
+    }
+
+    const rowSummary = (draft: typeof drafts[number], row: typeof drafts[number]["rows"][number]): StagedRowSummary => {
+      const payload = row.currentPayload as Record<string, unknown>;
+      return {
+        draftId: draft.id,
+        rowId: row.id,
+        rowIndex: row.rowIndex,
+        filename: draft.sourceFilename,
+        date: String(payload.date || "").slice(0, 10),
+        description: String(payload.description || ""),
+        amountIn: payload.amountIn == null ? null : Number(payload.amountIn),
+        amountOut: payload.amountOut == null ? null : Number(payload.amountOut),
+      };
+    };
+
+    const selectedRows = drafts.flatMap((draft) =>
+      draft.mode === "main"
+        ? draft.rows.filter((row) => row.selected).map((row) => rowSummary(draft, row))
+        : [],
+    );
+    const stagedDuplicates = findStagedDuplicates(selectedRows);
+    const validations = await Promise.all(drafts.map(async (draft) => ({
+      draftId: draft.id,
+      filename: draft.sourceFilename,
+      validation: await this.prepareCommit(userId, draft.id, actor),
+    })));
+    const savedDuplicates: DuplicateFinding[] = validations.flatMap(({ draftId, validation }) => {
+      const draft = drafts.find((item) => item.id === draftId)!;
+      const selected = draft.rows.filter((row) => row.selected);
+      const duplicateResults = "duplicates" in validation ? validation.duplicates : [];
+      return duplicateResults.flatMap((duplicate) => {
+        const row = selected[duplicate.index];
+        if (!row) return [];
+        return duplicate.matches.map((match) => ({
+          row: rowSummary(draft, row),
+          match: {
+            draftId: "",
+            rowId: String(match.transaction.id),
+            rowIndex: -1,
+            filename: String(match.transaction.sourceFilename || "Saved transaction"),
+            date: new Date(match.transaction.date).toISOString().slice(0, 10),
+            description: String(match.transaction.description || ""),
+            amountIn: match.transaction.amountIn == null ? null : Number(match.transaction.amountIn),
+            amountOut: match.transaction.amountOut == null ? null : Number(match.transaction.amountOut),
+            source: "saved" as const,
+          },
+          score: match.matchScore,
+          reasons: match.matchReasons,
+        }));
+      });
+    });
+
+    return {
+      valid: validations.every((item) => item.validation.valid),
+      validations,
+      duplicates: [...savedDuplicates, ...stagedDuplicates],
     };
   }
 

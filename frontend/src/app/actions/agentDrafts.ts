@@ -115,6 +115,13 @@ export async function validateAgentDraft(draftId: string) {
   });
 }
 
+export async function validateAgentDraftSelection(draftIds: string[]) {
+  return request<Record<string, any>>("/api/agent/drafts/validate-selection", {
+    method: "POST",
+    body: JSON.stringify({ draftIds }),
+  });
+}
+
 export async function commitAgentDraft(draftId: string, confirmationToken: string) {
   return request<Record<string, any>>(`/api/agent/drafts/${encodeURIComponent(draftId)}/commit`, {
     method: "POST",

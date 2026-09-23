@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { PageTabs } from "@/components/ui/PageTabs";
 import { Bot } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -31,6 +32,7 @@ export function ImportHistoryClient({
   categories,
   accountNumbers,
   parserOptions,
+  initialTab = "import",
 }: {
   imports: ImportSummary[];
   agentDrafts?: Array<Record<string, any>>;
@@ -45,8 +47,11 @@ export function ImportHistoryClient({
     label: string;
     description: string;
   }>;
+  initialTab?: "import" | "staged" | "history";
 }) {
-  const [tab, setTab] = useState("import");
+  const router = useRouter();
+  const [tab, setTab] = useState(initialTab);
+  const [commitNotice, setCommitNotice] = useState("");
   const [selectedDraftIds, setSelectedDraftIds] = useState<Set<string>>(
     new Set(),
   );
@@ -122,6 +127,14 @@ export function ImportHistoryClient({
               <AgentDraftReviewClient
                 initialDrafts={detailedDrafts as any}
                 embedded
+                onCommitted={() => {
+                  setShowTogether(false);
+                  setDetailedDrafts([]);
+                  setSelectedDraftIds(new Set());
+                  setCommitNotice("Selected staged imports committed successfully.");
+                  setTab("history");
+                  router.refresh();
+                }}
               />
             </>
           ) : (
@@ -202,6 +215,11 @@ export function ImportHistoryClient({
       )}
       {tab === "history" && (
         <>
+          {commitNotice && (
+            <p role="status" className="rounded-lg border border-green/30 bg-green/10 p-3 text-sm text-dark dark:text-white">
+              {commitNotice}
+            </p>
+          )}
           <Card>
             <CardHeader>
               <CardTitle>Previous Imports</CardTitle>

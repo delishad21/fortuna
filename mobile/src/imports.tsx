@@ -804,7 +804,33 @@ function DraftSelectionCheckbox({
     </Pressable>
   );
 }
-export function ImportManagementScreen({ navigation }: any) {
+function DuplicateReview({ findings, busy, onCancel, onCommit }: {
+  findings: any[];
+  busy: boolean;
+  onCancel: () => void;
+  onCommit: () => void;
+}) {
+  return (
+    <Card>
+      <Txt bold size={17}>Review {findings.length} possible duplicate{findings.length === 1 ? "" : "s"}</Txt>
+      <Txt muted>Exclude any row you do not want to save. These transactions have matching dates, amounts, and descriptions.</Txt>
+      {findings.slice(0, 20).map((finding: any, index: number) => (
+        <View key={`${finding.row.rowId}:${finding.match.rowId}:${index}`} style={{ marginTop: 12 }}>
+          <Txt bold>{finding.row.filename} · row {finding.row.rowIndex + 1}</Txt>
+          <Txt>{finding.row.date} · {finding.row.description} · {finding.row.amountIn ? "+" : "−"}{money(finding.row.amountIn || finding.row.amountOut || 0)}</Txt>
+          <Txt muted>Matches {finding.match.source === "saved" ? "saved transaction" : `${finding.match.filename} row ${finding.match.rowIndex + 1}`}: {finding.match.date} · {finding.match.description}</Txt>
+        </View>
+      ))}
+      {findings.length > 20 && <Txt muted>And {findings.length - 20} more possible duplicates.</Txt>}
+      <View style={styles.row}>
+        <Button title="Back to review" secondary disabled={busy} onPress={onCancel} />
+        <Button title="Commit anyway" disabled={busy} onPress={onCommit} />
+      </View>
+    </Card>
+  );
+}
+
+export function ImportManagementScreen({ navigation, route }: any) {
   const drafts = useResource("getAgentDrafts");
   const history = useResource("getImportSummaries");
   const categories = useResource("getCategories", { scope: "settings" });
@@ -818,10 +844,16 @@ export function ImportManagementScreen({ navigation }: any) {
   const [loadingTogether, setLoadingTogether] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [expanded, setExpanded] = useState<string[]>([]);
+  const [pendingCommit, setPendingCommit] = useState<any>(null);
+  const [commitMessage, setCommitMessage] = useState("");
+  const [commitBusy, setCommitBusy] = useState(false);
   useEffect(
     () => navigation.addListener("tabPress", () => setTab("Import")),
     [navigation],
   );
+  useEffect(() => {
+    if (route?.params?.openTab === "History") setTab("History");
+  }, [route?.params?.refreshKey, route?.params?.openTab]);
   const result = tab === "Staged" ? drafts : history;
   const staged = (drafts.data?.drafts || []).filter(
     (d: any) => !["committed", "discarded", "expired"].includes(d.status),
@@ -831,6 +863,7 @@ export function ImportManagementScreen({ navigation }: any) {
     : history.data?.imports || history.data?.importSummaries || [];
   const loadDetailed = async (draftIds = selectedDraftIds) => {
     setLoadingTogether(true);
+    setPendingCommit(null);
     try {
       setDetailedDrafts(
         await Promise.all(
@@ -864,6 +897,56 @@ export function ImportManagementScreen({ navigation }: any) {
   const allDraftsSelected =
     staged.length > 0 &&
     staged.every((draft: any) => selectedDraftIds.includes(draft.id));
+  const commitSelection = async (selection: any) => {
+    setCommitBusy(true);
+    setCommitMessage("");
+    try {
+      for (const item of selection.validations) {
+        await call("commitAgentDraft", item.draftId, item.validation.confirmationToken);
+      }
+      setPendingCommit(null);
+      setShowTogether(false);
+      setDetailedDrafts([]);
+      setSelectedDraftIds([]);
+      setTab("History");
+      await Promise.all([drafts.reload(), history.reload()]);
+      setCommitMessage("Selected staged imports committed successfully.");
+    } catch (error: any) {
+      setCommitMessage(error.message || "Could not commit staged imports");
+      await drafts.reload();
+    } finally {
+      setCommitBusy(false);
+    }
+  };
+  const validateSelection = async () => {
+    setCommitBusy(true);
+    setCommitMessage("");
+    setPendingCommit(null);
+    try {
+      const candidateIds = detailedDrafts
+        .filter((draft: any) => draft.rows?.some((row: any) => row.selected))
+        .map((draft: any) => draft.id);
+      if (!candidateIds.length) return;
+      const selection = await call("validateAgentDraftSelection", candidateIds);
+      if (!selection.valid) {
+        setCommitMessage(selection.validations.flatMap((item: any) =>
+          [...(item.validation.errors || []), ...(item.validation.warnings || [])]
+            .map((issue: any) => `${item.filename}${issue.rowIndex === undefined ? "" : ` row ${issue.rowIndex + 1}`}: ${issue.message}`),
+        ).join("\n") || "Review the flagged rows before saving.");
+        await loadDetailed(candidateIds);
+        return;
+      }
+      if (selection.duplicates.length) {
+        setPendingCommit(selection);
+        return;
+      }
+      confirm("Save selected imports?", `${selection.validations.reduce((sum: number, item: any) => sum + Number(item.validation.summary?.selected || 0), 0)} selected transactions will be saved.`, () => commitSelection(selection));
+    } catch (error: any) {
+      setCommitMessage(error.message || "Could not validate staged imports");
+    } finally {
+      setCommitBusy(false);
+    }
+  };
   if (tab === "Import") {
     return (
       <View style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -897,11 +980,10 @@ export function ImportManagementScreen({ navigation }: any) {
             />
             {tab === "Staged" &&
               (showTogether ? (
-                <Button
-                  title="Change staged imports"
-                  secondary
-                  onPress={() => setShowTogether(false)}
-                />
+                <View style={styles.stack}>
+                  <Button title="Change staged imports" secondary onPress={() => setShowTogether(false)} />
+                  <Button title="Validate & commit selected" disabled={commitBusy} onPress={() => void validateSelection()} />
+                </View>
               ) : (
                 <>
                   <View style={styles.between}>
@@ -927,6 +1009,15 @@ export function ImportManagementScreen({ navigation }: any) {
                 </>
               ))}
             <State {...result} />
+            {!!commitMessage && <Card><Txt>{commitMessage}</Txt></Card>}
+            {pendingCommit && (
+              <DuplicateReview
+                findings={pendingCommit.duplicates}
+                busy={commitBusy}
+                onCancel={() => setPendingCommit(null)}
+                onCommit={() => void commitSelection(pendingCommit)}
+              />
+            )}
             {loadingTogether && <Txt muted>Loading staged transactions…</Txt>}
           </View>
         }
@@ -1212,6 +1303,7 @@ export function DraftScreen({ route, navigation }: any) {
   const [filter, setFilter] = useState("Needs review");
   const [search, setSearch] = useState("");
   const [message, setMessage] = useState("");
+  const [pendingCommit, setPendingCommit] = useState<any>(null);
   const [editingRow, setEditingRow] = useState<any>(null);
   const [expandedRows, setExpandedRows] = useState<string[]>([]);
   const closed =
@@ -1232,29 +1324,49 @@ export function DraftScreen({ route, navigation }: any) {
       setBusy(false);
     }
   };
+  const commitSelection = async (selection: any) => {
+    setBusy(true);
+    setMessage("");
+    try {
+      for (const item of selection.validations) {
+        await call("commitAgentDraft", item.draftId, item.validation.confirmationToken);
+      }
+      setPendingCommit(null);
+      navigation.navigate("Main", {
+        screen: "Import",
+        params: { openTab: "History", refreshKey: Date.now() },
+      });
+    } catch (error: any) {
+      setMessage(error.message || "Could not save this import");
+      await result.reload();
+    } finally {
+      setBusy(false);
+    }
+  };
   const save = async () => {
-    let validation: any;
-    await run(async () => {
-      validation = await call("validateAgentDraft", d.id);
-      if (!validation.valid)
-        setMessage(
-          [...(validation.errors || []), ...(validation.warnings || [])]
-            .map(
-              (e: any) =>
-                `${e.rowIndex !== undefined ? `Row ${e.rowIndex + 1}: ` : ""}${e.message || e.code || e}`,
-            )
-            .join("\n") || "Review the flagged rows before saving.",
-        );
-    });
-    if (validation?.valid)
-      confirm(
-        "Save this import?",
-        `${validation.summary.selected} selected rows will be saved.${validation.duplicates?.length ? ` ${validation.duplicates.length} possible duplicates found.` : ""}`,
-        () =>
-          run(() =>
-            call("commitAgentDraft", d.id, validation.confirmationToken),
-          ),
-      );
+    setBusy(true);
+    setMessage("");
+    setPendingCommit(null);
+    try {
+      const selection = await call("validateAgentDraftSelection", [d.id]);
+      if (!selection.valid) {
+        setMessage(selection.validations.flatMap((item: any) =>
+          [...(item.validation.errors || []), ...(item.validation.warnings || [])]
+            .map((issue: any) => `${issue.rowIndex === undefined ? "" : `Row ${issue.rowIndex + 1}: `}${issue.message}`),
+        ).join("\n") || "Review the flagged rows before saving.");
+        await result.reload();
+        return;
+      }
+      if (selection.duplicates.length) {
+        setPendingCommit(selection);
+        return;
+      }
+      confirm("Save this import?", `${selection.validations[0].validation.summary.selected} selected rows will be saved.`, () => commitSelection(selection));
+    } catch (error: any) {
+      setMessage(error.message || "Could not validate this import");
+    } finally {
+      setBusy(false);
+    }
   };
   const rows = (d?.rows || []).filter((row: any) => {
     const r = row.review || {};
@@ -1321,6 +1433,14 @@ export function DraftScreen({ route, navigation }: any) {
               <Card>
                 <Txt>{message}</Txt>
               </Card>
+            )}
+            {pendingCommit && (
+              <DuplicateReview
+                findings={pendingCommit.duplicates}
+                busy={busy}
+                onCancel={() => setPendingCommit(null)}
+                onCommit={() => void commitSelection(pendingCommit)}
+              />
             )}
           </View>
         }

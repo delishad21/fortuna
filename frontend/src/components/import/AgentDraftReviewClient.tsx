@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Bot, Check, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { TransactionTable } from "@/components/transaction-table/TransactionTable";
@@ -15,7 +16,7 @@ import {
   decideAgentProposal,
   getAgentDraft,
   updateAgentDraftRow,
-  validateAgentDraft,
+  validateAgentDraftSelection,
 } from "@/app/actions/agentDrafts";
 import { getCategories } from "@/app/actions/categories";
 import { getAccountNumbers } from "@/app/actions/accountNumbers";
@@ -74,11 +75,14 @@ export function AgentDraftReviewClient({
   initialDraft,
   initialDrafts,
   embedded = false,
+  onCommitted,
 }: {
   initialDraft?: Draft;
   initialDrafts?: Draft[];
   embedded?: boolean;
+  onCommitted?: () => void;
 }) {
+  const router = useRouter();
   const [drafts, setDrafts] = useState<Draft[]>(
     initialDrafts || (initialDraft ? [initialDraft] : []),
   );
@@ -89,6 +93,7 @@ export function AgentDraftReviewClient({
   const [accounts, setAccounts] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [pendingCommit, setPendingCommit] = useState<Record<string, any> | null>(null);
   const [reimbursement, setReimbursement] = useState<null | {
     globalIndex: number;
     transactions: Transaction[];
@@ -170,6 +175,7 @@ export function AgentDraftReviewClient({
     pendingUpdateCountRef.current += 1;
     setBusy(true);
     setMessage("");
+    setPendingCommit(null);
 
     const run = previous
       .catch(() => undefined)
@@ -237,6 +243,7 @@ export function AgentDraftReviewClient({
   const setAllSelected = async (selected: boolean) => {
     setBusy(true);
     setMessage("");
+    setPendingCommit(null);
     try {
       await Promise.all(
         flatRows
@@ -258,30 +265,48 @@ export function AgentDraftReviewClient({
     }
   };
 
+  const commitValidated = async (selection: Record<string, any>) => {
+    setBusy(true);
+    setMessage("");
+    try {
+      for (const { draftId, validation } of selection.validations) {
+        await commitAgentDraft(draftId, validation.confirmationToken);
+      }
+      setPendingCommit(null);
+      if (onCommitted) onCommitted();
+      else {
+        router.push("/imports?tab=history");
+        router.refresh();
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Commit failed");
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const commitSelectedDrafts = async () => {
     setBusy(true);
     setMessage("");
+    setPendingCommit(null);
     try {
       const candidates = drafts.filter((draft) =>
         draft.rows.some((row: DraftRow) => row.selected),
       );
-      const validations = await Promise.all(
-        candidates.map(async (draft) => ({
-          draft,
-          validation: await validateAgentDraft(draft.id),
-        })),
-      );
-      const invalid = validations.filter((item) => !item.validation.valid);
+      if (!candidates.length) return;
+      const selection = await validateAgentDraftSelection(candidates.map((draft) => draft.id));
+      const invalid = selection.validations.filter((item: Record<string, any>) => !item.validation.valid);
       if (invalid.length) {
         setMessage(
           invalid
-            .flatMap(({ draft, validation }) =>
+            .flatMap(({ filename, validation }: Record<string, any>) =>
               [
                 ...(validation.errors || []),
                 ...(validation.warnings || []),
               ].map(
                 (item: any) =>
-                  `${draft.sourceFilename}${item.rowIndex !== undefined ? ` row ${item.rowIndex + 1}` : ""}: ${item.message}`,
+                  `${filename}${item.rowIndex !== undefined ? ` row ${item.rowIndex + 1}` : ""}: ${item.message}`,
               ),
             )
             .join("\n") || "Resolve the flagged rows before committing.",
@@ -289,21 +314,21 @@ export function AgentDraftReviewClient({
         await refresh();
         return;
       }
-      const selected = validations.reduce(
-        (sum, item) => sum + Number(item.validation.summary?.selected || 0),
+      const selected = selection.validations.reduce(
+        (sum: number, item: Record<string, any>) => sum + Number(item.validation.summary?.selected || 0),
         0,
       );
+      if (selection.duplicates.length) {
+        setPendingCommit(selection);
+        return;
+      }
       if (
         !window.confirm(
-          `Commit ${selected} selected rows across ${validations.length} staged import${validations.length === 1 ? "" : "s"}?`,
+          `Commit ${selected} selected rows across ${selection.validations.length} staged import${selection.validations.length === 1 ? "" : "s"}?`,
         )
       )
         return;
-      for (const { draft, validation } of validations) {
-        await commitAgentDraft(draft.id, validation.confirmationToken);
-      }
-      setMessage("Selected staged imports committed successfully.");
-      await refresh();
+      await commitValidated(selection);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Commit failed");
     } finally {
@@ -354,6 +379,24 @@ export function AgentDraftReviewClient({
         <div className="whitespace-pre-wrap rounded-lg border border-stroke p-3 text-sm text-dark dark:border-dark-3 dark:text-white">
           {message}
         </div>
+      )}
+      {pendingCommit && (
+        <section className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-dark dark:text-white" aria-label="Possible duplicate transactions">
+          <h2 className="font-semibold">Review {pendingCommit.duplicates.length} possible duplicate{pendingCommit.duplicates.length === 1 ? "" : "s"}</h2>
+          <p className="mt-1 text-dark-5 dark:text-dark-6">These selected rows look like transactions already saved or selected elsewhere in this staged import. Exclude a row if it should not be imported.</p>
+          <ul className="mt-3 max-h-56 space-y-2 overflow-y-auto">
+            {pendingCommit.duplicates.map((finding: Record<string, any>, index: number) => (
+              <li key={`${finding.row.rowId}:${finding.match.rowId}:${index}`} className="rounded-md bg-white/70 p-3 dark:bg-dark-3">
+                <span className="font-medium">{finding.row.filename} · row {finding.row.rowIndex + 1}: {finding.row.date} · {finding.row.description} · {finding.row.amountIn ? "+" : "−"}S${Number(finding.row.amountIn || finding.row.amountOut || 0).toFixed(2)}</span>
+                <span className="block text-dark-5 dark:text-dark-6">Matches {finding.match.source === "saved" ? "saved transaction" : `${finding.match.filename} row ${finding.match.rowIndex + 1}`}: {finding.match.date} · {finding.match.description} · {finding.reasons.join(", ")}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button variant="secondary" disabled={busy} onClick={() => setPendingCommit(null)}>Back to review</Button>
+            <Button disabled={busy} onClick={() => void commitValidated(pendingCommit)}>Commit anyway</Button>
+          </div>
+        </section>
       )}
       <TransactionTable
         parsedData={{
