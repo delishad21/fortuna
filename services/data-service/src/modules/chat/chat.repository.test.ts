@@ -1,0 +1,21 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { withChatDb } from './test-harness';
+import { ChatRepository } from './chat.repository';
+test('conversations and dependent records enforce ownership', () => withChatDb(async db => {
+  const alice = await db.user.create({data:{username:'chat-alice'}});
+  const bob = await db.user.create({data:{username:'chat-bob'}});
+  const repo = new ChatRepository(db);
+  const conversation = await repo.createConversation(alice.id);
+  assert.equal((await repo.getConversation(alice.id, conversation.id))?.id, conversation.id);
+  assert.equal(await repo.getConversation(bob.id, conversation.id), null);
+  await assert.rejects(db.chatMessage.create({data:{userId:bob.id,conversationId:conversation.id,role:'user',blocks:[]}}));
+  await assert.rejects(db.chatRun.create({data:{userId:bob.id,conversationId:conversation.id,idempotencyKey:'one',provider:'openrouter',model:'test'}}));
+  const file = await db.statementFile.create({data:{userId:bob.id,filename:'test.csv',contentType:'text/csv',storagePath:'/synthetic',sha256:'test',sizeBytes:1,expiresAt:new Date(Date.now()+60000)}});
+  await assert.rejects(db.chatAttachment.create({data:{userId:alice.id,conversationId:conversation.id,statementFileId:file.id}}));
+  const run = await db.chatRun.create({data:{userId:alice.id,conversationId:conversation.id,idempotencyKey:'one',provider:'openrouter',model:'test'}});
+  await assert.rejects(db.chatRun.create({data:{userId:alice.id,conversationId:conversation.id,idempotencyKey:'two',provider:'openrouter',model:'test'}}));
+  await assert.rejects(db.chatActionProposal.create({data:{userId:bob.id,runId:run.id,conversationId:conversation.id,kind:'edit_transactions',arguments:{},preview:{},stateHash:'x',expiresAt:new Date(Date.now()+60000)}}));
+  await repo.deleteConversation(alice.id,conversation.id);
+  assert.ok(await db.statementFile.findUnique({where:{id:file.id}}));
+}));

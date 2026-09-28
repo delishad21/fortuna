@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: chat_test
+      POSTGRES_PASSWORD: disposable-test-only
+      POSTGRES_DB: fortuna_chat_test
+    ports:
+      - '127.0.0.1:55432:5432'
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U chat_test -d fortuna_chat_test']
+      interval: 1s
+      timeout: 3s
+      retries: 30

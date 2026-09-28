@@ -75,6 +75,9 @@ model User {
   parserWorkspaces       ParserWorkspace[]
   dynamicParsers         DynamicParserDefinition[]
 
+  chatConnections ChatConnection[]
+  chatConversations ChatConversation[]
+
   @@map("users")
 }
 
@@ -113,6 +116,8 @@ model StatementFile {
 
   @@unique([userId, sha256])
   @@index([userId, expiresAt])
+  chatAttachments ChatAttachment[]
+  @@unique([id, userId])
   @@map("statement_files")
 }
 
@@ -482,4 +487,139 @@ model ClassificationPattern {
   @@index([userId, status])
   @@index([userId, patternType])
   @@map("classification_patterns")
+}
+
+model ChatConnection {
+  id String @id @default(dbgenerated("gen_random_uuid()::text"))
+  userId String @map("user_id")
+  provider String
+  selected Boolean @default(false)
+  secret Json?
+  keyHint String? @map("key_hint")
+  status String @default("disconnected")
+  generation Int @default(1)
+  loginId String? @map("login_id")
+  loginExpiresAt DateTime? @map("login_expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  @@unique([userId, provider])
+  @@map("chat_connections")
+}
+
+model ChatConversation {
+  id String @id @default(dbgenerated("gen_random_uuid()::text"))
+  userId String @map("user_id")
+  title String @default("New conversation")
+  deletedAt DateTime? @map("deleted_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  messages ChatMessage[]
+  attachments ChatAttachment[]
+  runs ChatRun[]
+  @@unique([id, userId])
+  @@index([userId, updatedAt])
+  @@map("chat_conversations")
+}
+
+model ChatMessage {
+  id String @id @default(dbgenerated("gen_random_uuid()::text"))
+  userId String @map("user_id")
+  conversationId String @map("conversation_id")
+  role String
+  blocks Json
+  createdAt DateTime @default(now()) @map("created_at")
+  conversation ChatConversation @relation(fields:[conversationId,userId],references:[id,userId],onDelete:Cascade)
+  @@index([conversationId, createdAt])
+  @@map("chat_messages")
+}
+
+model ChatAttachment {
+  id String @id @default(dbgenerated("gen_random_uuid()::text"))
+  userId String @map("user_id")
+  conversationId String @map("conversation_id")
+  statementFileId String @map("statement_file_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  conversation ChatConversation @relation(fields:[conversationId,userId],references:[id,userId],onDelete:Cascade)
+  statementFile StatementFile @relation(fields:[statementFileId,userId],references:[id,userId],onDelete:Restrict)
+  @@unique([conversationId, statementFileId])
+  @@map("chat_attachments")
+}
+
+model ChatRun {
+  id String @id @default(dbgenerated("gen_random_uuid()::text"))
+  userId String @map("user_id")
+  conversationId String @map("conversation_id")
+  idempotencyKey String @map("idempotency_key")
+  status String @default("queued")
+  provider String
+  model String
+  effort String?
+  connectionGeneration Int @default(1) @map("connection_generation")
+  leaseToken String? @map("lease_token")
+  leaseUntil DateTime? @map("lease_until")
+  attempts Int @default(0)
+  nextSequence Int @default(0) @map("next_sequence")
+  error String?
+  cancelRequested Boolean @default(false) @map("cancel_requested")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  conversation ChatConversation @relation(fields:[conversationId,userId],references:[id,userId],onDelete:Cascade)
+  events ChatRunEvent[]
+  tools ChatToolInvocation[]
+  proposals ChatActionProposal[]
+  @@unique([id,userId,conversationId])
+  @@unique([userId,conversationId,idempotencyKey])
+  @@index([status,leaseUntil,createdAt])
+  @@map("chat_runs")
+}
+
+model ChatRunEvent {
+  id String @id @default(dbgenerated("gen_random_uuid()::text"))
+  userId String @map("user_id")
+  conversationId String @map("conversation_id")
+  runId String @map("run_id")
+  sequence Int
+  payload Json
+  createdAt DateTime @default(now()) @map("created_at")
+  run ChatRun @relation(fields:[runId,userId,conversationId],references:[id,userId,conversationId],onDelete:Cascade)
+  @@unique([runId,sequence])
+  @@map("chat_run_events")
+}
+
+model ChatToolInvocation {
+  id String @id @default(dbgenerated("gen_random_uuid()::text"))
+  userId String @map("user_id")
+  conversationId String @map("conversation_id")
+  runId String @map("run_id")
+  callId String @map("call_id")
+  name String
+  arguments Json
+  status String @default("pending")
+  result Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  run ChatRun @relation(fields:[runId,userId,conversationId],references:[id,userId,conversationId],onDelete:Cascade)
+  @@unique([runId,callId])
+  @@map("chat_tool_invocations")
+}
+
+model ChatActionProposal {
+  id String @id @default(dbgenerated("gen_random_uuid()::text"))
+  userId String @map("user_id")
+  conversationId String @map("conversation_id")
+  runId String @map("run_id")
+  kind String
+  arguments Json
+  preview Json
+  stateHash String @map("state_hash")
+  status String @default("pending")
+  result Json?
+  expiresAt DateTime @map("expires_at")
+  decidedAt DateTime? @map("decided_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  run ChatRun @relation(fields:[runId,userId,conversationId],references:[id,userId,conversationId],onDelete:Cascade)
+  @@index([userId,status])
+  @@map("chat_action_proposals")
 }
