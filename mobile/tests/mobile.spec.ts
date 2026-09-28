@@ -282,7 +282,7 @@ test("mobile authentication, financial workflows and phone navigation", async ({
     });
     await page.getByRole("link", { name: /back/i }).first().click();
     await page.getByRole("tab", { name: /Import/ }).click();
-    await expect(page.getByText("Your imports", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Staged", exact: true }).click();
     await expect(
       page.getByText("Agent staged QA.csv", { exact: true }),
     ).toBeVisible();
@@ -290,7 +290,7 @@ test("mobile authentication, financial workflows and phone navigation", async ({
       .getByRole("button", { name: "Review staged transactions", exact: true })
       .click();
     await expect(
-      page.getByText("Staged expense 1", { exact: true }),
+      page.getByText("Staged expense 1", { exact: true }).first(),
     ).toBeVisible();
     await page
       .getByRole("button", { name: "Exclude row", exact: true })
@@ -302,16 +302,18 @@ test("mobile authentication, financial workflows and phone navigation", async ({
     await page
       .getByRole("button", { name: "Include row", exact: true })
       .click();
+    await page.getByRole("button", { name: "More details", exact: true }).first().click();
     await page
       .getByRole("button", { name: "Accept", exact: true })
       .first()
       .click();
     await expect(
-      page.getByText("Reviewed expense 1", { exact: true }),
+      page.getByText("Reviewed expense 1", { exact: true }).first(),
     ).toBeHidden();
     await page
       .getByRole("button", { name: "Reconciliation", exact: true })
       .click();
+    await page.getByRole("button", { name: "More details", exact: true }).first().click();
     await expect(
       page.getByText("Check this transfer", { exact: true }).first(),
     ).toBeVisible();
@@ -324,10 +326,10 @@ test("mobile authentication, financial workflows and phone navigation", async ({
     ).toBeVisible();
     await page.getByRole("button", { name: "Ready", exact: true }).click();
     await expect(
-      page.getByText("Reviewed expense 1", { exact: true }),
+      page.getByText("Reviewed expense 1", { exact: true }).first(),
     ).toBeVisible();
     await page
-      .getByRole("button", { name: "Edit details", exact: true })
+      .getByRole("button", { name: "Edit transaction", exact: true })
       .first()
       .click();
     await page
@@ -337,7 +339,7 @@ test("mobile authentication, financial workflows and phone navigation", async ({
       .getByRole("button", { name: "Save changes", exact: true })
       .click();
     await expect(
-      page.getByText("Phone reviewed expense", { exact: true }),
+      page.getByText("Phone reviewed expense", { exact: true }).first(),
     ).toBeVisible();
     expect(
       (await rpc("getAgentDraft", draft.id)).draft.reviewSummary,
@@ -347,7 +349,7 @@ test("mobile authentication, financial workflows and phone navigation", async ({
       fullPage: true,
     });
     await page
-      .getByRole("button", { name: "Edit details", exact: true })
+      .getByRole("button", { name: "Edit transaction", exact: true })
       .last()
       .click();
     await page
@@ -363,6 +365,7 @@ test("mobile authentication, financial workflows and phone navigation", async ({
     await page
       .getByRole("button", { name: "Save allocations", exact: true })
       .click();
+    await page.getByRole("button", {name:"Review staged transactions",exact:true}).click();
     await expect(
       page.getByRole("button", { name: "Review & save 4 rows", exact: true }),
     ).toBeVisible();
@@ -384,7 +387,6 @@ test("mobile authentication, financial workflows and phone navigation", async ({
     await expect
       .poll(async () => (await rpc("getAgentDraft", draft.id)).draft.status)
       .toBe("committed");
-    await page.getByRole("link", { name: /back/i }).first().click();
     await expect(
       page.getByRole("button", {
         name: "Review staged transactions",
@@ -394,10 +396,10 @@ test("mobile authentication, financial workflows and phone navigation", async ({
     await page.getByRole("button", { name: "History", exact: true }).click();
     await expect(page.getByText("qa.csv", { exact: true })).toBeVisible();
     await page
-      .getByRole("button", { name: "Import a statement", exact: true })
+      .getByRole("button", { name: "Import", exact: true })
       .click();
     await expect(
-      page.getByText("Bring it all together", { exact: true }),
+      page.getByText("1. Choose your statement type", { exact: true }),
     ).toBeVisible();
     await page
       .getByRole("button", { name: "Statement parser", exact: true })
@@ -409,8 +411,7 @@ test("mobile authentication, financial workflows and phone navigation", async ({
     await expect(
       page.getByRole("button", { name: "Done", exact: true }),
     ).toBeHidden();
-    await page.getByRole("link", { name: /back/i }).first().click();
-    await page.getByRole("tab", { name: /Settings/ }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(
       page.getByText("Make it yours", { exact: true }),
     ).toBeVisible();

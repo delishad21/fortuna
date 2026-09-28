@@ -1,3 +1,4 @@
+import { afterCommit } from "../../lib/database-context";
 import { reviewDraftRow, summarizeDraftReview } from "./draft-review";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
@@ -1177,6 +1178,9 @@ export class HermesWorkflowService {
       errors,
       warnings: highImpact.map((proposal) => ({
         proposalId: proposal.id,
+        rowId: proposal.draftRowId,
+        rowIndex: draft.rows.find(row => row.id === proposal.draftRowId)?.rowIndex,
+        transaction: draft.rows.find(row => row.id === proposal.draftRowId)?.currentPayload,
         message: "High-impact proposal requires review",
       })),
       summary: {
@@ -1463,7 +1467,7 @@ export class HermesWorkflowService {
         });
       });
       if (sourceFile && !sourceFile.retained) {
-        await unlink(sourceFile.storagePath).catch(() => undefined);
+        await afterCommit(() => unlink(sourceFile.storagePath).catch(() => undefined));
       }
       return { success: true, draftId, ...result };
     } catch (error) {

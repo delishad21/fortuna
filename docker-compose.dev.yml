@@ -112,6 +112,9 @@ services:
       - DATABASE_URL=postgresql://financeuser:financepass@postgres:5432/personal_finance?schema=public
       - NODE_ENV=development
       - PARSER_SERVICE_URL=http://file-parser:4000
+      - CHAT_ENCRYPTION_KEY_V1=${CHAT_ENCRYPTION_KEY_V1:-}
+      - CHAT_WORKER_URL=http://chat-worker:4003
+      - CHAT_ENABLED=${CHAT_ENABLED:-false}
       - STATEMENT_STORAGE_DIR=/data/statements
       - COMMIT_TOKEN_SECRET=${COMMIT_TOKEN_SECRET:-development-only-commit-token-secret-change-me}
       - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-development-only-internal-service-token}
@@ -133,6 +136,44 @@ services:
     networks:
       - finance-network
     command: sh -c "npx prisma migrate deploy && npm run dev"
+
+  chat-worker:
+    profiles: ["chat"]
+    build:
+      context: ./services/data-service
+      dockerfile: Dockerfile.chat-worker
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 1536m
+    cpus: 2.0
+    tmpfs: ["/tmp:size=128m,mode=1777"]
+    environment:
+      - DATABASE_URL=postgresql://financeuser:financepass@postgres:5432/personal_finance?schema=public
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-development-only-internal-service-token}
+      - COMMIT_TOKEN_SECRET=${COMMIT_TOKEN_SECRET:-development-only-commit-token-secret-change-me}
+      - CHAT_ENABLED=${CHAT_ENABLED:-true}
+      - CHAT_ENCRYPTION_KEY_V1=${CHAT_ENCRYPTION_KEY_V1:-}
+      - CHAT_WORKER_CONCURRENCY=${CHAT_WORKER_CONCURRENCY:-2}
+      - PARSER_SERVICE_URL=http://file-parser:4000
+      - STATEMENT_STORAGE_DIR=/data/statements
+    volumes:
+      - chat-credentials:/data/chat-codex
+      - statement-data:/data/statements
+    expose: ["4003"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4003/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      data-service:
+        condition: service_healthy
+    networks: [finance-network]
 
   # One account-scoped Hermes MCP gateway. Start explicitly with:
   # docker compose -f docker-compose.dev.yml --profile hermes up -d finance-mcp
@@ -194,6 +235,7 @@ services:
     volumes:
       # Mount source code for hot reload
       - ./frontend/src:/app/src
+      - ./frontend/shared:/app/shared
       - ./frontend/public:/app/public
       - ./frontend/prisma:/app/prisma
       - ./frontend/next.config.mjs:/app/next.config.mjs
@@ -219,3 +261,4 @@ networks:
 volumes:
   statement-data:
   parser-sandbox-queue:
+  chat-credentials:

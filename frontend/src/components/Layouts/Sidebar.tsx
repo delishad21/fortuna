@@ -10,6 +10,7 @@ import {
   Plane,
   BarChart3,
   Settings,
+  MessageSquare,
   ChevronUp,
 } from "lucide-react";
 import { useSidebarContext } from "./sidebar-context";
@@ -19,6 +20,7 @@ const menuItems = [
   {
     section: "Main",
     items: [
+      { title: "Chat", icon: MessageSquare, url: "/chat" },
       { title: "Dashboard", icon: LayoutDashboard, url: "/dashboard" },
       { title: "Imports", icon: Upload, url: "/imports" },
       { title: "Transactions", icon: Receipt, url: "/transactions" },

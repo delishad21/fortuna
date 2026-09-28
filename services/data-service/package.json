@@ -9,7 +9,8 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "find src -name '*.test.ts' -print0 | xargs -0 tsx --test",
-    "backfill:import-sources": "tsx src/scripts/backfill-import-source-filenames.ts"
+    "backfill:import-sources": "tsx src/scripts/backfill-import-source-filenames.ts",
+    "chat:worker": "node dist/modules/chat/worker.js"
   },
   "dependencies": {
     "@prisma/client": "5.15.0",

@@ -1,5 +1,10 @@
+import {ChatTransactionScreen} from './src/chat/TransactionScreen';
+import {ChatScreen} from './src/chat/ChatScreen';
+import {ChatConversationScreen} from './src/chat/ConversationScreen';
+import {ChatApprovalScreen} from './src/chat/ApprovalScreen';
+import {AIConnectionScreen} from './src/chat/ConnectionScreen';
 import React, { useState } from "react";
-import { ActivityIndicator, Image, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, View } from "react-native";
 import {
   NavigationContainer,
   DarkTheme,
@@ -88,8 +93,9 @@ function MainTabs() {
   const { colors } = useTheme();
   return (
     <Tabs.Navigator
-      screenOptions={({ route }) => ({
+      screenOptions={({ route, navigation }) => ({
         headerTitle: () => <BrandTitle />,
+        headerRight: () => <Pressable accessibilityRole="button" accessibilityLabel="Settings" onPress={()=>navigation.navigate("Settings")} style={{padding:14}}><Ionicons name="settings-outline" size={23} color={colors.text}/></Pressable>,
         headerStyle: { backgroundColor: colors.card },
         headerShadowVisible: false,
         tabBarStyle: {
@@ -108,7 +114,7 @@ function MainTabs() {
                   Transactions: "receipt-outline",
                   Import: "file-tray-full-outline",
                   Trips: "airplane-outline",
-                  Settings: "settings-outline",
+                  Chat: "chatbubble-ellipses-outline",
                 } as any
               )[route.name]
             }
@@ -130,7 +136,7 @@ function MainTabs() {
         options={{ tabBarLabel: "Imports" }}
       />
       <Tabs.Screen name="Trips" component={TripsScreen} />
-      <Tabs.Screen name="Settings" component={SettingsScreen} />
+      <Tabs.Screen name="Chat" component={ChatScreen} />
     </Tabs.Navigator>
   );
 }
@@ -261,6 +267,11 @@ function Navigation() {
                 options={{ headerShown: false }}
               />
               {Object.entries({
+                Settings: SettingsScreen,
+                ChatConversation: ChatConversationScreen,
+                ChatApproval: ChatApprovalScreen,
+                ChatTransaction: ChatTransactionScreen,
+                AIConnection: AIConnectionScreen,
                 Analytics: AnalyticsScreen,
                 Transaction: TransactionScreen,
                 Split: SplitScreen,

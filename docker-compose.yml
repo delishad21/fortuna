@@ -69,7 +69,7 @@ services:
       - parser-sandbox-queue:/sandbox
 
   data-service:
-    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-data-service:${IMAGE_TAG:-latest}
+    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-data-service:${DATA_IMAGE_TAG:-${IMAGE_TAG:-latest}}
     container_name: fortuna-data-service
     restart: always
     expose:
@@ -79,6 +79,9 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-personal_finance}?schema=public
       - NODE_ENV=production
       - PARSER_SERVICE_URL=http://file-parser:4000
+      - CHAT_ENCRYPTION_KEY_V1=${CHAT_ENCRYPTION_KEY_V1:-}
+      - CHAT_WORKER_URL=http://chat-worker:4003
+      - CHAT_ENABLED=${CHAT_ENABLED:-false}
       - STATEMENT_STORAGE_DIR=/data/statements
       - COMMIT_TOKEN_SECRET=${COMMIT_TOKEN_SECRET}
       - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
@@ -97,8 +100,43 @@ services:
     networks:
       - finance-network
 
+  chat-worker:
+    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-chat-worker:${CHAT_IMAGE_TAG:-${IMAGE_TAG:-latest}}
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 1536m
+    cpus: 2.0
+    tmpfs: ["/tmp:size=128m,mode=1777"]
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-personal_finance}?schema=public
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+      - COMMIT_TOKEN_SECRET=${COMMIT_TOKEN_SECRET}
+      - CHAT_ENABLED=${CHAT_ENABLED:-false}
+      - CHAT_ENCRYPTION_KEY_V1=${CHAT_ENCRYPTION_KEY_V1:-}
+      - CHAT_WORKER_CONCURRENCY=${CHAT_WORKER_CONCURRENCY:-2}
+      - PARSER_SERVICE_URL=http://file-parser:4000
+      - STATEMENT_STORAGE_DIR=/data/statements
+    volumes:
+      - chat-credentials:/data/chat-codex
+      - ${FORTUNA_DATA_DIR:-/srv/fortuna}/statements:/data/statements
+    expose: ["4003"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4003/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      data-service:
+        condition: service_healthy
+    networks: [finance-network]
+
   frontend:
-    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-frontend:${IMAGE_TAG:-latest}
+    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-frontend:${FRONTEND_IMAGE_TAG:-${IMAGE_TAG:-latest}}
     container_name: fortuna-frontend
     restart: always
     ports:
@@ -159,3 +197,4 @@ networks:
 
 volumes:
   parser-sandbox-queue:
+  chat-credentials:

@@ -1,6 +1,7 @@
 "use client";
+import {ConnectionPanel} from "@/components/chat/ConnectionPanel";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { TextInput } from "@/components/ui/TextInput";
 import { Button } from "@/components/ui/Button";
@@ -94,7 +95,8 @@ export function SettingsClient({
   const [appliedClassificationSummary, setAppliedClassificationSummary] = useState<
     AppliedClassificationSummaryItem[]
   >(initialAppliedClassificationSummary);
-  const [activeTab, setActiveTab] = useState<"profile" | "rules" | "api">("profile");
+  const [activeTab, setActiveTab] = useState<"profile" | "rules" | "api" | "ai">("profile");
+  useEffect(()=>{if(new URLSearchParams(window.location.search).get("tab")==="ai")setActiveTab("ai");},[]);
 
   const [passwordState, setPasswordState] = useState({
     current: "",
@@ -528,12 +530,13 @@ export function SettingsClient({
           { key: "profile", label: "Profile & Preferences" },
           { key: "rules", label: "Rules" },
           { key: "api", label: "API Tokens" },
+          { key: "ai", label: "AI Connection" },
         ]}
         activeTab={activeTab}
         onChange={setActiveTab}
       />
 
-      {activeTab === "profile" ? (
+      {activeTab === "ai" ? <ConnectionPanel/> : activeTab === "profile" ? (
       <>
       <Card>
         <CardHeader className="flex flex-col gap-4">

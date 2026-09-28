@@ -43,6 +43,7 @@ export function SettingsScreen({ navigation }: any) {
         title="Make it yours"
         subtitle="A little organization goes a long way."
       />
+      <Button title="AI connection" secondary onPress={()=>navigation.navigate("AIConnection")}/>
       <Card>
         <Txt bold size={22}>
           {user.data?.name || "Your profile"}
