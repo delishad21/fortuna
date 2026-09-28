@@ -1,3 +1,5 @@
+import { createChatRouter } from "./modules/chat/chat.controller";
+import prisma from "./lib/prisma";
 import express from "express";
 import cors from "cors";
 import { transactionRouter } from "./modules/transactions/transactions.controller";
@@ -24,6 +26,7 @@ app.get("/health", (req, res) => {
 });
 
 // Routes
+app.use("/api/chat", createChatRouter(prisma));
 app.use("/api/transactions", transactionRouter);
 app.use("/api/analytics", analyticsRouter);
 app.use("/api/trips", tripsRouter);
