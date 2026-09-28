@@ -1,6 +1,6 @@
 # Fortuna chat for web and mobile
 
-Status: proposed design for user review; no product implementation yet.
+Status: approved for implementation planning on 2026-09-28; no product implementation yet.
 
 ## Outcome and agreed scope
 
