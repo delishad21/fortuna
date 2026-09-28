@@ -35,6 +35,11 @@ export class ChatRepository {
   async deleteConversation(userId: string, id: string) {
     // Soft-delete until active workers observe cancellation; finance records are never cascaded.
     return this.db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM users WHERE id=${userId} FOR UPDATE`;
+      await tx.chatTransactionReview.updateMany({
+        where: { userId, conversationId: id, status: "pending" },
+        data: { status: "superseded" },
+      });
       await tx.chatRun.updateMany({
         where: {
           userId,

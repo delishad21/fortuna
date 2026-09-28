@@ -1,3 +1,4 @@
+import { ReviewService } from "../reviews.service";
 import { sanitizeToolResult } from "./sanitize";
 import { ChatActions } from "./actions";
 import { workflowDefinitions, executeWorkflowTool } from "./workflow-tools";
@@ -119,12 +120,32 @@ export function createToolRegistry(db: PrismaClient) {
       ),
     },
   ];
+  definitions.push({
+    name: "request_transaction_review",
+    description:
+      "Show an editable transaction review to the user: spreadsheet on web, cards on phone. Use whenever the user needs to analyse or supply edits. Draft edits sync across devices without changing finance records. Wait for a submitted review before proposing consequential changes. A new user task supersedes pending reviews.",
+    inputSchema: objectSchema(
+      {
+        title: str,
+        instructions: str,
+        transactionIds: { type: "array", items: str, maxItems: 100 },
+        stagedRowIds: { type: "array", items: str, maxItems: 100 },
+      },
+      ["title"],
+    ),
+  });
   definitions.push(...workflowDefinitions);
   async function execute(
     context: ChatContext,
     name: string,
     input: unknown,
   ): Promise<ToolResult> {
+    if (name === "request_transaction_review") {
+      const review = await new ReviewService(db).create(context, input);
+      return {
+        blocks: [{ type: "review", id: review.id, title: review.title }],
+      };
+    }
     if (name === "get_context") {
       z.object({}).strict().parse(input);
       return {

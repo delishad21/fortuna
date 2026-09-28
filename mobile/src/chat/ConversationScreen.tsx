@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   AppState,
+  Image,
+  Pressable,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -17,12 +19,16 @@ import {
   Stream,
   emptyStream,
   mergeEvents,
-  activeRun,
+  generatingRun,
 } from "./api";
+import Ionicons from "@expo/vector-icons/Ionicons";
+import { ChatReviewCards } from "./ReviewCards";
+import { ChatHistory } from "./History";
 import { Details, Expandable } from "./Details";
 export function ChatConversationScreen({ route, navigation }: any) {
-  const id = route.params.id,
-    api = useChatApi(),
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [id, setId] = useState<string | undefined>(route.params?.id);
+  const api = useChatApi(),
     { colors } = useTheme(),
     insets = useSafeAreaInsets(),
     focused = useIsFocused();
@@ -38,12 +44,15 @@ export function ChatConversationScreen({ route, navigation }: any) {
     inFlight = useRef(false),
     sendKey = useRef<string | null>(null),
     list = useRef<FlatList>(null);
+  const selected = useRef(id);
+  selected.current = id;
   cursor.current = stream;
-  const refresh = useCallback(
-    async () =>
-      setConversation(await api<Conversation>(`/conversations/${id}`)),
-    [api, id],
-  );
+  const refresh = useCallback(async () => {
+    if (id) {
+      const value = await api<Conversation>(`/conversations/${id}`);
+      if (selected.current === id) setConversation(value);
+    }
+  }, [api, id]);
   useFocusEffect(
     useCallback(() => {
       void refresh().catch((e) => setError(e.message));
@@ -55,14 +64,17 @@ export function ChatConversationScreen({ route, navigation }: any) {
     setText("");
     setFiles([]);
     sendKey.current = null;
-  }, [id, api]);
+  }, [route.params?.id, api]);
+  useEffect(() => {
+    setId(route.params?.id);
+  }, [route.params?.id]);
   const run = conversation?.runs[0];
   useEffect(() => {
     cursor.current = emptyStream();
     setStream(emptyStream());
   }, [run?.id]);
   useEffect(() => {
-    if (!focused) return;
+    if (!focused || !id) return;
     let dead = false,
       polling = false;
     const poll = async () => {
@@ -113,10 +125,13 @@ export function ChatConversationScreen({ route, navigation }: any) {
     }
   }
   async function send() {
-    if (activeRun(run) || (!text.trim() && !files.length)) return;
+    if (generatingRun(run) || (!text.trim() && !files.length)) return;
     await action(async () => {
       sendKey.current ||= `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      await api(`/conversations/${id}/messages`, {
+      const target =
+        id || (await api("/conversations", { method: "POST", body: {} })).id;
+      if (!id) setId(target);
+      await api(`/conversations/${target}/messages`, {
         method: "POST",
         body: {
           text,
@@ -124,6 +139,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
           idempotencyKey: sendKey.current,
         },
       });
+
       setText("");
       setFiles([]);
       sendKey.current = null;
@@ -133,6 +149,9 @@ export function ChatConversationScreen({ route, navigation }: any) {
   }
   async function attach() {
     await action(async () => {
+      const target =
+        id || (await api("/conversations", { method: "POST", body: {} })).id;
+      if (!id) setId(target);
       const picked = await DocumentPicker.getDocumentAsync({
         type: ["application/pdf", "text/csv", "text/plain"],
         copyToCacheDirectory: true,
@@ -143,7 +162,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
       if ((asset.size || 0) > 25 * 1024 * 1024)
         throw new Error("Choose a statement smaller than 25 MB.");
       const form = new FormData();
-      form.append("conversationId", id);
+      form.append("conversationId", target);
       if (Platform.OS === "web") {
         const blob = await fetch(asset.uri).then((r) => r.blob());
         form.append("file", blob, asset.name);
@@ -161,6 +180,10 @@ export function ChatConversationScreen({ route, navigation }: any) {
     });
   }
   function renderBlock(block: Block, index: number) {
+    if (block.type === "review")
+      return (
+        <ChatReviewCards key={block.id} id={block.id} onSubmitted={refresh} />
+      );
     if (block.type === "text")
       return (
         <Txt key={index} selectable>
@@ -215,23 +238,51 @@ export function ChatConversationScreen({ route, navigation }: any) {
           gap: 10,
         }}
       >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Toggle chat history"
+          onPress={() => setHistoryOpen(true)}
+          style={{ padding: 10 }}
+        >
+          <Ionicons name="menu-outline" size={24} color={colors.text} />
+        </Pressable>
         <Txt bold style={{ flex: 1 }} numberOfLines={1}>
-          {conversation?.title || "Conversation"}
+          {conversation?.title || "Fortuna"}
         </Txt>
-        <Button
-          title="Delete chat"
-          secondary
-          disabled={busy}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="New chat"
           onPress={() => {
-            confirm(
-              "Delete conversation?",
-              "Saved transactions and staged imports will remain.",
-              () =>
-                action(async () => {
-                  await api(`/conversations/${id}`, { method: "DELETE" });
-                  navigation.goBack();
-                }),
-            );
+            if (text || files.length)
+              confirm("New chat?", "Discard your unsent message?", async () => {
+                setId(undefined);
+                setText("");
+                setFiles([]);
+                setConversation(null);
+              });
+            else {
+              setId(undefined);
+              setConversation(null);
+            }
+          }}
+          style={{ padding: 10 }}
+        >
+          <Ionicons name="add-outline" size={24} color={colors.text} />
+        </Pressable>
+        <ChatHistory
+          visible={historyOpen}
+          selected={id}
+          onClose={() => setHistoryOpen(false)}
+          onSelect={(value) => {
+            setHistoryOpen(false);
+            setId(value);
+            setConversation(null);
+            setText("");
+            setFiles([]);
+          }}
+          onSettings={() => {
+            setHistoryOpen(false);
+            navigation.navigate("AIConnection");
           }}
         />
       </View>
@@ -250,9 +301,52 @@ export function ChatConversationScreen({ route, navigation }: any) {
               borderRadius: 16,
             }}
           >
-            <Txt muted size={12}>
-              {item.role === "user" ? "You" : "Fortuna"}
-            </Txt>
+            <View
+              style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+            >
+              {item.role === "user" ? (
+                <View
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 16,
+                    backgroundColor: colors.bg,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Ionicons
+                    name="person-outline"
+                    size={18}
+                    color={colors.text}
+                  />
+                </View>
+              ) : (
+                <View
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 16,
+                    overflow: "hidden",
+                    backgroundColor: "#080808",
+                  }}
+                >
+                  <Image
+                    source={require("../../assets/icon.png")}
+                    style={{
+                      width: 54,
+                      height: 54,
+                      position: "absolute",
+                      left: -11,
+                      top: -11,
+                    }}
+                  />
+                </View>
+              )}
+              <Txt bold size={13}>
+                {item.role === "user" ? "You" : "Fortuna"}
+              </Txt>
+            </View>
             {item.blocks.map(renderBlock)}
           </View>
         )}
@@ -275,7 +369,9 @@ export function ChatConversationScreen({ route, navigation }: any) {
               </>
             )}
             {run?.status === "awaiting_confirmation" && (
-              <Txt>Review or reject the pending changes to continue.</Txt>
+              <Txt>
+                Review the pending changes, or send a new message to move on.
+              </Txt>
             )}
             {run?.status === "failed" && (
               <Txt>
@@ -300,7 +396,10 @@ export function ChatConversationScreen({ route, navigation }: any) {
             {error}
           </Txt>
         )}
-        <Txt muted size={12}>Statements expire after 7 days unless you approve retaining them as parser fixtures.</Txt>
+        <Txt muted size={12}>
+          Statements expire after 7 days unless you approve retaining them as
+          parser fixtures.
+        </Txt>
         {files.map((file) => (
           <View key={file.attachmentId} style={{ gap: 4 }}>
             <Txt numberOfLines={1}>{file.filename}</Txt>
@@ -318,6 +417,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
         ))}
         <Input
           accessibilityLabel="Message"
+          editable={!busy}
           multiline
           maxLength={16000}
           value={text}
@@ -333,12 +433,12 @@ export function ChatConversationScreen({ route, navigation }: any) {
             <Button
               title="Attach statement"
               secondary
-              disabled={busy || files.length >= 5 || activeRun(run)}
+              disabled={busy || files.length >= 5 || generatingRun(run)}
               onPress={() => void attach()}
             />
           </View>
           <View style={{ flex: 1 }}>
-            {activeRun(run) ? (
+            {generatingRun(run) ? (
               <Button
                 title="Stop"
                 secondary

@@ -25,6 +25,31 @@ export class ChatService extends ChatRepository {
         },
       });
       if (repeated) return { runId: repeated.id };
+      const review = input.reviewId
+        ? await tx.chatTransactionReview.findFirst({
+            where: { id: input.reviewId, userId, conversationId },
+          })
+        : null;
+      if (input.reviewId && (!review || review.status !== "pending"))
+        throw new ChatError(409, "This review is closed");
+      if (review && review.version !== input.reviewVersion)
+        throw new ChatError(
+          409,
+          "Review changed on another device. Reload before sending.",
+        );
+      await tx.chatRun.updateMany({
+        where: { userId, conversationId, status: "awaiting_confirmation" },
+        data: { status: "cancelled", cancelRequested: true },
+      });
+      await tx.chatActionProposal.updateMany({
+        where: {
+          userId,
+          conversationId,
+          status: "pending",
+          run: { status: "cancelled" },
+        },
+        data: { status: "rejected", decidedAt: new Date() },
+      });
       if (
         await tx.chatRun.count({
           where: {
@@ -59,6 +84,15 @@ export class ChatService extends ChatRepository {
           400,
           "An attachment is missing or expired. Please upload it again.",
         );
+      await tx.chatTransactionReview.updateMany({
+        where: { userId, conversationId, status: "pending" },
+        data: { status: "superseded" },
+      });
+      if (review)
+        await tx.chatTransactionReview.update({
+          where: { id: review.id },
+          data: { status: "submitted" },
+        });
       await tx.chatMessage.create({
         data: {
           userId,
@@ -66,6 +100,19 @@ export class ChatService extends ChatRepository {
           role: "user",
           blocks: [
             { type: "text", text: input.text },
+            ...(review
+              ? [
+                  {
+                    type: "data",
+                    title: "Submitted transaction review",
+                    data: {
+                      reviewId: review.id,
+                      title: review.title,
+                      rows: review.rows,
+                    },
+                  },
+                ]
+              : []),
             ...files.map((f) => ({
               type: "attachment",
               id: f.id,

@@ -1,5 +1,6 @@
 /** Public chat wire types shared by Next and Expo. Contains no server dependencies. */
 export type Block =
+  | { type: "review"; id: string; title: string }
   | { type: "text"; text: string }
   | { type: "attachment"; id: string; filename: string }
   | {
@@ -164,3 +165,24 @@ export function createChatRequest(
     return value as T;
   };
 }
+
+export type ReviewRow = {
+  id: string;
+  version: number;
+  source: { transactionId?: string; draftId?: string; rowId?: string };
+  original: Record<string, any>;
+  value: Record<string, any>;
+};
+export type TransactionReview = {
+  id: string;
+  conversationId: string;
+  title: string;
+  instructions: string;
+  status: string;
+  version: number;
+  rows: ReviewRow[];
+  categories: { id: string; name: string; color?: string }[];
+  accounts: { id: string; accountIdentifier: string; color?: string }[];
+};
+export const generatingRun = (run?: Run) =>
+  !!run && ["queued", "running"].includes(run.status);

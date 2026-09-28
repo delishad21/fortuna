@@ -568,6 +568,7 @@ model ChatRun {
   conversation ChatConversation @relation(fields:[conversationId,userId],references:[id,userId],onDelete:Cascade)
   events ChatRunEvent[]
   tools ChatToolInvocation[]
+  reviews ChatTransactionReview[]
   proposals ChatActionProposal[]
   @@unique([id,userId,conversationId])
   @@unique([userId,conversationId,idempotencyKey])
@@ -622,4 +623,21 @@ model ChatActionProposal {
   run ChatRun @relation(fields:[runId,userId,conversationId],references:[id,userId,conversationId],onDelete:Cascade)
   @@index([userId,status])
   @@map("chat_action_proposals")
+}
+
+model ChatTransactionReview {
+  id String @id @default(dbgenerated("gen_random_uuid()::text"))
+  userId String @map("user_id")
+  conversationId String @map("conversation_id")
+  runId String @map("run_id")
+  title String
+  instructions String
+  status String @default("pending")
+  version Int @default(1)
+  rows Json
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  run ChatRun @relation(fields:[runId,userId,conversationId],references:[id,userId,conversationId],onDelete:Cascade)
+  @@index([userId,conversationId,status])
+  @@map("chat_transaction_reviews")
 }

@@ -32,6 +32,8 @@ export const submitMessageSchema = z
   .object({
     text: z.string().trim().max(CHAT_LIMITS.messageCharacters),
     idempotencyKey: idSchema,
+    reviewId: idSchema.optional(),
+    reviewVersion: z.number().int().positive().optional(),
     attachmentIds: z
       .array(idSchema)
       .max(CHAT_LIMITS.attachmentCount)
@@ -61,6 +63,7 @@ export const connectionSchema = z
   .strict();
 export type MessageInput = z.infer<typeof submitMessageSchema>;
 export type ResultBlock =
+  | { type: "review"; id: string; title: string }
   | { type: "text"; text: string }
   | {
       type: "link";

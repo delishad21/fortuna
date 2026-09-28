@@ -20,12 +20,12 @@ const menuItems = [
   {
     section: "Main",
     items: [
-      { title: "Chat", icon: MessageSquare, url: "/chat" },
       { title: "Dashboard", icon: LayoutDashboard, url: "/dashboard" },
       { title: "Imports", icon: Upload, url: "/imports" },
       { title: "Transactions", icon: Receipt, url: "/transactions" },
       { title: "Trips", icon: Plane, url: "/trips" },
       { title: "Analytics", icon: BarChart3, url: "/analytics" },
+      { title: "Chat", icon: MessageSquare, url: "/chat" },
     ],
   },
   {
@@ -86,11 +86,18 @@ export function Sidebar() {
                         <li key={item.title}>
                           <Link
                             href={item.url}
+                            style={
+                              isActive && item.url === "/chat"
+                                ? { color: "#fff" }
+                                : undefined
+                            }
                             onClick={() => isMobile && toggleSidebar()}
                             className={cn(
                               "group relative flex items-center gap-3 rounded-lg px-4 py-3 font-medium transition-colors",
                               isActive
-                                ? "bg-gray-2 text-primary dark:bg-dark-2 dark:text-primary"
+                                ? item.url === "/chat"
+                                  ? "bg-primary text-white"
+                                  : "bg-gray-2 text-primary dark:bg-dark-2 dark:text-primary"
                                 : "text-dark-5 hover:bg-gray-2 hover:text-dark dark:text-dark-6 dark:hover:bg-dark-2 dark:hover:text-white",
                             )}
                           >

@@ -18,6 +18,7 @@ export function areTransactionTablePropsEqual(
     previous.isImporting === next.isImporting &&
     previous.showDuplicatesOnly === next.showDuplicatesOnly &&
     previous.showAccountSelector === next.showAccountSelector &&
+    previous.showSelection === next.showSelection &&
     previous.pendingAccountColors === next.pendingAccountColors &&
     previous.onTransactionAccountIdentifierChange ===
       next.onTransactionAccountIdentifierChange &&
@@ -25,7 +26,8 @@ export function areTransactionTablePropsEqual(
     previous.amountOutHeader === next.amountOutHeader &&
     previous.deferCellCommit === next.deferCellCommit &&
     previous.lockLinkedReimbursements === next.lockLinkedReimbursements &&
-    previous.allowReservedCategorySelection === next.allowReservedCategorySelection &&
+    previous.allowReservedCategorySelection ===
+      next.allowReservedCategorySelection &&
     previous.renderExpandedActions === next.renderExpandedActions &&
     previous.reviewActionLeft === next.reviewActionLeft &&
     previous.parsedData.success === next.parsedData.success &&

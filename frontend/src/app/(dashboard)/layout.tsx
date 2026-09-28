@@ -10,6 +10,7 @@ const pageConfig: Record<
   string,
   { title: string; subtitle?: string; showBack?: boolean; backHref?: string }
 > = {
+  "/chat": { title: "Chat" },
   "/dashboard": {
     title: "Dashboard",
   },
@@ -66,8 +67,16 @@ export default function DashboardLayout({
               backHref={config.backHref}
             />
 
-            <main className="flex-1 overflow-y-auto overflow-x-hidden">
-              <div className="h-full w-full p-4 md:p-5 2xl:p-6">{children}</div>
+            <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+              <div
+                className={
+                  pathname === "/chat"
+                    ? "h-full w-full"
+                    : "h-full w-full p-4 md:p-5 2xl:p-6"
+                }
+              >
+                {children}
+              </div>
             </main>
           </div>
         </div>

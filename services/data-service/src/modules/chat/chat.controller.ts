@@ -1,3 +1,4 @@
+import { ReviewService } from "./reviews.service";
 import { safeChatError } from "./errors";
 import multer from "multer";
 import { withDatabase } from "../../lib/database-context";
@@ -17,6 +18,7 @@ import { ChatError, idSchema } from "./contracts";
 export function createChatRouter(db: PrismaClient) {
   const router = Router();
   const service = new ChatService(db);
+  const reviews = new ReviewService(db);
   const connections = new ConnectionService(db);
   const runs = new RunRepository(db);
   router.use(async (req, res, next) => {
@@ -48,6 +50,26 @@ export function createChatRouter(db: PrismaClient) {
     (req: Request, res: Response, next: NextFunction) => {
       Promise.resolve(fn(req, res)).catch(next);
     };
+  router.get(
+    "/reviews/:id",
+    route(async (req, res) =>
+      res.json(
+        await reviews.get(res.locals.userId, idSchema.parse(req.params.id)),
+      ),
+    ),
+  );
+  router.put(
+    "/reviews/:id",
+    route(async (req, res) =>
+      res.json(
+        await reviews.update(
+          res.locals.userId,
+          idSchema.parse(req.params.id),
+          req.body,
+        ),
+      ),
+    ),
+  );
   router.get(
     "/transactions/:id",
     route(async (req, res) => {
@@ -163,14 +185,12 @@ export function createChatRouter(db: PrismaClient) {
         create: { userId, conversationId, statementFileId: statement.id },
         update: {},
       });
-      return res
-        .status(201)
-        .json({
-          attachmentId: attachment.id,
-          statementFileId: statement.id,
-          filename: statement.filename,
-          expiresAt: statement.expiresAt,
-        });
+      return res.status(201).json({
+        attachmentId: attachment.id,
+        statementFileId: statement.id,
+        filename: statement.filename,
+        expiresAt: statement.expiresAt,
+      });
     }),
   );
   router.get(
@@ -296,16 +316,14 @@ export function createChatRouter(db: PrismaClient) {
               : safeChatError(error)
                 ? (error as any).status
                 : 500;
-      res
-        .status(status)
-        .json({
-          error:
-            status === 500
-              ? "Unable to complete chat request"
-              : error instanceof ZodError
-                ? "Invalid chat request"
-                : (error as Error).message,
-        });
+      res.status(status).json({
+        error:
+          status === 500
+            ? "Unable to complete chat request"
+            : error instanceof ZodError
+              ? "Invalid chat request"
+              : (error as Error).message,
+      });
     },
   );
   return router;

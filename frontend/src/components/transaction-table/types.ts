@@ -106,6 +106,7 @@ export interface TransactionTableProps {
   isImporting?: boolean;
   showDuplicatesOnly?: boolean;
   showAccountSelector?: boolean;
+  showSelection?: boolean;
   pendingAccountColors?: Map<string, string>;
   onUpdateTransaction: (index: number, field: string, value: any) => void;
   onAccountIdentifierChange: (value: string) => void;

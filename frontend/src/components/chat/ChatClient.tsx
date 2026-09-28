@@ -1,7 +1,16 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Paperclip, Send, Plus, Settings2 } from "lucide-react";
+import {
+  Paperclip,
+  Send,
+  Plus,
+  Settings2,
+  PanelLeft,
+  X,
+  Trash2,
+  User,
+} from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import {
   chatApi,
@@ -12,10 +21,13 @@ import {
   Stream,
   emptyStream,
   mergeEvents,
-  activeRun,
+  generatingRun,
 } from "@/lib/chat/client";
+import { BrandMark } from "@/components/ui/Brand";
+import { TransactionReviewEditor } from "./TransactionReviewEditor";
 import { ActionPreview, DataDetails } from "./ActionPreview";
 export function ChatClient() {
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [list, setList] = useState<ConversationSummary[]>([]),
     [id, setId] = useState<string | null>(null),
     [conversation, setConversation] = useState<Conversation | null>(null),
@@ -124,6 +136,11 @@ export function ChatClient() {
     }
   }
   async function create() {
+    if (
+      (text || files.length) &&
+      !window.confirm("Discard your unsent message and start a new chat?")
+    )
+      return;
     await action(async () => {
       const created = await chatApi<Conversation>("/conversations", {
         method: "POST",
@@ -134,7 +151,7 @@ export function ChatClient() {
     });
   }
   async function send() {
-    if (!id || (!text.trim() && !files.length) || activeRun(run)) return;
+    if (!id || (!text.trim() && !files.length) || generatingRun(run)) return;
     await action(async () => {
       sendKey.current ||= crypto.randomUUID();
       await chatApi(`/conversations/${id}/messages`, {
@@ -171,6 +188,14 @@ export function ChatClient() {
     });
   }
   function block(value: Block, index: number) {
+    if (value.type === "review")
+      return (
+        <TransactionReviewEditor
+          key={value.id}
+          id={value.id}
+          onSubmitted={refresh}
+        />
+      );
     if (value.type === "text")
       return (
         <p
@@ -230,56 +255,118 @@ export function ChatClient() {
     );
   }
   return (
-    <div className="grid min-h-[calc(100dvh-160px)] gap-5 text-dark dark:text-white lg:grid-cols-[230px_minmax(0,1fr)]">
-      <aside className="space-y-4">
-        <div className="flex items-center justify-between gap-2">
-          <h1 className="text-2xl font-semibold">Chat</h1>
+    <div className="relative flex h-full min-h-0 text-dark dark:text-white">
+      {historyOpen && (
+        <aside
+          className="absolute inset-y-0 left-0 z-30 flex w-72 max-w-[85vw] flex-col border-r border-stroke bg-white shadow-lg dark:border-stroke-dark dark:bg-gray-dark lg:relative lg:shrink-0 lg:shadow-none"
+          aria-label="Chat history"
+        >
+          <div className="flex items-center justify-between p-4">
+            <h2 className="font-semibold">Conversations</h2>
+            <button
+              className="rounded-lg p-2 hover:bg-gray-2 dark:hover:bg-dark-3"
+              aria-label="Close chat history"
+              onClick={() => setHistoryOpen(false)}
+            >
+              <X size={20} />
+            </button>
+          </div>
+          <nav
+            aria-label="Conversations"
+            className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3"
+          >
+            {list.map((item) => (
+              <div
+                key={item.id}
+                className={`group flex items-center rounded-lg ${id === item.id ? "bg-primary text-white" : "hover:bg-gray-2 dark:hover:bg-dark-3"}`}
+              >
+                <button
+                  aria-current={id === item.id ? "page" : undefined}
+                  className="min-w-0 flex-1 p-3 text-left text-sm"
+                  onClick={() => {
+                    if (
+                      (text || files.length) &&
+                      !window.confirm(
+                        "Discard your unsent message and switch conversations?",
+                      )
+                    )
+                      return;
+                    setId(item.id);
+                    setHistoryOpen(false);
+                  }}
+                >
+                  <span className="line-clamp-2">{item.title}</span>
+                </button>
+                <button
+                  aria-label={`Delete ${item.title}`}
+                  className="m-1 rounded-lg p-2"
+                  disabled={busy}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        "Delete this conversation? Your transactions and staged imports will remain.",
+                      )
+                    )
+                      void action(async () => {
+                        await chatApi(`/conversations/${item.id}`, {
+                          method: "DELETE",
+                        });
+                        if (id === item.id) setId(null);
+                        await refreshList();
+                      });
+                  }}
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
+            {!list.length && (
+              <p className="p-3 text-sm text-dark-5">
+                Your conversations will appear here.
+              </p>
+            )}
+          </nav>
+          <Link
+            href="/settings?tab=ai"
+            className="m-3 flex items-center gap-2 rounded-lg border-t border-stroke p-3 text-sm dark:border-stroke-dark"
+          >
+            <Settings2 size={18} />
+            AI connection
+          </Link>
+        </aside>
+      )}
+      {historyOpen && (
+        <button
+          className="absolute inset-0 z-20 bg-black/30 lg:hidden"
+          aria-label="Close chat history overlay"
+          onClick={() => setHistoryOpen(false)}
+        />
+      )}
+      <section
+        className="flex min-h-0 min-w-0 flex-1 flex-col bg-white dark:bg-gray-dark"
+        aria-label="Conversation"
+      >
+        <header className="flex shrink-0 items-center gap-3 border-b border-stroke px-4 py-3 dark:border-stroke-dark">
+          <button
+            aria-label="Toggle chat history"
+            aria-expanded={historyOpen}
+            onClick={() => setHistoryOpen(!historyOpen)}
+            className="rounded-lg p-2 hover:bg-gray-2 dark:hover:bg-dark-3"
+          >
+            <PanelLeft size={20} />
+          </button>
+          <h2 className="min-w-0 flex-1 truncate text-sm font-medium">
+            {conversation?.title || "Fortuna"}
+          </h2>
           <Button
-            variant="secondary"
+            variant="ghost"
             disabled={busy}
             onClick={() => void create()}
-            leftIcon={<Plus size={16} />}
+            leftIcon={<Plus size={18} />}
           >
             New chat
           </Button>
-        </div>
-        <Link
-          href="/settings?tab=ai"
-          className="flex items-center gap-2 text-sm text-primary"
-        >
-          <Settings2 size={16} />
-          AI connection
-        </Link>
-        <nav
-          aria-label="Conversations"
-          className="flex max-h-48 gap-2 overflow-auto lg:max-h-[65dvh] lg:flex-col"
-        >
-          {list.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => {
-                if (text || files.length) {
-                  if (
-                    !window.confirm(
-                      "Discard your unsent message and switch conversations?",
-                    )
-                  )
-                    return;
-                }
-                setId(item.id);
-              }}
-              aria-current={id === item.id ? "page" : undefined}
-              className={`min-w-40 rounded-lg p-3 text-left text-sm lg:min-w-0 ${id === item.id ? "bg-primary/10 text-primary" : "hover:bg-gray-2 dark:hover:bg-dark-3"}`}
-            >
-              <span className="line-clamp-2">{item.title}</span>
-            </button>
-          ))}
-        </nav>
-      </aside>
-      <section
-        className="flex min-h-[65dvh] min-w-0 flex-col rounded-xl border border-stroke bg-white dark:border-stroke-dark dark:bg-gray-dark"
-        aria-label="Conversation"
-      >
+        </header>
         {!id ? (
           <div className="m-auto max-w-lg space-y-5 p-8">
             <h2 className="text-2xl font-semibold">
@@ -296,32 +383,7 @@ export function ChatClient() {
           </div>
         ) : (
           <>
-            <header className="flex items-center justify-between gap-4 border-b border-stroke p-4 dark:border-stroke-dark">
-              <h2 className="truncate font-semibold">
-                {conversation?.title || "Loading conversation…"}
-              </h2>
-              <Button
-                variant="ghost"
-                disabled={busy}
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      "Delete this conversation? Your financial records and staged imports will remain.",
-                    )
-                  )
-                    void action(async () => {
-                      await chatApi(`/conversations/${id}`, {
-                        method: "DELETE",
-                      });
-                      setId(null);
-                      await refreshList();
-                    });
-                }}
-              >
-                Delete chat
-              </Button>
-            </header>
-            <div className="flex-1 space-y-7 overflow-y-auto p-5 lg:max-h-[60dvh]">
+            <div className="min-h-0 flex-1 space-y-8 overflow-y-auto px-5 py-8 md:px-10">
               {conversation?.messages.length === 0 && (
                 <p className="text-dark-5 dark:text-dark-6">
                   Try “How much did I spend on food last month?” or attach a
@@ -331,11 +393,18 @@ export function ChatClient() {
               {conversation?.messages.map((message) => (
                 <article
                   key={message.id}
-                  className={`space-y-3 ${message.role === "user" ? "ml-auto max-w-[90%] rounded-xl bg-primary/5 p-4" : "max-w-full"}`}
+                  className={`space-y-3 ${message.role === "user" ? "ml-auto max-w-[90%] rounded-2xl bg-gray-2 p-4 dark:bg-dark-3" : "max-w-full"}`}
                 >
-                  <p className="text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
+                  <div className="flex items-center gap-2 text-sm font-semibold">
+                    {message.role === "user" ? (
+                      <span className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-3 dark:bg-dark-2">
+                        <User size={18} />
+                      </span>
+                    ) : (
+                      <BrandMark className="h-8 w-8" />
+                    )}
                     {message.role === "user" ? "You" : "Fortuna"}
-                  </p>
+                  </div>
                   {message.blocks.map(block)}
                 </article>
               ))}
@@ -350,7 +419,7 @@ export function ChatClient() {
               )}
               {run?.status === "awaiting_confirmation" && (
                 <p role="status" className="text-sm">
-                  Review or reject the pending changes to continue.
+                  Review the pending changes, or send a new message to move on.
                 </p>
               )}
               {run?.status === "failed" && (
@@ -366,9 +435,12 @@ export function ChatClient() {
                 e.preventDefault();
                 void send();
               }}
-              className="space-y-3 border-t border-stroke p-4 dark:border-stroke-dark"
+              className="shrink-0 space-y-3 border-t border-stroke px-5 py-4 dark:border-stroke-dark md:px-10"
             >
-              <p className="text-xs text-dark-5 dark:text-dark-6">Statements expire after 7 days unless you approve retaining them as parser fixtures.</p>
+              <p className="text-xs text-dark-5 dark:text-dark-6">
+                Statements expire after 7 days unless you approve retaining them
+                as parser fixtures.
+              </p>
               {files.map((file) => (
                 <div
                   key={file.attachmentId}
@@ -396,13 +468,14 @@ export function ChatClient() {
               </label>
               <textarea
                 id="chat-message"
+                disabled={busy}
                 value={text}
                 onChange={(e) => {
                   setText(e.target.value);
                   sendKey.current = null;
                 }}
                 maxLength={16000}
-                rows={3}
+                rows={2}
                 placeholder="Ask Fortuna…"
                 className="w-full resize-none rounded-lg border border-stroke bg-transparent p-3 focus:outline-primary dark:border-stroke-dark"
               />
@@ -420,13 +493,13 @@ export function ChatClient() {
                 <Button
                   type="button"
                   variant="ghost"
-                  disabled={busy || files.length >= 5 || activeRun(run)}
+                  disabled={busy || files.length >= 5 || generatingRun(run)}
                   leftIcon={<Paperclip size={16} />}
                   onClick={() => fileInput.current?.click()}
                 >
                   Attach statement
                 </Button>
-                {activeRun(run) ? (
+                {generatingRun(run) ? (
                   <Button
                     type="button"
                     variant="secondary"

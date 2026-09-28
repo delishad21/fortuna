@@ -46,12 +46,10 @@ export async function executeRun(
       },
     });
     if (!conversation) throw new ChatError(404, "Conversation not found");
-    const messages = conversation.messages
-      .reverse()
-      .map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: JSON.stringify(m.blocks),
-      }));
+    const messages = conversation.messages.reverse().map((m) => ({
+      role: m.role as "user" | "assistant",
+      content: JSON.stringify(m.blocks),
+    }));
     if (JSON.stringify(messages).length > 192000)
       throw new ChatError(
         400,
@@ -167,7 +165,12 @@ export async function executeRun(
     });
     await repo.finish(
       run,
-      pending ? "awaiting_confirmation" : "completed",
+      pending ||
+        (await db.chatTransactionReview.count({
+          where: { runId: run.id, status: "pending" },
+        }))
+        ? "awaiting_confirmation"
+        : "completed",
       json(blocks),
     );
   } catch (error) {

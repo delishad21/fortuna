@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, Fragment, useRef, useCallback, useEffect, memo } from "react";
+import {
+  useState,
+  Fragment,
+  useRef,
+  useCallback,
+  useEffect,
+  memo,
+} from "react";
 import type { KeyboardEvent, FormEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -93,7 +100,8 @@ const DeferredDecimalInput = memo(function DeferredDecimalInput({
   dataCol,
   onCommit,
 }: DeferredDecimalInputProps) {
-  const valueString = value === null || value === undefined ? "" : String(value);
+  const valueString =
+    value === null || value === undefined ? "" : String(value);
   const [draft, setDraft] = useState(valueString);
 
   useEffect(() => {
@@ -194,6 +202,7 @@ function TransactionTableComponent({
   onSelectVisible,
   onDeselectVisible,
   onToggleSelection,
+  showSelection = true,
   onAddCategoryClick,
   onBack,
   onLinkageChange,
@@ -212,9 +221,9 @@ function TransactionTableComponent({
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const [tableSearch, setTableSearch] = useState("");
   const [tableCategoryFilter, setTableCategoryFilter] = useState("");
-  const [tableTypeFilter, setTableTypeFilter] = useState<
-    "all" | "in" | "out"
-  >("all");
+  const [tableTypeFilter, setTableTypeFilter] = useState<"all" | "in" | "out">(
+    "all",
+  );
   const [tableSuggestionFilter, setTableSuggestionFilter] = useState<
     "all" | "auto" | "unresolved"
   >("all");
@@ -406,10 +415,7 @@ function TransactionTableComponent({
   const topSpacerHeight = virtualRows[0]?.start ?? 0;
   const bottomSpacerHeight =
     virtualRows.length > 0
-      ? Math.max(
-          totalVirtualSize - virtualRows[virtualRows.length - 1].end,
-          0,
-        )
+      ? Math.max(totalVirtualSize - virtualRows[virtualRows.length - 1].end, 0)
       : 0;
   const showPreparingState = shouldShowTablePreparingState(
     visibleRows.length,
@@ -536,25 +542,27 @@ function TransactionTableComponent({
                 style={{ width: columnWidths.checkbox }}
               >
                 <div className="flex items-center justify-center">
-                  <Checkbox
-                    checked={allVisibleSelected}
-                    indeterminate={partiallyVisibleSelected}
-                    onChange={(checked) => {
-                      if (checked) {
-                        if (onSelectVisible) {
-                          onSelectVisible(visibleIndices);
+                  {showSelection && (
+                    <Checkbox
+                      checked={allVisibleSelected}
+                      indeterminate={partiallyVisibleSelected}
+                      onChange={(checked) => {
+                        if (checked) {
+                          if (onSelectVisible) {
+                            onSelectVisible(visibleIndices);
+                          } else {
+                            onSelectAll?.();
+                          }
                         } else {
-                          onSelectAll?.();
+                          if (onDeselectVisible) {
+                            onDeselectVisible(visibleIndices);
+                          } else {
+                            onDeselectAll?.();
+                          }
                         }
-                      } else {
-                        if (onDeselectVisible) {
-                          onDeselectVisible(visibleIndices);
-                        } else {
-                          onDeselectAll?.();
-                        }
-                      }
-                    }}
-                  />
+                      }}
+                    />
+                  )}
                 </div>
               </th>
               <th
@@ -789,7 +797,8 @@ function TransactionTableComponent({
                 Number(transaction.suggestionConfidence || 0) * 100,
               );
               const suggestionReason = String(
-                (transaction.metadata as Record<string, unknown>)?.suggestionReason || "",
+                (transaction.metadata as Record<string, unknown>)
+                  ?.suggestionReason || "",
               ).trim();
               const reviewTint = String(metadata.reviewTint || "");
               const requiresLabelling =
@@ -800,12 +809,15 @@ function TransactionTableComponent({
                   ? "bg-orange-light-4/70 dark:bg-orange-dark-3/15"
                   : reviewTint === "llm"
                     ? "bg-primary/10 dark:bg-primary/10"
-                    : reviewTint === "algorithm" || transaction.suggestionApplied
+                    : reviewTint === "algorithm" ||
+                        transaction.suggestionApplied
                       ? "bg-blue-50/70 dark:bg-blue-950/15"
                       : "";
               const labelMatchesSuggestion =
                 !!transaction.suggestedLabel &&
-                String(transaction.label || "").trim().toLowerCase() ===
+                String(transaction.label || "")
+                  .trim()
+                  .toLowerCase() ===
                   String(transaction.suggestedLabel || "")
                     .trim()
                     .toLowerCase();
@@ -848,7 +860,9 @@ function TransactionTableComponent({
                   {suggestedValue && (
                     <div>
                       <span className="text-dark-6">{fieldLabel}:</span>{" "}
-                      <span className="font-medium text-white">{suggestedValue}</span>
+                      <span className="font-medium text-white">
+                        {suggestedValue}
+                      </span>
                     </div>
                   )}
                   {suggestionReason && (
@@ -865,13 +879,17 @@ function TransactionTableComponent({
                   <tr
                     data-index={virtualRow.index}
                     ref={rowVirtualizer.measureElement}
-                    title={hasValidationErrors ? validationMessages.join("\n") : undefined}
+                    title={
+                      hasValidationErrors
+                        ? validationMessages.join("\n")
+                        : undefined
+                    }
                     className={`border-b hover:bg-gray-1 dark:hover:bg-dark-3/50 transition-colors group ${rowTintClass} ${
                       hasValidationErrors
                         ? "border-2 border-red bg-red/5 dark:border-red-light dark:bg-red/10"
                         : hasDuplicates
                           ? "border-2 border-red dark:border-red-light"
-                        : "border-stroke dark:border-dark-3"
+                          : "border-stroke dark:border-dark-3"
                     }`}
                   >
                     {/* Checkbox column */}
@@ -884,12 +902,14 @@ function TransactionTableComponent({
                         style={{ backgroundColor: rowAccountColor }}
                       />
                       <div className="flex items-center justify-center">
-                        <Checkbox
-                          checked={isSelected || false}
-                          onChange={(_, event) =>
-                            onToggleSelection?.(index, event)
-                          }
-                        />
+                        {showSelection && (
+                          <Checkbox
+                            checked={isSelected || false}
+                            onChange={(_, event) =>
+                              onToggleSelection?.(index, event)
+                            }
+                          />
+                        )}
                       </div>
                     </td>
 
@@ -941,7 +961,11 @@ function TransactionTableComponent({
                           <DeferredTextarea
                             value={transaction.description}
                             onCommit={(nextValue) =>
-                              onUpdateTransaction(index, "description", nextValue)
+                              onUpdateTransaction(
+                                index,
+                                "description",
+                                nextValue,
+                              )
                             }
                             onInput={autoResizeTextarea}
                             textareaRef={autoResizeTextareaRef}
@@ -1005,7 +1029,11 @@ function TransactionTableComponent({
                             type="text"
                             value={transaction.label || ""}
                             onChange={(e) =>
-                              onUpdateTransaction(index, "label", e.target.value)
+                              onUpdateTransaction(
+                                index,
+                                "label",
+                                e.target.value,
+                              )
                             }
                             placeholder="Add label..."
                             disabled={showDuplicatesOnly}
@@ -1050,14 +1078,21 @@ function TransactionTableComponent({
                               categoryId === reimbursementCategoryId ||
                               categoryId === "__reimbursement__";
 
-                            if (allowReservedCategorySelection && isInternalSelection) {
+                            if (
+                              allowReservedCategorySelection &&
+                              isInternalSelection
+                            ) {
                               if (onLinkageChange) {
                                 onLinkageChange(index, {
                                   type: "internal",
                                   autoDetected: false,
                                 });
                               } else {
-                                onUpdateTransaction(index, "categoryId", internalCategoryId);
+                                onUpdateTransaction(
+                                  index,
+                                  "categoryId",
+                                  internalCategoryId,
+                                );
                               }
                               return;
                             }
@@ -1093,12 +1128,17 @@ function TransactionTableComponent({
                               onLinkageChange(index, null);
                             }
 
-                            onUpdateTransaction(index, "categoryId", categoryId);
+                            onUpdateTransaction(
+                              index,
+                              "categoryId",
+                              categoryId,
+                            );
                           }}
                           onAddClick={onAddCategoryClick}
                           variant="borderless"
                           excludeReserved={
-                            !allowReservedCategorySelection && !transaction.linkage
+                            !allowReservedCategorySelection &&
+                            !transaction.linkage
                           }
                           dropdownPlacement="fixed"
                           openOnFocus
@@ -1107,7 +1147,9 @@ function TransactionTableComponent({
                             isLockedByLinkage ||
                             isFundingInTopup
                           }
-                          lockedByLinkage={isLockedByLinkage || isFundingInTopup}
+                          lockedByLinkage={
+                            isLockedByLinkage || isFundingInTopup
+                          }
                           showOpenRing={false}
                           suggestionMarker={{
                             show: categoryMatchesSuggestion,
@@ -1225,7 +1267,8 @@ function TransactionTableComponent({
                           : undefined
                       }
                       onAccountIdentifierChange={
-                        onTransactionAccountIdentifierChange && !showDuplicatesOnly
+                        onTransactionAccountIdentifierChange &&
+                        !showDuplicatesOnly
                           ? (accountIdentifier) =>
                               onTransactionAccountIdentifierChange(
                                 index,
