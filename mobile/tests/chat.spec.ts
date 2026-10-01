@@ -183,3 +183,163 @@ test("phone chat uses configured server, preserves failed sends and shows approv
     page.getByText("Changes applied", { exact: true }),
   ).toBeVisible();
 });
+
+test("phone chat renders assistant components and pages transaction lists", async ({
+  page,
+}) => {
+  const server = "http://chat-fixture.local";
+  await page.addInitScript(
+    ({ server }) =>
+      sessionStorage.setItem(
+        "fortuna.mobile.session",
+        JSON.stringify({ server, token: "qa-token", expiresAt: "2099-01-01" }),
+      ),
+    { server },
+  );
+  await page.route("http://chat-fixture.local/api/mobile/**", (route) =>
+    route.fulfill({
+      json: {
+        data:
+          route.request().postDataJSON()?.operation === "getCurrentUser"
+            ? { name: "Chat QA", username: "qa", baseCurrency: "SGD" }
+            : null,
+      },
+    }),
+  );
+  const query = {
+    dateFrom: "2026-08-01T00:00:00+08:00",
+    dateTo: "2026-09-01T00:00:00+08:00",
+  };
+  const row = (i: number) => ({
+    id: `t${i}`,
+    date: "2026-08-10T00:00:00.000Z",
+    description: `CARD ${i}`,
+    label: `Coffee ${i}`,
+    amountIn: null,
+    amountOut: "4.50",
+    currency: "SGD",
+    accountIdentifier: "DBS",
+    category: { id: "food", name: "Food", color: "#5750F1" },
+    linkage: null,
+  });
+  const pages: number[] = [];
+  await page.route("http://chat-fixture.local/api/chat/**", async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(
+      "/api/chat",
+      "",
+    );
+    let data: any = {};
+    if (path === "/conversations")
+      data = [{ id: "c1", title: "August", updatedAt: "2026-09-28" }];
+    else if (path === "/conversations/c1")
+      data = {
+        id: "c1",
+        title: "August",
+        attachments: [],
+        runs: [],
+        messages: [
+          {
+            id: "m1",
+            role: "assistant",
+            blocks: [
+              { type: "text", text: "Here is August." },
+              {
+                type: "component",
+                component: "summary_tiles",
+                title: "August at a glance",
+                query,
+                currencies: [
+                  {
+                    currency: "SGD",
+                    expense: "270.00",
+                    income: "500.00",
+                    net: "230.00",
+                    count: 60,
+                    previous: {
+                      expense: "200.00",
+                      income: "500.00",
+                      net: "300.00",
+                      count: 40,
+                    },
+                  },
+                ],
+              },
+              {
+                type: "component",
+                component: "breakdown",
+                title: "Where it went",
+                query,
+                groupBy: "category",
+                series: [
+                  {
+                    currency: "SGD",
+                    total: "270.00",
+                    items: [
+                      { name: "Food", amount: "200.00", count: 40 },
+                      { name: "Other (3)", amount: "70.00", count: 20, other: true },
+                    ],
+                  },
+                ],
+              },
+              {
+                type: "component",
+                component: "trend",
+                title: "Weekly spending",
+                query,
+                interval: "week",
+                series: [
+                  {
+                    currency: "SGD",
+                    points: [
+                      { period: "2026-07-27", expense: "20.00", income: "0.00" },
+                      { period: "2026-08-03", expense: "250.00", income: "500.00" },
+                    ],
+                  },
+                ],
+              },
+              {
+                type: "component",
+                component: "transaction_list",
+                title: "August coffee",
+                query,
+                total: 60,
+                rows: Array.from({ length: 25 }, (_, i) => row(i)),
+              },
+            ],
+          },
+        ],
+      };
+    else if (path === "/components/transactions") {
+      const { offset, limit } = route.request().postDataJSON();
+      pages.push(offset);
+      data = {
+        rows: Array.from({ length: Math.min(limit, 60 - offset) }, (_, i) =>
+          row(offset + i),
+        ),
+        total: 60,
+      };
+    } else if (path === "/settings") data = [];
+    await route.fulfill({ json: data });
+  });
+  await page.goto("/");
+  await page.getByRole("tab", { name: /Chat/ }).click();
+  await page
+    .getByRole("button", { name: "Toggle chat history", exact: true })
+    .click();
+  await page.getByRole("button", { name: "August", exact: true }).click();
+  await expect(page.getByText("August at a glance")).toBeVisible();
+  await expect(page.getByText("+35% vs previous period")).toBeVisible();
+  await expect(page.getByText("Food, SGD 200.00, 74 percent")).toHaveCount(0);
+  await expect(page.getByLabel("Food, SGD 200.00, 74 percent")).toBeVisible();
+  await page
+    .getByRole("button", { name: "Wk Jul 27, spent SGD 20.00" })
+    .click();
+  await expect(page.getByText("Spent SGD 20.00", { exact: true })).toBeVisible();
+  await expect(page.getByText("Conversations", { exact: true })).toBeHidden();
+  await page.getByText("Weekly spending").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "/tmp/fortuna-mobile-chat-components.png" });
+  await expect(page.getByText("60 transactions")).toBeVisible();
+  await page.getByRole("button", { name: "Load 35 more of 35" }).click();
+  await expect(page.getByText("Coffee 59", { exact: true })).toBeVisible();
+  expect(pages).toEqual([25]);
+});

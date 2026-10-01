@@ -4,7 +4,7 @@ import {
   ProviderEvent,
   CHAT_INSTRUCTIONS,
 } from "./provider";
-import { CHAT_LIMITS, ChatError } from "../contracts";
+import { CHAT_LIMITS, ChatError, toolResultForModel } from "../contracts";
 export async function* readSse(response: Response): AsyncIterable<any> {
   if (!response.body) throw new Error("Provider stream is missing");
   const reader = response.body.getReader(),
@@ -21,7 +21,7 @@ export async function* readSse(response: Response): AsyncIterable<any> {
         throw new Error("Provider response is too large");
       buffer += decoder.decode(part.value, { stream: true });
       // Normalize only complete lines so CRLF split across packets remains valid.
-      for (let end; (end = buffer.indexOf("\n")) >= 0; ) {
+      for (let end; (end = buffer.indexOf("\n")) >= 0;) {
         const line = buffer.slice(0, end).replace(/\r$/, "");
         buffer = buffer.slice(end + 1);
         if (!line.startsWith("data:")) continue;
@@ -210,7 +210,7 @@ export class OpenRouterProvider implements ChatProvider {
         messages.push({
           role: "tool",
           tool_call_id: call.id,
-          content: JSON.stringify(result),
+          content: toolResultForModel(result),
         });
       }
     }

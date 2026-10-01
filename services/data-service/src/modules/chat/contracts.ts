@@ -71,8 +71,72 @@ export type ResultBlock =
       id: string;
       label: string;
     }
-  | { type: "data"; title: string; data: unknown };
-export type ToolResult = { blocks: ResultBlock[] };
+  | { type: "data"; title: string; data: unknown }
+  | ComponentBlock;
+type ComponentQuery = Record<string, unknown>;
+/** Rich display blocks. Amounts are decimal strings; currencies are never mixed or converted. */
+export type ComponentBlock =
+  | {
+      type: "component";
+      component: "transaction_list";
+      title: string;
+      query: ComponentQuery;
+      total: number;
+      rows: unknown[];
+    }
+  | {
+      type: "component";
+      component: "summary_tiles";
+      title: string;
+      query: ComponentQuery;
+      previousRange?: { dateFrom: string; dateTo: string };
+      currencies: Array<{
+        currency: string;
+        expense: string;
+        income: string;
+        net: string;
+        count: number;
+        previous?: {
+          expense: string;
+          income: string;
+          net: string;
+          count: number;
+        };
+      }>;
+    }
+  | {
+      type: "component";
+      component: "breakdown";
+      title: string;
+      query: ComponentQuery;
+      groupBy: "category" | "merchant" | "account";
+      series: Array<{
+        currency: string;
+        total: string;
+        items: Array<{
+          name: string;
+          amount: string;
+          count: number;
+          color?: string;
+          other?: boolean;
+        }>;
+      }>;
+    }
+  | {
+      type: "component";
+      component: "trend";
+      title: string;
+      query: ComponentQuery;
+      interval: "day" | "week" | "month";
+      series: Array<{
+        currency: string;
+        points: Array<{ period: string; expense: string; income: string }>;
+      }>;
+    };
+/** `blocks` are shown to the user; `model`, when set, replaces them as the model's view of the result. */
+export type ToolResult = { blocks: ResultBlock[]; model?: unknown };
+export const toolResultForModel = (result: ToolResult) =>
+  JSON.stringify(result.model ?? result);
 export class ChatError extends Error {
   constructor(
     public status: number,

@@ -1,7 +1,7 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { ChatError } from "../contracts";
-const rangeFields = {
+export const rangeFields = {
   dateFrom: z.string().datetime({ offset: true }),
   dateTo: z.string().datetime({ offset: true }),
   currency: z
@@ -103,78 +103,93 @@ export class ReadTools {
       note: "Range includes the start and excludes the end. Currencies are not converted. Reimbursements reduce linked spending; unallocated reimbursement is shown separately.",
     };
   }
+  private transactionWhere(
+    userId: string,
+    filters: z.infer<typeof transactionsSchema>,
+  ): Prisma.TransactionWhereInput {
+    return {
+      userId,
+      ...(!filters.includeInternal
+        ? {
+            AND: [
+              {
+                OR: [
+                  { linkage: { equals: Prisma.DbNull } },
+                  {
+                    NOT: { linkage: { path: ["type"], equals: "internal" } },
+                  },
+                ],
+              },
+              {
+                OR: [
+                  { categoryId: null },
+                  {
+                    category: {
+                      name: { not: "Internal", mode: "insensitive" as const },
+                    },
+                  },
+                ],
+              },
+            ],
+          }
+        : {}),
+      date: { gte: new Date(filters.dateFrom), lt: new Date(filters.dateTo) },
+      ...(filters.currency ? { currency: filters.currency } : {}),
+      ...(filters.accountIdentifier
+        ? { accountIdentifier: filters.accountIdentifier }
+        : {}),
+      ...(filters.categoryId ? { categoryId: filters.categoryId } : {}),
+      ...(filters.search
+        ? {
+            OR: [
+              {
+                description: {
+                  contains: filters.search,
+                  mode: "insensitive" as const,
+                },
+              },
+              {
+                label: {
+                  contains: filters.search,
+                  mode: "insensitive" as const,
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+  }
   async transactions(userId: string, raw: unknown) {
+    return (await this.transactionPage(userId, raw)).rows;
+  }
+  /** One page of matching transactions plus the total match count, for paginated display. */
+  async transactionPage(userId: string, raw: unknown) {
     const filters = transactionsSchema.parse(raw);
     await this.assertFilters(userId, filters);
-    return this.db.transaction.findMany({
-      where: {
-        userId,
-        ...(!filters.includeInternal
-          ? {
-              AND: [
-                {
-                  OR: [
-                    { linkage: { equals: Prisma.DbNull } },
-                    {
-                      NOT: { linkage: { path: ["type"], equals: "internal" } },
-                    },
-                  ],
-                },
-                {
-                  OR: [
-                    { categoryId: null },
-                    {
-                      category: {
-                        name: { not: "Internal", mode: "insensitive" as const },
-                      },
-                    },
-                  ],
-                },
-              ],
-            }
-          : {}),
-        date: { gte: new Date(filters.dateFrom), lt: new Date(filters.dateTo) },
-        ...(filters.currency ? { currency: filters.currency } : {}),
-        ...(filters.accountIdentifier
-          ? { accountIdentifier: filters.accountIdentifier }
-          : {}),
-        ...(filters.categoryId ? { categoryId: filters.categoryId } : {}),
-        ...(filters.search
-          ? {
-              OR: [
-                {
-                  description: {
-                    contains: filters.search,
-                    mode: "insensitive" as const,
-                  },
-                },
-                {
-                  label: {
-                    contains: filters.search,
-                    mode: "insensitive" as const,
-                  },
-                },
-              ],
-            }
-          : {}),
-      },
-      orderBy: [{ date: "desc" }, { id: "asc" }],
-      skip: filters.offset,
-      take: filters.limit,
-      select: {
-        id: true,
-        date: true,
-        description: true,
-        label: true,
-        amountIn: true,
-        amountOut: true,
-        currency: true,
-        category: { select: { id: true, name: true } },
-        accountIdentifier: true,
-        linkage: true,
-        updatedAt: true,
-      },
-    });
+    const where = this.transactionWhere(userId, filters);
+    const [rows, total] = await Promise.all([
+      this.db.transaction.findMany({
+        where,
+        orderBy: [{ date: "desc" }, { id: "asc" }],
+        skip: filters.offset,
+        take: filters.limit,
+        select: {
+          id: true,
+          date: true,
+          description: true,
+          label: true,
+          amountIn: true,
+          amountOut: true,
+          currency: true,
+          category: { select: { id: true, name: true, color: true } },
+          accountIdentifier: true,
+          linkage: true,
+          updatedAt: true,
+        },
+      }),
+      this.db.transaction.count({ where }),
+    ]);
+    return { rows, total };
   }
   async context(userId: string) {
     const [categories, accounts] = await Promise.all([

@@ -26,6 +26,8 @@ import {
 import { BrandMark } from "@/components/ui/Brand";
 import { TransactionReviewEditor } from "./TransactionReviewEditor";
 import { ActionPreview, DataDetails } from "./ActionPreview";
+import { ChatTransactions, asTransactions } from "./ChatTransactions";
+import { ChatComponent } from "./ChatComponents";
 export function ChatClient() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [list, setList] = useState<ConversationSummary[]>([]),
@@ -211,7 +213,18 @@ export function ChatClient() {
           Statement: {value.filename}
         </p>
       );
-    if (value.type === "data")
+    if (value.type === "component")
+      return <ChatComponent key={index} block={value} />;
+    if (value.type === "data") {
+      const transactions = asTransactions(value.data);
+      if (transactions)
+        return (
+          <ChatTransactions
+            key={index}
+            title={value.title}
+            transactions={transactions}
+          />
+        );
       return (
         <details
           key={index}
@@ -225,6 +238,7 @@ export function ChatClient() {
           </div>
         </details>
       );
+    }
     if (value.kind === "proposal") {
       const found = conversation?.runs
         .flatMap((r) => r.proposals)
@@ -254,6 +268,53 @@ export function ChatClient() {
       </Link>
     );
   }
+  function conversationItem(item: ConversationSummary) {
+    return (
+      <div
+        key={item.id}
+        className={`group flex items-center rounded-lg ${id === item.id ? "bg-primary text-white" : "hover:bg-gray-2 dark:hover:bg-dark-3"}`}
+      >
+        <button
+          aria-current={id === item.id ? "page" : undefined}
+          className="min-w-0 flex-1 p-3 text-left text-sm"
+          onClick={() => {
+            if (
+              (text || files.length) &&
+              !window.confirm(
+                "Discard your unsent message and switch conversations?",
+              )
+            )
+              return;
+            setId(item.id);
+            setHistoryOpen(false);
+          }}
+        >
+          <span className="line-clamp-2">{item.title}</span>
+        </button>
+        <button
+          aria-label={`Delete ${item.title}`}
+          className="m-1 rounded-lg p-2"
+          disabled={busy}
+          onClick={() => {
+            if (
+              window.confirm(
+                "Delete this conversation? Your transactions and staged imports will remain.",
+              )
+            )
+              void action(async () => {
+                await chatApi(`/conversations/${item.id}`, {
+                  method: "DELETE",
+                });
+                if (id === item.id) setId(null);
+                await refreshList();
+              });
+          }}
+        >
+          <Trash2 size={16} />
+        </button>
+      </div>
+    );
+  }
   return (
     <div className="relative flex h-full min-h-0 text-dark dark:text-white">
       {historyOpen && (
@@ -275,51 +336,7 @@ export function ChatClient() {
             aria-label="Conversations"
             className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3"
           >
-            {list.map((item) => (
-              <div
-                key={item.id}
-                className={`group flex items-center rounded-lg ${id === item.id ? "bg-primary text-white" : "hover:bg-gray-2 dark:hover:bg-dark-3"}`}
-              >
-                <button
-                  aria-current={id === item.id ? "page" : undefined}
-                  className="min-w-0 flex-1 p-3 text-left text-sm"
-                  onClick={() => {
-                    if (
-                      (text || files.length) &&
-                      !window.confirm(
-                        "Discard your unsent message and switch conversations?",
-                      )
-                    )
-                      return;
-                    setId(item.id);
-                    setHistoryOpen(false);
-                  }}
-                >
-                  <span className="line-clamp-2">{item.title}</span>
-                </button>
-                <button
-                  aria-label={`Delete ${item.title}`}
-                  className="m-1 rounded-lg p-2"
-                  disabled={busy}
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        "Delete this conversation? Your transactions and staged imports will remain.",
-                      )
-                    )
-                      void action(async () => {
-                        await chatApi(`/conversations/${item.id}`, {
-                          method: "DELETE",
-                        });
-                        if (id === item.id) setId(null);
-                        await refreshList();
-                      });
-                  }}
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            ))}
+            {list.map((item) => conversationItem(item))}
             {!list.length && (
               <p className="p-3 text-sm text-dark-5">
                 Your conversations will appear here.
@@ -358,28 +375,42 @@ export function ChatClient() {
           <h2 className="min-w-0 flex-1 truncate text-sm font-medium">
             {conversation?.title || "Fortuna"}
           </h2>
-          <Button
-            variant="ghost"
-            disabled={busy}
-            onClick={() => void create()}
-            leftIcon={<Plus size={18} />}
-          >
-            New chat
-          </Button>
+          {id && (
+            <Button
+              variant="ghost"
+              disabled={busy}
+              onClick={() => void create()}
+              leftIcon={<Plus size={18} />}
+            >
+              New chat
+            </Button>
+          )}
         </header>
         {!id ? (
-          <div className="m-auto max-w-lg space-y-5 p-8">
-            <h2 className="text-2xl font-semibold">
-              What would you like to understand?
-            </h2>
-            <p className="text-dark-5 dark:text-dark-6">
-              Ask about your spending, review a statement, or prepare changes to
-              your transactions. You review consequential changes before they’re
-              applied.
-            </p>
-            <Button onClick={() => void create()} disabled={busy}>
-              Start a conversation
-            </Button>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto w-full max-w-2xl space-y-6 px-5 py-8 md:px-10">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-2xl font-semibold">Conversations</h2>
+                <Button
+                  disabled={busy}
+                  onClick={() => void create()}
+                  leftIcon={<Plus size={18} />}
+                >
+                  New chat
+                </Button>
+              </div>
+              {list.length ? (
+                <nav aria-label="Recent conversations" className="space-y-1">
+                  {list.map((item) => conversationItem(item))}
+                </nav>
+              ) : (
+                <p className="text-dark-5 dark:text-dark-6">
+                  Ask about your spending, review a statement, or prepare
+                  changes to your transactions. You review consequential changes
+                  before they’re applied.
+                </p>
+              )}
+            </div>
           </div>
         ) : (
           <>
@@ -414,7 +445,14 @@ export function ChatClient() {
                     {stream.activity}…
                   </p>
                   <p className="whitespace-pre-wrap">{stream.text}</p>
-                  {stream.blocks.filter((b) => b.type === "link").map(block)}
+                  {stream.blocks
+                    .filter(
+                      (b) =>
+                        b.type === "link" ||
+                        b.type === "component" ||
+                        (b.type === "data" && asTransactions(b.data)),
+                    )
+                    .map(block)}
                 </article>
               )}
               {run?.status === "awaiting_confirmation" && (
@@ -473,6 +511,16 @@ export function ChatClient() {
                 onChange={(e) => {
                   setText(e.target.value);
                   sendKey.current = null;
+                }}
+                onKeyDown={(e) => {
+                  if (
+                    e.key === "Enter" &&
+                    !e.shiftKey &&
+                    !e.nativeEvent.isComposing
+                  ) {
+                    e.preventDefault();
+                    if (!generatingRun(run)) void send();
+                  }
                 }}
                 maxLength={16000}
                 rows={2}

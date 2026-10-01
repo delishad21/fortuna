@@ -1,6 +1,7 @@
 const routes: Array<[string, RegExp]> = [
   ["GET", /^reviews\/[\w-]+$/],
   ["PUT", /^reviews\/[\w-]+$/],
+  ["POST", /^components\/transactions$/],
   ["GET", /^transactions\/[\w-]+$/],
   ["GET", /^conversations$/],
   ["POST", /^conversations$/],

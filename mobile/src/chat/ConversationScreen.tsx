@@ -25,6 +25,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { ChatReviewCards } from "./ReviewCards";
 import { ChatHistory } from "./History";
 import { Details, Expandable } from "./Details";
+import { ChatComponent } from "./Components";
 export function ChatConversationScreen({ route, navigation }: any) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [id, setId] = useState<string | undefined>(route.params?.id);
@@ -196,6 +197,16 @@ export function ChatConversationScreen({ route, navigation }: any) {
           Statement: {block.filename}
         </Txt>
       );
+    if (block.type === "component")
+      return (
+        <ChatComponent
+          key={index}
+          block={block}
+          onOpenTransaction={(transactionId) =>
+            navigation.navigate("ChatTransaction", { id: transactionId })
+          }
+        />
+      );
     if (block.type === "data")
       return (
         <Expandable key={index} title={block.title}>
@@ -364,7 +375,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
                 </Txt>
                 <Txt selectable>{stream.text}</Txt>
                 {stream.blocks
-                  .filter((b) => b.type === "link")
+                  .filter((b) => b.type === "link" || b.type === "component")
                   .map(renderBlock)}
               </>
             )}

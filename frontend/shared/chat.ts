@@ -9,7 +9,116 @@ export type Block =
       id: string;
       label: string;
     }
-  | { type: "data"; title: string; data: any };
+  | { type: "data"; title: string; data: any }
+  | ComponentBlock;
+export type ComponentRow = {
+  id: string;
+  date: string;
+  description: string;
+  label: string | null;
+  amountIn: string | null;
+  amountOut: string | null;
+  currency: string | null;
+  accountIdentifier: string | null;
+  category: { id: string; name: string; color?: string | null } | null;
+  linkage: any;
+};
+type Totals = { expense: string; income: string; net: string; count: number };
+/** Rich components chosen by the assistant. Amounts are decimal strings; currencies are never mixed. */
+export type ComponentBlock =
+  | {
+      type: "component";
+      component: "transaction_list";
+      title: string;
+      query: Record<string, unknown>;
+      total: number;
+      rows: ComponentRow[];
+    }
+  | {
+      type: "component";
+      component: "summary_tiles";
+      title: string;
+      query: Record<string, unknown>;
+      previousRange?: { dateFrom: string; dateTo: string };
+      currencies: Array<{ currency: string; previous?: Totals } & Totals>;
+    }
+  | {
+      type: "component";
+      component: "breakdown";
+      title: string;
+      query: Record<string, unknown>;
+      groupBy: "category" | "merchant" | "account";
+      series: Array<{
+        currency: string;
+        total: string;
+        items: Array<{
+          name: string;
+          amount: string;
+          count: number;
+          color?: string;
+          other?: boolean;
+        }>;
+      }>;
+    }
+  | {
+      type: "component";
+      component: "trend";
+      title: string;
+      query: Record<string, unknown>;
+      interval: "day" | "week" | "month";
+      series: Array<{
+        currency: string;
+        points: Array<{ period: string; expense: string; income: string }>;
+      }>;
+    };
+export const TRANSACTION_PAGE_SIZE = 50;
+export const fetchTransactionPage = (
+  request: ChatRequest,
+  query: Record<string, unknown>,
+  offset: number,
+) =>
+  request<{ rows: ComponentRow[]; total: number }>("/components/transactions", {
+    method: "POST",
+    body: { query, offset, limit: TRANSACTION_PAGE_SIZE },
+  });
+export const formatMoney = (amount: string | number, currency: string) => {
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency,
+    }).format(Number(amount));
+  } catch {
+    return `${currency} ${Number(amount).toFixed(2)}`;
+  }
+};
+/** "+12% vs previous period", or null when there is no meaningful baseline. */
+export const changeLabel = (current: string, previous?: string) => {
+  if (previous === undefined || Number(previous) === 0) return null;
+  const change =
+    (Number(current) - Number(previous)) / Math.abs(Number(previous));
+  return `${change >= 0 ? "+" : "−"}${Math.abs(change * 100).toFixed(0)}% vs previous period`;
+};
+export const periodLabel = (
+  period: string,
+  interval: "day" | "week" | "month",
+) =>
+  interval === "month"
+    ? new Date(period + "-01T00:00:00Z").toLocaleDateString("en-US", {
+        month: "short",
+        year: "2-digit",
+        timeZone: "UTC",
+      })
+    : (interval === "week" ? "Wk " : "") +
+      new Date(period + "T00:00:00Z").toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        timeZone: "UTC",
+      });
+export const groupLabel = {
+  category: "Category",
+  merchant: "Merchant",
+  account: "Account",
+};
 export type Proposal = {
   id: string;
   kind: string;

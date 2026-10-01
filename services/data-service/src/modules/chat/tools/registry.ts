@@ -4,11 +4,21 @@ import { ChatActions } from "./actions";
 import { workflowDefinitions, executeWorkflowTool } from "./workflow-tools";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
-import { ChatContext, ChatError, ToolResult } from "../contracts";
+import {
+  ChatContext,
+  ChatError,
+  ComponentBlock,
+  ToolResult,
+} from "../contracts";
 import { ToolDefinition } from "../providers/provider";
 import { ApprovalService } from "../approvals.service";
 import { TransactionActions, json } from "./transactions";
 import { ReadTools } from "./read";
+import {
+  ComponentTools,
+  componentForModel,
+  showComponentDefinition,
+} from "./components";
 export const objectSchema = (
   properties: Record<string, unknown>,
   required: string[] = [],
@@ -31,18 +41,19 @@ const range = {
 };
 export function createToolRegistry(db: PrismaClient) {
   const read = new ReadTools(db);
+  const components = new ComponentTools(db, read);
   const approvals = new ApprovalService(db, new ChatActions(db));
   const definitions: ToolDefinition[] = [
     {
       name: "get_context",
       description:
-        "Get the signed-in user’s categories, accounts and current date.",
+        "Get the signed-in user’s categories, accounts and current date. Visible only to you.",
       inputSchema: objectSchema({}),
     },
     {
       name: "spending_summary",
       description:
-        "Calculate exact server-side spending, income and unallocated reimbursement totals grouped by category, merchant, account, UTC day or currency; currencies always remain separate. Use explicit date boundaries; no currency conversion.",
+        "Calculate exact server-side spending, income and unallocated reimbursement totals grouped by category, merchant, account, UTC day or currency; currencies always remain separate. Use explicit date boundaries; no currency conversion. Visible only to you; use show_component to display results.",
       inputSchema: objectSchema(
         {
           ...range,
@@ -56,7 +67,7 @@ export function createToolRegistry(db: PrismaClient) {
     {
       name: "find_transactions",
       description:
-        "Find a bounded page of saved transactions with IDs for review or edit proposals.",
+        "Find a bounded page of saved transactions with IDs for review or edit proposals. Visible only to you; use show_component with transaction_list to display transactions.",
       inputSchema: objectSchema(
         {
           ...range,
@@ -134,6 +145,7 @@ export function createToolRegistry(db: PrismaClient) {
       ["title"],
     ),
   });
+  definitions.push(showComponentDefinition);
   definitions.push(...workflowDefinitions);
   async function execute(
     context: ChatContext,
@@ -148,36 +160,24 @@ export function createToolRegistry(db: PrismaClient) {
     }
     if (name === "get_context") {
       z.object({}).strict().parse(input);
-      return {
-        blocks: [
-          {
-            type: "data",
-            title: "Accounts and categories",
-            data: json(await read.context(context.userId)),
-          },
-        ],
-      };
+      return { blocks: [], model: json(await read.context(context.userId)) };
     }
     if (name === "spending_summary")
       return {
-        blocks: [
-          {
-            type: "data",
-            title: "Spending summary",
-            data: json(await read.summary(context.userId, input)),
-          },
-        ],
+        blocks: [],
+        model: json(await read.summary(context.userId, input)),
       };
     if (name === "find_transactions")
       return {
-        blocks: [
-          {
-            type: "data",
-            title: "Transactions",
-            data: json(await read.transactions(context.userId, input)),
-          },
-        ],
+        blocks: [],
+        model: json(await read.transactions(context.userId, input)),
       };
+    if (name === "show_component") {
+      const block = json(
+        await components.show(context.userId, input),
+      ) as unknown as ComponentBlock;
+      return { blocks: [block], model: componentForModel(block, true) };
+    }
     if (name === "propose_transaction_edits") {
       const raw = z
         .object({ edits: z.array(z.unknown()).min(1).max(100) })
@@ -251,11 +251,13 @@ export function createToolRegistry(db: PrismaClient) {
     execute: async (context: ChatContext, name: string, input: unknown) =>
       sanitizeToolResult(await execute(context, name, input)) as ToolResult,
     approvals,
+    components,
     isReadOnly: (name: string) =>
       [
         "get_context",
         "spending_summary",
         "find_transactions",
+        "show_component",
         "list_parsers",
         "list_staged_imports",
         "inspect_staged_import",

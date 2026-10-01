@@ -1,4 +1,5 @@
 import { ReviewService } from "./reviews.service";
+import { ReadTools } from "./tools/read";
 import { safeChatError } from "./errors";
 import multer from "multer";
 import { withDatabase } from "../../lib/database-context";
@@ -50,6 +51,27 @@ export function createChatRouter(db: PrismaClient) {
     (req: Request, res: Response, next: NextFunction) => {
       Promise.resolve(fn(req, res)).catch(next);
     };
+  const read = new ReadTools(db);
+  router.post(
+    "/components/transactions",
+    route(async (req, res) => {
+      const { query, offset, limit } = z
+        .object({
+          query: z.record(z.unknown()),
+          offset: z.number().int().min(0).max(100000),
+          limit: z.number().int().min(1).max(100),
+        })
+        .strict()
+        .parse(req.body);
+      res.json(
+        await read.transactionPage(res.locals.userId, {
+          ...query,
+          offset,
+          limit,
+        }),
+      );
+    }),
+  );
   router.get(
     "/reviews/:id",
     route(async (req, res) =>

@@ -6,7 +6,7 @@ import {
   CHAT_INSTRUCTIONS,
 } from "./provider";
 import { CodexRuntime } from "./codex-runtime";
-import { CHAT_LIMITS } from "../contracts";
+import { CHAT_LIMITS, toolResultForModel } from "../contracts";
 export function selectCodexModel(
   models: Array<{
     model: string;
@@ -137,7 +137,7 @@ export class CodexProvider implements ChatProvider {
         params.callId,
       );
       return {
-        contentItems: [{ type: "inputText", text: JSON.stringify(result) }],
+        contentItems: [{ type: "inputText", text: toolResultForModel(result) }],
         success: true,
       };
     };

@@ -45,7 +45,7 @@ test("worker persists text and tool results independently of any client connecti
       }),
       async *run(input: ProviderInput) {
         const result = await input.executeTool("get_context", {}, "call-1");
-        assert.ok(result.blocks.length);
+        assert.ok(result.model);
         yield { type: "text_delta", text: "Here are your accounts." };
         yield { type: "completed" };
       },

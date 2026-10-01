@@ -1,3 +1,4 @@
+import { compactBlocks } from "./tools/components";
 import { safeChatError } from "./errors";
 import { PrismaClient } from "@prisma/client";
 import { withDatabase } from "../../lib/database-context";
@@ -48,7 +49,7 @@ export async function executeRun(
     if (!conversation) throw new ChatError(404, "Conversation not found");
     const messages = conversation.messages.reverse().map((m) => ({
       role: m.role as "user" | "assistant",
-      content: JSON.stringify(m.blocks),
+      content: JSON.stringify(compactBlocks(m.blocks)),
     }));
     if (JSON.stringify(messages).length > 192000)
       throw new ChatError(
