@@ -83,6 +83,8 @@ interface TransactionCardProps {
   selectionTone?: "primary" | "success";
   onToggleSelect?: () => void;
   showDate?: boolean;
+  /** Dense, read-only row for lists inside other views, such as approval previews. */
+  compact?: boolean;
   linkedTransactions?: {
     reimburses: LinkedTransaction[];
     reimbursedBy: LinkedTransaction[];
@@ -112,6 +114,7 @@ export function TransactionCard({
   selectionTone = "primary",
   onToggleSelect,
   showDate = false,
+  compact = false,
   linkedTransactions,
 }: TransactionCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -174,6 +177,7 @@ export function TransactionCard({
       {/* Main Content */}
       <div
         onClick={() => {
+          if (compact) return;
           if (primaryClickAction === "toggle-selection") {
             onToggleSelect?.();
             return;
@@ -181,7 +185,11 @@ export function TransactionCard({
 
           setIsExpanded((prev) => !prev);
         }}
-        className="relative p-4 pl-6 cursor-pointer hover:bg-gray-1 dark:hover:bg-dark-3/50"
+        className={
+          compact
+            ? "relative px-3 py-2.5 pl-5"
+            : "relative p-4 pl-6 cursor-pointer hover:bg-gray-1 dark:hover:bg-dark-3/50"
+        }
       >
         {(accentColor || accountColor || isReimbursement || isInternal) && (
           <span
@@ -216,7 +224,11 @@ export function TransactionCard({
                 wrapText ? "break-words whitespace-normal" : "truncate"
               }`}
             >
+              {compact && `${formatDate(transaction.date)} · `}
               {transaction.description}
+              {compact &&
+                transaction.accountIdentifier &&
+                ` · ${transaction.accountIdentifier}`}
             </div>
             {transaction.tripFundings && transaction.tripFundings.length > 0 && (
               <div className="mt-1">
@@ -273,7 +285,7 @@ export function TransactionCard({
               )}
               {/* Amount display */}
               <div
-                className={`text-lg font-semibold ${
+                className={`${compact ? "text-sm" : "text-lg"} font-semibold ${
                   isInternal
                     ? "text-dark-5 dark:text-dark-6 line-through"
                     : isIncome
@@ -335,6 +347,7 @@ export function TransactionCard({
                   <Trash2 className="w-4 h-4" />
                 </button>
               )}
+              {!compact && (
               <button
                 onClick={(event) => {
                   event.stopPropagation();
@@ -349,6 +362,7 @@ export function TransactionCard({
                   <ChevronDown className="w-4 h-4" />
                 )}
               </button>
+              )}
             </div>
           </div>
         </div>

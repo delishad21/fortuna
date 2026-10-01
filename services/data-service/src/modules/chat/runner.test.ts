@@ -77,3 +77,19 @@ test("expired claims recover with a new fencing token", () =>
       1,
     );
   }));
+
+test("invalid tool arguments name the failing fields for the model", async () => {
+  const { z } = await import("zod");
+  const { invalidArguments } = await import("./runner");
+  const parsed = z
+    .object({ matchType: z.enum(["always", "description_contains"]) })
+    .strict()
+    .safeParse({ matchType: "contains", extra: 1 });
+  assert.equal(parsed.success, false);
+  const text = invalidArguments(parsed.error!);
+  assert.match(
+    text,
+    /matchType: Invalid enum value\. Expected 'always' \| 'description_contains', received 'contains'/,
+  );
+  assert.match(text, /Unrecognized key/);
+});

@@ -198,6 +198,7 @@ hermesContextRouter.get("/rules", requireAccountAuth(["rules:read"]), async (req
 const RulePayloadSchema = z.object({
   name: z.string().min(1).max(100),
   parserId: z.string().nullable().optional(),
+  accountIdentifier: z.string().max(120).nullable().optional(),
   matchType: z.enum(["always", "description_contains"]).default("description_contains"),
   matchValue: z.string().nullable().optional(),
   caseSensitive: z.boolean().default(false),

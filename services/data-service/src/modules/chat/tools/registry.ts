@@ -39,6 +39,36 @@ const range = {
   search: str,
   includeInternal: { type: "boolean" },
 };
+/** A proposal shows the user one review link; the model gets the full preview to describe it. */
+function proposalResult(proposal: {
+  id: string;
+  kind: string;
+  preview: unknown;
+}): ToolResult {
+  const preview = (proposal.preview || {}) as {
+    title?: string;
+    changes?: unknown[];
+  };
+  const count = preview.changes?.length;
+  return {
+    blocks: [
+      {
+        type: "link",
+        kind: "proposal",
+        id: proposal.id,
+        label:
+          count !== undefined
+            ? `Review ${count} transaction ${count === 1 ? "change" : "changes"}`
+            : `Review: ${preview.title || "proposed change"}`,
+      },
+    ],
+    model: {
+      proposalId: proposal.id,
+      status: "awaiting the user's approval in the interface",
+      preview: proposal.preview,
+    },
+  };
+}
 export function createToolRegistry(db: PrismaClient) {
   const read = new ReadTools(db);
   const components = new ComponentTools(db, read);
@@ -187,21 +217,7 @@ export function createToolRegistry(db: PrismaClient) {
         kind: "edit_transactions",
         ...raw,
       });
-      return {
-        blocks: [
-          {
-            type: "link",
-            kind: "proposal",
-            id: proposal.id,
-            label: "Review changes",
-          },
-          {
-            type: "data",
-            title: "Changes awaiting your approval",
-            data: proposal.preview,
-          },
-        ],
-      };
+      return proposalResult(proposal);
     }
     if (name === "propose_action") {
       const { action } = z
@@ -209,27 +225,12 @@ export function createToolRegistry(db: PrismaClient) {
         .strict()
         .parse(input);
       const proposal = await approvals.proposeAction(context, action);
-      return {
-        blocks: [
-          {
-            type: "link",
-            kind: "proposal",
-            id: proposal.id,
-            label: "Review changes",
-          },
-          {
-            type: "data",
-            title: "Awaiting your approval",
-            data: proposal.preview,
-          },
-        ],
-      };
+      return proposalResult(proposal);
     }
     if (workflowDefinitions.some((d) => d.name === name)) {
       const data = await executeWorkflowTool(db, context, name, input);
-      const blocks: ToolResult["blocks"] = [
-        { type: "data", title: name.replaceAll("_", " "), data: json(data) },
-      ];
+      // Workflow results inform the model; the user only sees links and components.
+      const blocks: ToolResult["blocks"] = [];
       if (
         name === "stage_statement" &&
         data &&
@@ -242,7 +243,7 @@ export function createToolRegistry(db: PrismaClient) {
           id: String(data.id),
           label: "Review staged import",
         });
-      return { blocks };
+      return { blocks, model: json(data) };
     }
     throw new ChatError(400, "Tool is unavailable");
   }

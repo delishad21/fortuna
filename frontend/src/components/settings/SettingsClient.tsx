@@ -348,6 +348,7 @@ export function SettingsClient({
         const payload = {
           name: rule.name,
           parserId: rule.parserId || null,
+          accountIdentifier: rule.accountIdentifier || null,
           matchType: rule.matchType,
           matchValue: rule.matchValue || null,
           caseSensitive: rule.caseSensitive,
@@ -1157,6 +1158,7 @@ export function SettingsClient({
         rules={importRules}
         categories={categories}
         parserOptions={parserOptions}
+        accounts={accounts}
         onClose={() => setManageRulesOpen(false)}
         onAddRule={() =>
           setImportRules((prev) => [

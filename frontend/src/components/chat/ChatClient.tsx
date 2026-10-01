@@ -29,7 +29,7 @@ import {
 } from "@/lib/chat/client";
 import { BrandMark } from "@/components/ui/Brand";
 import { TransactionReviewEditor } from "./TransactionReviewEditor";
-import { ActionPreview, DataDetails } from "./ActionPreview";
+import { ActionPreview } from "./ActionPreview";
 import { ChatTransactions, asTransactions } from "./ChatTransactions";
 import { ChatComponent } from "./ChatComponents";
 /** A sent image, fetched through the owner-scoped chat proxy. */
@@ -285,19 +285,19 @@ export function ChatClient() {
             transactions={transactions}
           />
         );
-      return (
-        <details
-          key={index}
-          className="rounded-lg border border-stroke p-3 dark:border-stroke-dark"
-        >
-          <summary className="cursor-pointer font-medium capitalize">
-            {value.title}
-          </summary>
-          <div className="mt-3 max-h-96 overflow-auto">
-            <DataDetails value={value.data} />
-          </div>
-        </details>
-      );
+      if (value.title === "Submitted transaction review")
+        return (
+          <p
+            key={index}
+            className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1 text-sm text-primary"
+          >
+            Submitted review: {value.data?.title || "Transactions"}
+            {Array.isArray(value.data?.rows) &&
+              ` · ${value.data.rows.length} rows`}
+          </p>
+        );
+      // Raw tool data from older replies is for the model, not the reader.
+      return null;
     }
     if (value.kind === "proposal") {
       const found = conversation?.runs

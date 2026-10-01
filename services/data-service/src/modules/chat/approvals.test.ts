@@ -155,6 +155,10 @@ test("reimbursement preview includes backlink and a changed target invalidates i
       ],
     });
     assert.equal((proposal.preview as any).changes.length, 2);
+    // The preview carries display data for the linked transaction, not just its ID.
+    const refs = (proposal.preview as any).references;
+    assert.equal(refs.transactions[target.id].id, target.id);
+    assert.equal(refs.transactions[target.id].description, target.description);
     await db.transaction.update({
       where: { id: target.id },
       data: { amountOut: 5 },
@@ -186,6 +190,31 @@ test("a confirmed direction edit clears the old amount", () =>
     });
     assert.equal(updated.amountOut, null);
     assert.equal(updated.amountIn?.toFixed(2), "20.00");
+  }));
+test("edit previews show category colours and account colours", () =>
+  withChatDb(async (db) => {
+    const { context, target, user } = await seed(db);
+    const category = await db.category.create({
+      data: { userId: user.id, name: "Internal", color: "#123456" },
+    });
+    await db.accountIdentifier.create({
+      data: { userId: user.id, accountIdentifier: "CARD-1", color: "#abcdef" },
+    });
+    const service = new ApprovalService(db, new TransactionActions(db));
+    const proposal = await service.proposeAction(context, {
+      kind: "edit_transactions",
+      edits: [{ id: target.id, patch: { categoryId: category.id } }],
+    });
+    const [change] = (proposal.preview as any).changes;
+    assert.deepEqual(change.after.category, {
+      id: category.id,
+      name: "Internal",
+      color: "#123456",
+    });
+    assert.equal(
+      (proposal.preview as any).references.accounts["CARD-1"],
+      "#abcdef",
+    );
   }));
 test("refreshing a stale proposal creates a new exact preview without applying it", () =>
   withChatDb(async (db) => {

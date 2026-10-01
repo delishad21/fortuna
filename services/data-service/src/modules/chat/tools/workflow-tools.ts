@@ -119,7 +119,20 @@ export const workflowDefinitions: ToolDefinition[] = [
   {
     name: "propose_action",
     description:
-      "Create a human approval preview. Allowed kinds: commit_drafts (draftIds); retain_fixture (statementFileIds); approve_parser (workspaceId,candidateId); activate_parser or rollback_parser (definitionId,versionId); create_account (accountIdentifier,color); create_category (name,color,icon); update_import_rule (optional ruleId, name, parserId, matchType, matchValue, markInternal, setLabel, setCategoryName). This never approves or executes the change.",
+      "Create a human approval preview. This never approves or executes the change. Fields per kind (no others are accepted): " +
+      "commit_drafts: draftIds (string[], staged import IDs). " +
+      "retain_fixture: statementFileIds (string[]). " +
+      "approve_parser: workspaceId, candidateId. " +
+      "activate_parser | rollback_parser: definitionId, versionId. " +
+      "create_account: accountIdentifier (string), color (optional '#RRGGBB'). " +
+      "create_category: name, color (optional '#RRGGBB'), icon (optional string). " +
+      "update_import_rule: ruleId (optional; omit to create), name (required, unique), " +
+      "parserId (optional parser ID from list_parsers; null = any parser), " +
+      "accountIdentifier (optional account from get_context; null = any account; use it when the user asks for one account), " +
+      "matchType: exactly 'description_contains' (requires matchValue) or 'always', " +
+      "matchValue (text the description must contain), caseSensitive (boolean, default false), " +
+      "markInternal (boolean), setLabel (string or null), setCategoryName (existing category name or null), " +
+      "enabled (boolean), sortOrder (integer). Rules only affect future imports.",
     inputSchema: obj(
       {
         action: {

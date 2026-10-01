@@ -9,6 +9,8 @@ export interface ImportRule {
   id: string;
   name: string;
   parserId?: string | null;
+  /** Only apply to transactions from this account; null means any account. */
+  accountIdentifier?: string | null;
   matchType: "always" | "description_contains";
   matchValue?: string | null;
   caseSensitive: boolean;
@@ -22,6 +24,8 @@ export interface ImportRule {
 export interface ImportRulePayload {
   name: string;
   parserId?: string | null;
+  /** Only apply to transactions from this account; null means any account. */
+  accountIdentifier?: string | null;
   matchType?: "always" | "description_contains";
   matchValue?: string | null;
   caseSensitive?: boolean;

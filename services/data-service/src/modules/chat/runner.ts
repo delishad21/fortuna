@@ -1,3 +1,4 @@
+import { ZodError } from "zod";
 import { compactBlocks } from "./tools/components";
 import { loadModelImages } from "./media";
 import { ProviderMessage } from "./providers/provider";
@@ -9,6 +10,19 @@ import { ClaimedRun, RunRepository } from "./run.repository";
 import { createToolRegistry } from "./tools/registry";
 import { json, stateHash } from "./tools/transactions";
 import { CHAT_LIMITS, ChatError, ToolResult } from "./contracts";
+/** Tool output the user sees in the saved reply; everything else is for the model only. */
+const USER_VISIBLE_BLOCKS = new Set(["link", "review", "component"]);
+/** Name each invalid field so the model can correct its own call. */
+export function invalidArguments(error: ZodError) {
+  const issues = error.issues
+    .slice(0, 8)
+    .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+    .join("; ");
+  return `Tool arguments are invalid. Fix these fields and call the tool again: ${issues}`.slice(
+    0,
+    1500,
+  );
+}
 export async function executeRun(
   db: PrismaClient,
   run: ClaimedRun,
@@ -124,7 +138,7 @@ export async function executeRun(
             blocks: [
               {
                 type: "text",
-                text: "Tool arguments are invalid. Check the tool schema and owned record IDs.",
+                text: invalidArguments(error as ZodError),
               },
             ],
           };
@@ -166,8 +180,8 @@ export async function executeRun(
     const blocks: any[] = [
       { type: "text", text: output },
       ...outcomes.flatMap((v) =>
-        (v.result as unknown as ToolResult).blocks.filter(
-          (b) => b.type !== "text",
+        (v.result as unknown as ToolResult).blocks.filter((b) =>
+          USER_VISIBLE_BLOCKS.has(b.type),
         ),
       ),
     ];

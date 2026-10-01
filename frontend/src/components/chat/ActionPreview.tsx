@@ -1,11 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import {
-  Proposal,
-  changedFields,
-  displayValue,
-  fieldLabel,
-} from "@/lib/chat/client";
+import { Proposal, displayValue, fieldLabel } from "@/lib/chat/client";
+import { ProposalView } from "./ProposalView";
 import { Button } from "@/components/ui/Button";
 export function DataDetails({ value }: { value: unknown }) {
   if (Array.isArray(value))
@@ -101,48 +97,11 @@ export function ActionPreview({
         </Button>
       </div>
       <div className="space-y-5 p-5">
-        <p className="text-sm">
-          Only these changes will be applied. If the underlying records have
-          changed, you’ll need a fresh preview.
+        <p className="text-sm text-dark-5 dark:text-dark-6">
+          Only these changes will be applied. If the records change before you
+          confirm, you’ll be asked for a fresh preview.
         </p>
-        {preview.changes?.map((change: any) => (
-          <section
-            key={change.id}
-            className="overflow-hidden rounded-lg border border-stroke dark:border-stroke-dark"
-          >
-            <h3 className="bg-gray-2 p-3 font-medium dark:bg-dark-3">
-              {change.before.description || change.id}
-            </h3>
-            <table className="w-full table-fixed text-left text-sm">
-              <thead>
-                <tr>
-                  <th className="p-3">Field</th>
-                  <th className="p-3">Before</th>
-                  <th className="p-3">After</th>
-                </tr>
-              </thead>
-              <tbody>
-                {changedFields(change.before, change.after).map((key) => (
-                  <tr
-                    key={key}
-                    className="border-t border-stroke align-top dark:border-stroke-dark"
-                  >
-                    <th className="break-words p-3 capitalize font-medium">
-                      {fieldLabel(key)}
-                    </th>
-                    <td className="break-words whitespace-pre-wrap p-3">
-                      {displayValue(change.before[key])}
-                    </td>
-                    <td className="break-words whitespace-pre-wrap bg-primary/5 p-3">
-                      {displayValue(change.after[key])}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
-        ))}
-        {!preview.changes && <DataDetails value={preview} />}
+        <ProposalView proposal={proposal} />
         {duplicates && (
           <label className="flex gap-3 rounded-lg border border-orange p-4">
             <input

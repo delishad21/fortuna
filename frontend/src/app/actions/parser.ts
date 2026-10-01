@@ -131,6 +131,12 @@ export async function parseFile(formData: FormData): Promise<ParseResult> {
             if (!rule.enabled) continue;
             const ruleParserId = rule.parserId?.trim();
             if (ruleParserId && ruleParserId !== result.parserId) continue;
+            const account =
+              next.accountIdentifier ||
+              next.metadata?.accountIdentifier ||
+              result.accountIdentifier;
+            if (rule.accountIdentifier && rule.accountIdentifier !== account)
+              continue;
             if (!ruleMatches(rule, next.description || "")) continue;
             let applied = false;
 

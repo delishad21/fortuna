@@ -608,6 +608,8 @@ model ImportRule {
   userId          String   @map("user_id")
   name            String
   parserId        String?  @map("parser_id")
+  /// When set, the rule only applies to transactions from this account.
+  accountIdentifier String? @map("account_identifier")
   matchType       String   @default("description_contains") @map("match_type")
   matchValue      String?  @map("match_value")
   caseSensitive   Boolean  @default(false) @map("case_sensitive")

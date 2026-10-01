@@ -63,8 +63,18 @@ test("phone chat uses configured server, preserves failed sends and shows approv
       changes: [
         {
           id: "t1",
-          before: { description: "Lunch", label: "Cafe" },
-          after: { description: "Lunch", label: "Work lunch" },
+          before: {
+            description: "Lunch",
+            label: "Cafe",
+            category: { name: "Dining", color: "#ff9800" },
+            linkage: null,
+          },
+          after: {
+            description: "Lunch",
+            label: "Work lunch",
+            category: { name: "Internal", color: "#9e9e9e" },
+            linkage: { type: "internal" },
+          },
         },
       ],
     },
@@ -175,8 +185,14 @@ test("phone chat uses configured server, preserves failed sends and shows approv
     .scrollIntoViewIfNeeded();
   await page.screenshot({ path: "/tmp/fortuna-chat-phone-cards.png" });
   await page.getByRole("button", { name: "Review changes" }).click();
-  await expect(page.getByText("Before", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 transaction", { exact: true })).toBeVisible();
+  await expect(page.getByText("Cafe", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Work lunch", { exact: true })).toBeVisible();
+  await expect(page.getByText("Dining", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Internal transfer", { exact: true }),
+  ).toBeVisible();
+  expect(await page.locator("body").textContent()).not.toMatch(/[{}]/);
   await page.screenshot({ path: "/tmp/fortuna-chat-phone-approval.png" });
   await page.getByRole("button", { name: "Confirm changes" }).click();
   await expect(

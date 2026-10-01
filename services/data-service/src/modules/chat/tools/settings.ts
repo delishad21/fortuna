@@ -32,6 +32,7 @@ export const settingsActionSchema = z.discriminatedUnion("kind", [
       ruleId: idSchema.optional(),
       name: z.string().min(1).max(120),
       parserId: z.string().max(80).nullable().optional(),
+      accountIdentifier: z.string().max(120).nullable().optional(),
       matchType: z.enum(["always", "description_contains"]).optional(),
       matchValue: z.string().max(500).nullable().optional(),
       caseSensitive: z.boolean().optional(),
@@ -61,6 +62,13 @@ export class SettingsActions implements ActionHandler {
       });
     if (input.kind === "create_category")
       return tx.category.findFirst({ where: { userId, name: input.name } });
+    if (
+      input.accountIdentifier &&
+      !(await tx.accountIdentifier.findFirst({
+        where: { userId, accountIdentifier: input.accountIdentifier },
+      }))
+    )
+      throw new ChatError(404, "Account not found");
     if (!input.ruleId) return null;
     const rule = await tx.importRule.findFirst({
       where: { id: input.ruleId, userId },

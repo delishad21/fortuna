@@ -262,11 +262,14 @@ export function ChatConversationScreen({ route, navigation }: any) {
         />
       );
     if (block.type === "data")
-      return (
-        <Expandable key={index} title={block.title}>
-          <Details value={block.data} />
-        </Expandable>
-      );
+      return block.title === "Submitted transaction review" ? (
+        <Txt key={index} muted size={12}>
+          Submitted review: {block.data?.title || "Transactions"}
+          {Array.isArray(block.data?.rows)
+            ? ` · ${block.data.rows.length} rows`
+            : ""}
+        </Txt>
+      ) : null;
     return (
       <Button
         key={index}

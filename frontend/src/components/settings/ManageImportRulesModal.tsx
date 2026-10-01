@@ -15,6 +15,7 @@ interface ManageImportRulesModalProps {
   rules: ImportRule[];
   categories: Category[];
   parserOptions: ParserOption[];
+  accounts: Array<{ accountIdentifier: string; color?: string | null }>;
   onClose: () => void;
   onAddRule: () => void;
   onRuleChange: (id: string, updates: Partial<ImportRule>) => void;
@@ -27,6 +28,7 @@ export function ManageImportRulesModal({
   rules,
   categories,
   parserOptions,
+  accounts,
   onClose,
   onAddRule,
   onRuleChange,
@@ -98,6 +100,27 @@ export function ManageImportRulesModal({
                       onChange={(value) =>
                         onRuleChange(rule.id, {
                           parserId: value === "__all__" ? null : value,
+                        })
+                      }
+                      buttonClassName="w-full"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
+                      Account
+                    </label>
+                    <Select
+                      value={rule.accountIdentifier || "__all__"}
+                      options={[
+                        { value: "__all__", label: "All Accounts" },
+                        ...accounts.map((account) => ({
+                          value: account.accountIdentifier,
+                          label: account.accountIdentifier,
+                        })),
+                      ]}
+                      onChange={(value) =>
+                        onRuleChange(rule.id, {
+                          accountIdentifier: value === "__all__" ? null : value,
                         })
                       }
                       buttonClassName="w-full"

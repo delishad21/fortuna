@@ -341,6 +341,7 @@ export function ManageScreen({ route, navigation }: any) {
           {kind === "rules" && (
             <Txt muted>
               {item.enabled ? "Enabled" : "Disabled"} ·{" "}
+              {item.accountIdentifier ? `${item.accountIdentifier} · ` : ""}
               {item.matchValue || "Always"} →{" "}
               {item.setLabel || item.setCategoryName || "Internal transfer"}
             </Txt>
@@ -379,6 +380,7 @@ export function ManageEditorScreen({ route, navigation }: any) {
   const { call } = useApi();
   const cats = useResource("getCategories", { scope: "settings" });
   const parsers = useResource("getAvailableParsers", "bank");
+  const accounts = useResource("getAccountNumbers");
   const parserRows = Array.isArray(parsers.data)
     ? parsers.data
     : parsers.data?.parsers || [];
@@ -401,6 +403,17 @@ export function ManageEditorScreen({ route, navigation }: any) {
           ...parserRows.map((p: any) => ({
             label: p.name || p.id,
             value: p.id,
+          })),
+        ],
+      },
+      {
+        key: "accountIdentifier",
+        label: "Account",
+        options: [
+          { label: "All accounts", value: null },
+          ...(accounts.data || []).map((a: any) => ({
+            label: a.accountIdentifier,
+            value: a.accountIdentifier,
           })),
         ],
       },

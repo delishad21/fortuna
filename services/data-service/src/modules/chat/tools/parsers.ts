@@ -100,7 +100,7 @@ export class ParserActions implements ActionHandler {
               : input.kind === "rollback_parser"
                 ? "Restore previous parser version"
                 : "Activate parser version",
-        details: state,
+        details: parserPreview(input.kind, state),
       }),
     };
   }
@@ -131,4 +131,42 @@ export class ParserActions implements ActionHandler {
       await factory.activate(userId, input.definitionId, input.versionId),
     );
   }
+}
+
+const reportSummary = (report: unknown) =>
+  report && typeof report === "object"
+    ? Object.fromEntries(
+        Object.entries(report as Record<string, unknown>).filter(
+          ([, v]) =>
+            v === null || ["string", "number", "boolean"].includes(typeof v),
+        ),
+      )
+    : null;
+/** What a person needs to decide on a parser action; never source code or specifications. */
+function parserPreview(kind: string, state: any) {
+  if (kind === "retain_fixture")
+    return {
+      files: state.map((f: any) => ({
+        filename: f.filename,
+        expiresAt: f.expiresAt,
+        retained: f.retained,
+      })),
+    };
+  if (kind === "approve_parser")
+    return {
+      parserId: state.parserId,
+      parserType: state.parserType,
+      status: state.status,
+      testReport: reportSummary(state.testReport),
+    };
+  const version = state.versions[0];
+  return {
+    name: state.name,
+    parserId: state.parserId,
+    fileType: state.fileType,
+    version: version.version,
+    versionStatus: version.status,
+    currentlyActive: state.activeVersionId === version.id,
+    testReport: reportSummary(version.testReport),
+  };
 }

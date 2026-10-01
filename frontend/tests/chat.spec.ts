@@ -441,3 +441,103 @@ test("chat accepts screenshots, previews them and shows them in history", async 
   });
   await expect(page.getByText(/HEIC photos aren't supported yet/)).toBeVisible();
 });
+
+test("approval previews are readable for bulk edits, reimbursements and rules", async ({ page, request }) => {
+  const username = `chat_preview_${Date.now()}`, password = "chat-test-temporary-password";
+  const registered = await request.post("/api/auth/register", {
+    data: { username, password, name: "Chat QA", baseCurrency: "SGD" },
+  });
+  expect(registered.ok(), await registered.text()).toBeTruthy();
+  await page.goto("/login");
+  await page.getByLabel("Username").fill(username);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign In", exact: true }).click();
+  await expect(page).toHaveURL(/dashboard/, { timeout: 30000 });
+  const transport = { id: "c-transport", name: "Transportation", color: "#2196f3" };
+  const internal = { id: "c-internal", name: "Internal", color: "#9e9e9e" };
+  const bus = (id: string, amount: string) => ({
+    id, date: "2026-08-24T00:00:00.000Z", description: `BUS/MRT ${id} SINGAPORE`, label: "BUS/MRT",
+    amountIn: null, amountOut: amount, balance: null, currency: "SGD", accountIdentifier: "4265-****-****-4591",
+  });
+  const edit = {
+    id: "p1", kind: "edit_transactions", status: "pending", expiresAt: "2099-01-01T00:00:00Z",
+    preview: {
+      title: "Edit saved transactions",
+      changes: [
+        ...["t1", "t2"].map((id, i) => ({
+          id,
+          before: { ...bus(id, `4.${i}0`), category: transport, linkage: null },
+          after: { ...bus(id, `4.${i}0`), category: internal, linkage: { type: "internal" } },
+        })),
+        {
+          id: "r1",
+          before: { id: "r1", date: "2026-08-30T00:00:00.000Z", description: "PAYNOW FROM ALEX", label: null, amountIn: "30.00", amountOut: null, currency: "SGD", accountIdentifier: "DBS", category: null, linkage: null },
+          after: { id: "r1", date: "2026-08-30T00:00:00.000Z", description: "PAYNOW FROM ALEX", label: null, amountIn: "30.00", amountOut: null, currency: "SGD", accountIdentifier: "DBS", category: null,
+            linkage: { type: "reimbursement", reimbursesAllocations: [{ transactionId: "d1", amount: 25 }], leftoverCategoryId: "c-gift" } },
+        },
+      ],
+      references: {
+        transactions: { d1: { id: "d1", date: "2026-08-28T00:00:00.000Z", description: "SUSHI EXPRESS", label: "Team dinner", amountIn: null, amountOut: "50.00", currency: "SGD" } },
+        categories: { "c-gift": { name: "Gifts", color: "#ff9800" } },
+        accounts: { "4265-****-****-4591": "#e91e63", DBS: "#3f51b5" },
+      },
+    },
+  };
+  const rule = {
+    id: "p2", kind: "update_import_rule", status: "pending", expiresAt: "2099-01-01T00:00:00Z",
+    preview: { title: "Change fixed import rule", before: null, after: {
+      kind: "update_import_rule", name: "Partner bus rides", accountIdentifier: "4265-****-****-4591",
+      parserId: "uob_one_credit_card_pdf", matchType: "description_contains", matchValue: "BUS/MRT", markInternal: true } },
+  };
+  await page.route("**/api/chat/**", async route => {
+    const path = new URL(route.request().url()).pathname.replace("/api/chat", "");
+    let body: any = {};
+    if (path === "/conversations") body = [{ id: "c1", title: "Bus rides", updatedAt: "2026-10-02" }];
+    else if (path === "/conversations/c1") body = {
+      id: "c1", title: "Bus rides", attachments: [],
+      runs: [{ id: "r1", status: "awaiting_confirmation", proposals: [edit, rule] }],
+      messages: [{ id: "a1", role: "assistant", blocks: [
+        { type: "text", text: "Prepared the changes." },
+        { type: "data", title: "list parsers", data: { parsers: [{ id: "generic_csv" }] } },
+        { type: "link", kind: "proposal", id: "p1", label: "Review 3 transaction changes" },
+        { type: "link", kind: "proposal", id: "p2", label: "Review: Change fixed import rule" },
+      ] }],
+    };
+    await route.fulfill({ json: body });
+  });
+  await page.goto("/chat?conversation=c1");
+  await expect(page.getByText("Prepared the changes.")).toBeVisible();
+  await expect(page.getByText("list parsers")).toHaveCount(0);
+  await expect(page.getByText("generic_csv")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Review 3 transaction changes" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "2 transactions" })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "1 transaction" })).toBeVisible();
+  const bulk = dialog.getByRole("region", { name: "Change 1" });
+  await expect(bulk.getByText("Transportation")).toBeVisible();
+  await expect(bulk.getByText("Internal", { exact: true })).toBeVisible();
+  await expect(bulk.getByText("Internal transfer")).toBeVisible();
+  await expect(bulk.getByRole("list", { name: "Affected transactions" }).getByRole("listitem")).toHaveCount(2);
+  const dot = bulk.locator("span[aria-hidden]").filter({ hasText: "" }).first();
+  await expect(dot).toHaveCSS("background-color", "rgb(33, 150, 243)");
+  const reimbursement = dialog.getByRole("region", { name: "Change 2" });
+  await expect(reimbursement.getByText("Reimbursement", { exact: true })).toBeVisible();
+  await expect(reimbursement.getByText("Pays back")).toBeVisible();
+  await expect(reimbursement.getByText("Team dinner")).toBeVisible();
+  await expect(reimbursement.getByText("SGD 25.00")).toBeVisible();
+  await expect(reimbursement.getByText("Gifts")).toBeVisible();
+  expect(await dialog.textContent()).not.toMatch(/[{}]|"type"/);
+  await page.screenshot({ path: "/tmp/fortuna-approval-edits.png" });
+  await dialog.getByRole("button", { name: "Close" }).first().click();
+
+  await page.getByRole("button", { name: "Review: Change fixed import rule" }).click();
+  await expect(dialog.getByText("Partner bus rides")).toBeVisible();
+  await expect(dialog.getByText("Description contains “BUS/MRT”")).toBeVisible();
+  await expect(dialog.getByText("Account 4265-****-****-4591")).toBeVisible();
+  await expect(dialog.getByText("Mark as internal transfer")).toBeVisible();
+  expect(await dialog.textContent()).not.toMatch(/[{}]/);
+  await page.screenshot({ path: "/tmp/fortuna-approval-rule.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+});

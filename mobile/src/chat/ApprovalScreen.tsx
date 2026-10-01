@@ -1,19 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Switch, View } from "react-native";
-import { Button, Card, Screen, Txt, useTheme } from "../ui";
-import {
-  useChatApi,
-  Conversation,
-  Proposal,
-  changedFields,
-  fieldLabel,
-  displayValue,
-} from "./api";
-import { Details } from "./Details";
+import { Button, Card, Screen, Txt } from "../ui";
+import { useChatApi, Conversation, Proposal } from "./api";
+import { ProposalView } from "./ProposalView";
 export function ChatApprovalScreen({ route, navigation }: any) {
   const { id, conversationId } = route.params,
     api = useChatApi(),
-    { colors } = useTheme(),
     [proposal, setProposal] = useState<Proposal | null>(null),
     [busy, setBusy] = useState(false),
     [override, setOverride] = useState(false),
@@ -72,45 +64,7 @@ export function ChatApprovalScreen({ route, navigation }: any) {
         Only these changes will be applied. Changed records require a fresh
         preview.
       </Txt>
-      {preview.changes?.map((change: any) => (
-        <Card key={change.id}>
-          <Txt bold>{change.before.description || change.id}</Txt>
-          {changedFields(change.before, change.after).map((key) => (
-            <View
-              key={key}
-              style={{
-                gap: 8,
-                borderTopWidth: 1,
-                borderColor: colors.line,
-                paddingTop: 12,
-              }}
-            >
-              <Txt bold>{fieldLabel(key)}</Txt>
-              <Txt muted size={12}>
-                Before
-              </Txt>
-              <Txt selectable>{displayValue(change.before[key])}</Txt>
-              <Txt muted size={12}>
-                After
-              </Txt>
-              <View
-                style={{
-                  backgroundColor: colors.tint,
-                  padding: 12,
-                  borderRadius: 8,
-                }}
-              >
-                <Txt selectable>{displayValue(change.after[key])}</Txt>
-              </View>
-            </View>
-          ))}
-        </Card>
-      ))}
-      {proposal && !preview.changes && (
-        <Card>
-          <Details value={preview} />
-        </Card>
-      )}
+      {proposal && <ProposalView proposal={proposal} />}
       {duplicates && (
         <Card>
           <Txt>

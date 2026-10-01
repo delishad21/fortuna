@@ -113,6 +113,7 @@ export function orderCreatedTransactionsForImport<
 export interface ImportRulePayload {
   name: string;
   parserId?: string | null;
+  accountIdentifier?: string | null;
   matchType?: "always" | "description_contains";
   matchValue?: string | null;
   caseSensitive?: boolean;
@@ -268,6 +269,7 @@ export class TransactionService {
     return {
       name: payload.name.trim(),
       parserId: payload.parserId?.trim() || null,
+      accountIdentifier: payload.accountIdentifier?.trim() || null,
       matchType: payload.matchType || "description_contains",
       matchValue: payload.matchValue?.trim() || null,
       caseSensitive: payload.caseSensitive ?? false,
@@ -281,12 +283,24 @@ export class TransactionService {
 
   private static ruleMatches(
     rule: {
+      accountIdentifier?: string | null;
       matchType: string;
       matchValue: string | null;
       caseSensitive: boolean;
     },
-    tx: { description?: string | null },
+    tx: {
+      description?: string | null;
+      accountIdentifier?: string | null;
+      metadata?: unknown;
+    },
   ) {
+    if (rule.accountIdentifier) {
+      const account =
+        tx.accountIdentifier ||
+        (tx.metadata as { accountIdentifier?: string } | null)
+          ?.accountIdentifier;
+      if (account !== rule.accountIdentifier) return false;
+    }
     const description = tx.description || "";
     if (rule.matchType === "always") {
       return true;
@@ -1307,8 +1321,24 @@ export class TransactionService {
     });
   }
 
+  /** A rule may only be scoped to one of the user's own accounts. */
+  private static async assertRuleAccount(
+    userId: string,
+    accountIdentifier: string | null,
+  ) {
+    if (
+      accountIdentifier &&
+      !(await prisma.accountIdentifier.findFirst({
+        where: { userId, accountIdentifier },
+        select: { id: true },
+      }))
+    )
+      throw new Error(`Account ${accountIdentifier} not found`);
+  }
+
   static async createImportRule(userId: string, payload: ImportRulePayload) {
     const normalized = this.normalizeImportRulePayload(payload);
+    await this.assertRuleAccount(userId, normalized.accountIdentifier);
     if (!normalized.name) {
       throw new Error("Rule name is required");
     }
@@ -1340,6 +1370,10 @@ export class TransactionService {
       name: payload.name ?? existing.name,
       parserId:
         payload.parserId !== undefined ? payload.parserId : existing.parserId,
+      accountIdentifier:
+        payload.accountIdentifier !== undefined
+          ? payload.accountIdentifier
+          : existing.accountIdentifier,
       matchType:
         (payload.matchType as "always" | "description_contains" | undefined) ??
         (existing.matchType as "always" | "description_contains"),
@@ -1369,6 +1403,7 @@ export class TransactionService {
           : existing.sortOrder,
     });
 
+    await this.assertRuleAccount(userId, normalized.accountIdentifier);
     if (!normalized.name) {
       throw new Error("Rule name is required");
     }

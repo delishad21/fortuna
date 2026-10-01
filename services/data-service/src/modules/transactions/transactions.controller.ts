@@ -52,6 +52,7 @@ const ImportTransactionSchema = z.object({
 const ImportRuleSchema = z.object({
   name: z.string().min(1),
   parserId: z.string().nullable().optional(),
+  accountIdentifier: z.string().max(120).nullable().optional(),
   matchType: z.enum(["always", "description_contains"]).optional(),
   matchValue: z.string().nullable().optional(),
   caseSensitive: z.boolean().optional(),

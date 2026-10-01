@@ -247,19 +247,95 @@ export class TransactionActions implements ActionHandler {
       );
     }
   }
-  private display(record: any) {
+  private display(
+    record: any,
+    categories: Map<string, { id: string; name: string; color: string }>,
+  ) {
     return json({
       id: record.id,
       date: record.date,
       description: record.description,
       label: record.label,
-      category: record.category?.name || null,
+      category: record.categoryId
+        ? categories.get(record.categoryId) || {
+            id: record.categoryId,
+            name: record.category?.name || "Category",
+            color: null,
+          }
+        : null,
       amountIn: record.amountIn,
       amountOut: record.amountOut,
       balance: record.balance,
       currency: record.currency,
       accountIdentifier: record.accountIdentifier,
       linkage: record.linkage,
+    });
+  }
+  /** Display data for records a preview mentions: linked transactions, categories, account colours. */
+  private references(
+    changes: Array<{ before: any; after: any }>,
+    snapshot: Awaited<ReturnType<TransactionActions["snapshot"]>>,
+    categories: Map<string, { id: string; name: string; color: string }>,
+  ) {
+    const linked = new Set<string>(),
+      staged = new Set<string>(),
+      categoryIds = new Set<string>();
+    for (const side of changes.flatMap((c) => [c.before, c.after])) {
+      const linkage = side?.linkage;
+      for (const a of [
+        ...(linkage?.reimbursesAllocations || []),
+        ...(linkage?.reimbursedByAllocations || []),
+      ]) {
+        if (a?.transactionId) linked.add(String(a.transactionId));
+        if (a?.stagedRowId) staged.add(String(a.stagedRowId));
+      }
+      if (linkage?.leftoverCategoryId)
+        categoryIds.add(String(linkage.leftoverCategoryId));
+    }
+    const summary = (t: any) => ({
+      id: t.id,
+      date: t.date,
+      description: t.description,
+      label: t.label,
+      amountIn: t.amountIn,
+      amountOut: t.amountOut,
+      currency: t.currency,
+      accountIdentifier: t.accountIdentifier,
+    });
+    return json({
+      transactions: Object.fromEntries(
+        snapshot.transactions
+          .filter((t) => linked.has(t.id))
+          .map((t) => [t.id, summary(t)]),
+      ),
+      stagedRows: Object.fromEntries(
+        snapshot.stagedTargets
+          .filter((r) => staged.has(r.id))
+          .map((r) => {
+            const p = (r.currentPayload || {}) as any;
+            return [
+              r.id,
+              summary({
+                id: r.id,
+                date: p.date,
+                description: p.description,
+                label: p.label,
+                amountIn: p.amountIn,
+                amountOut: p.amountOut,
+                currency: p.currency,
+                accountIdentifier: p.accountIdentifier,
+              }),
+            ];
+          }),
+      ),
+      categories: Object.fromEntries(
+        [...categoryIds].flatMap((id) =>
+          categories.has(id) ? [[id, categories.get(id)!]] : [],
+        ),
+      ),
+      accounts: Object.fromEntries(
+        snapshot.accounts.map((a) => [a.accountIdentifier, a.color]),
+      ),
     });
   }
   async prepare(userId: string, raw: unknown): Promise<PreparedAction> {
@@ -273,20 +349,31 @@ export class TransactionActions implements ActionHandler {
             const before = await this.snapshot(tx, userId, input);
             await this.apply(tx, userId, input);
             const after = await this.snapshot(tx, userId, input);
+            const categories = new Map(
+              after.categories.map((c) => [
+                c.id,
+                { id: c.id, name: c.name, color: c.color },
+              ]),
+            );
             const changes = after.transactions.flatMap((row) => {
               const previous = before.transactions.find(
                 (r) => r.id === row.id,
               )!;
-              const left = this.display(previous),
-                right = this.display(row);
+              const left = this.display(previous, categories),
+                right = this.display(row, categories);
               return stateHash(left) === stateHash(right)
                 ? []
                 : [{ id: row.id, before: left, after: right }];
             });
+            const references = this.references(changes, after, categories);
             throw new PreviewRollback({
               kind: input.kind,
               arguments: json(input),
-              preview: json({ title: "Edit saved transactions", changes }),
+              preview: json({
+                title: "Edit saved transactions",
+                changes,
+                references,
+              }),
               stateHash: stateHash(before),
             });
           }),
