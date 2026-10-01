@@ -276,7 +276,12 @@ test("phone chat renders assistant components and pages transaction lists", asyn
                     total: "270.00",
                     items: [
                       { name: "Food", amount: "200.00", count: 40 },
-                      { name: "Other (3)", amount: "70.00", count: 20, other: true },
+                      {
+                        name: "Other (3)",
+                        amount: "70.00",
+                        count: 20,
+                        other: true,
+                      },
                     ],
                   },
                 ],
@@ -291,8 +296,16 @@ test("phone chat renders assistant components and pages transaction lists", asyn
                   {
                     currency: "SGD",
                     points: [
-                      { period: "2026-07-27", expense: "20.00", income: "0.00" },
-                      { period: "2026-08-03", expense: "250.00", income: "500.00" },
+                      {
+                        period: "2026-07-27",
+                        expense: "20.00",
+                        income: "0.00",
+                      },
+                      {
+                        period: "2026-08-03",
+                        expense: "250.00",
+                        income: "500.00",
+                      },
                     ],
                   },
                 ],
@@ -334,7 +347,9 @@ test("phone chat renders assistant components and pages transaction lists", asyn
   await page
     .getByRole("button", { name: "Wk Jul 27, spent SGD 20.00" })
     .click();
-  await expect(page.getByText("Spent SGD 20.00", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Spent SGD 20.00", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText("Conversations", { exact: true })).toBeHidden();
   await page.getByText("Weekly spending").scrollIntoViewIfNeeded();
   await page.screenshot({ path: "/tmp/fortuna-mobile-chat-components.png" });
@@ -342,4 +357,107 @@ test("phone chat renders assistant components and pages transaction lists", asyn
   await page.getByRole("button", { name: "Load 35 more of 35" }).click();
   await expect(page.getByText("Coffee 59", { exact: true })).toBeVisible();
   expect(pages).toEqual([25]);
+});
+
+test("phone chat attaches photos and shows sent images", async ({ page }) => {
+  const server = "http://chat-fixture.local";
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  await page.addInitScript(
+    ({ server }) =>
+      sessionStorage.setItem(
+        "fortuna.mobile.session",
+        JSON.stringify({ server, token: "qa-token", expiresAt: "2099-01-01" }),
+      ),
+    { server },
+  );
+  await page.route("http://chat-fixture.local/api/mobile/**", (route) =>
+    route.fulfill({
+      json: {
+        data:
+          route.request().postDataJSON()?.operation === "getCurrentUser"
+            ? { name: "Chat QA", username: "qa", baseCurrency: "SGD" }
+            : null,
+      },
+    }),
+  );
+  let sent: any = null;
+  const imageAuth: string[] = [];
+  await page.route("http://chat-fixture.local/api/chat/**", async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(
+      "/api/chat",
+      "",
+    );
+    if (path === "/attachments/img1/content") {
+      imageAuth.push(route.request().headers().authorization);
+      return route.fulfill({ contentType: "image/png", body: png });
+    }
+    let data: any = {};
+    if (path === "/conversations")
+      data = [{ id: "c1", title: "Bus rides", updatedAt: "2026-10-01" }];
+    else if (path === "/files")
+      data = {
+        attachmentId: "img1",
+        filename: "samsungpay.png",
+        kind: "image",
+      };
+    else if (path === "/conversations/c1/messages") {
+      sent = route.request().postDataJSON();
+      data = { runId: "r1" };
+    } else if (path === "/conversations/c1")
+      data = {
+        id: "c1",
+        title: "Bus rides",
+        attachments: [],
+        runs: [],
+        messages: sent
+          ? [
+              {
+                id: "u1",
+                role: "user",
+                blocks: [
+                  { type: "text", text: "Which rides were mine?" },
+                  {
+                    type: "attachment",
+                    id: "img1",
+                    filename: "samsungpay.png",
+                    mediaType: "image",
+                  },
+                ],
+              },
+            ]
+          : [],
+      };
+    else if (path === "/settings") data = [];
+    await route.fulfill({ json: data });
+  });
+  await page.goto("/");
+  await page.getByRole("tab", { name: /Chat/ }).click();
+  await page
+    .getByRole("button", { name: "Toggle chat history", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Bus rides", exact: true }).click();
+  await expect(page.getByText("Conversations", { exact: true })).toBeHidden();
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Photos", exact: true }).click();
+  await (
+    await chooser
+  ).setFiles({
+    name: "samsungpay.png",
+    mimeType: "image/png",
+    buffer: png,
+  });
+  await expect(
+    page.getByRole("button", { name: "Remove samsungpay.png" }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Which rides were mine?");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect.poll(() => sent?.attachmentIds).toEqual(["img1"]);
+  await expect(page.getByLabel("samsungpay.png").last()).toBeVisible();
+  await expect.poll(() => imageAuth).toContain("Bearer qa-token");
+  await page.screenshot({ path: "/tmp/fortuna-mobile-chat-image.png" });
 });

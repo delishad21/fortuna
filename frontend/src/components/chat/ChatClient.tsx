@@ -22,21 +22,50 @@ import {
   emptyStream,
   mergeEvents,
   generatingRun,
+  PendingAttachment,
+  IMAGE_UPLOAD_TYPES,
+  IMAGE_UPLOAD_BYTES,
+  attachmentContentPath,
 } from "@/lib/chat/client";
 import { BrandMark } from "@/components/ui/Brand";
 import { TransactionReviewEditor } from "./TransactionReviewEditor";
 import { ActionPreview, DataDetails } from "./ActionPreview";
 import { ChatTransactions, asTransactions } from "./ChatTransactions";
 import { ChatComponent } from "./ChatComponents";
+/** A sent image, fetched through the owner-scoped chat proxy. */
+function AttachedImage({ id, filename }: { id: string; filename: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed)
+    return (
+      <p className="text-sm text-dark-5 dark:text-dark-6">
+        Image: {filename} (expired)
+      </p>
+    );
+  return (
+    <a
+      href={attachmentContentPath(id)}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-block"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element -- authenticated, uncacheable attachment */}
+      <img
+        src={attachmentContentPath(id)}
+        alt={filename}
+        loading="lazy"
+        onError={() => setFailed(true)}
+        className="max-h-64 max-w-full rounded-lg border border-stroke object-contain dark:border-stroke-dark"
+      />
+    </a>
+  );
+}
 export function ChatClient() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [list, setList] = useState<ConversationSummary[]>([]),
     [id, setId] = useState<string | null>(null),
     [conversation, setConversation] = useState<Conversation | null>(null),
     [text, setText] = useState(""),
-    [files, setFiles] = useState<
-      Array<{ attachmentId: string; filename: string }>
-    >([]),
+    [files, setFiles] = useState<PendingAttachment[]>([]),
     [stream, setStream] = useState<Stream>(emptyStream),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
@@ -165,6 +194,7 @@ export function ChatClient() {
         },
       });
       setText("");
+      files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
       setFiles([]);
       sendKey.current = null;
       setStream(emptyStream());
@@ -172,22 +202,50 @@ export function ChatClient() {
       await refreshList();
     });
   }
-  async function upload(file: File) {
-    if (!id) return;
-    if (file.size > 25 * 1024 * 1024) {
-      setError("Choose a statement smaller than 25 MB.");
+  async function upload(chosen: File[]) {
+    if (!id || !chosen.length) return;
+    const room = 5 - files.length;
+    if (chosen.length > room) {
+      setError(`You can attach ${room} more file${room === 1 ? "" : "s"}.`);
       return;
     }
+    for (const file of chosen) {
+      const image = file.type.startsWith("image/");
+      if (image && !IMAGE_UPLOAD_TYPES.includes(file.type)) {
+        setError(
+          `${file.name}: use a PNG, JPEG, WebP or GIF image. HEIC photos aren't supported yet.`,
+        );
+        return;
+      }
+      if (file.size > (image ? IMAGE_UPLOAD_BYTES : 25 * 1024 * 1024)) {
+        setError(
+          `${file.name}: choose ${image ? "an image smaller than 10" : "a statement smaller than 25"} MB.`,
+        );
+        return;
+      }
+    }
     await action(async () => {
-      const form = new FormData();
-      form.append("conversationId", id);
-      form.append("file", file);
-      const result = await chatApi("/files", { method: "POST", body: form });
-      setFiles((prev) => [
-        ...prev.filter((f) => f.attachmentId !== result.attachmentId),
-        result,
-      ]);
+      for (const file of chosen) {
+        const form = new FormData();
+        form.append("conversationId", id);
+        form.append("file", file);
+        const result = await chatApi("/files", { method: "POST", body: form });
+        const preview =
+          result.kind === "image" ? URL.createObjectURL(file) : undefined;
+        setFiles((prev) => [
+          ...prev.filter((f) => f.attachmentId !== result.attachmentId),
+          { ...result, preview },
+        ]);
+        sendKey.current = null;
+      }
     });
+  }
+  function removeFile(file: PendingAttachment) {
+    if (file.preview) URL.revokeObjectURL(file.preview);
+    setFiles((prev) =>
+      prev.filter((f) => f.attachmentId !== file.attachmentId),
+    );
+    sendKey.current = null;
   }
   function block(value: Block, index: number) {
     if (value.type === "review")
@@ -208,7 +266,9 @@ export function ChatClient() {
         </p>
       );
     if (value.type === "attachment")
-      return (
+      return value.mediaType === "image" ? (
+        <AttachedImage key={index} id={value.id} filename={value.filename} />
+      ) : (
         <p key={index} className="text-sm text-dark-5 dark:text-dark-6">
           Statement: {value.filename}
         </p>
@@ -473,34 +533,65 @@ export function ChatClient() {
                 e.preventDefault();
                 void send();
               }}
+              onDragOver={(e) => {
+                if (e.dataTransfer.types.includes("Files")) e.preventDefault();
+              }}
+              onDrop={(e) => {
+                if (!e.dataTransfer.files.length) return;
+                e.preventDefault();
+                void upload(Array.from(e.dataTransfer.files));
+              }}
               className="shrink-0 space-y-3 border-t border-stroke px-5 py-4 dark:border-stroke-dark md:px-10"
             >
               <p className="text-xs text-dark-5 dark:text-dark-6">
-                Statements expire after 7 days unless you approve retaining them
-                as parser fixtures.
+                Attach statements, or screenshots and photos for Fortuna to
+                read. Attachments expire after 7 days unless you approve
+                retaining a statement as a parser fixture.
               </p>
-              {files.map((file) => (
-                <div
-                  key={file.attachmentId}
-                  className="flex items-center justify-between gap-2 text-sm"
+              {files.some((f) => f.preview) && (
+                <ul
+                  className="flex flex-wrap gap-2"
+                  aria-label="Attached images"
                 >
-                  <span className="truncate">{file.filename}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFiles((prev) =>
-                        prev.filter(
-                          (f) => f.attachmentId !== file.attachmentId,
-                        ),
-                      );
-                      sendKey.current = null;
-                    }}
-                    className="p-2 text-primary"
+                  {files
+                    .filter((f) => f.preview)
+                    .map((file) => (
+                      <li key={file.attachmentId} className="relative">
+                        {/* eslint-disable-next-line @next/next/no-img-element -- local blob preview */}
+                        <img
+                          src={file.preview}
+                          alt={file.filename}
+                          className="h-20 w-20 rounded-lg border border-stroke object-cover dark:border-stroke-dark"
+                        />
+                        <button
+                          type="button"
+                          aria-label={`Remove ${file.filename}`}
+                          onClick={() => removeFile(file)}
+                          className="absolute -right-2 -top-2 rounded-full bg-dark p-1 text-white shadow"
+                        >
+                          <X size={14} />
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              )}
+              {files
+                .filter((f) => !f.preview)
+                .map((file) => (
+                  <div
+                    key={file.attachmentId}
+                    className="flex items-center justify-between gap-2 text-sm"
                   >
-                    Remove attachment
-                  </button>
-                </div>
-              ))}
+                    <span className="truncate">{file.filename}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeFile(file)}
+                      className="p-2 text-primary"
+                    >
+                      Remove attachment
+                    </button>
+                  </div>
+                ))}
               <label className="sr-only" htmlFor="chat-message">
                 Message
               </label>
@@ -522,6 +613,12 @@ export function ChatClient() {
                     if (!generatingRun(run)) void send();
                   }
                 }}
+                onPaste={(e) => {
+                  const pasted = Array.from(e.clipboardData.files);
+                  if (!pasted.length) return;
+                  e.preventDefault();
+                  void upload(pasted);
+                }}
                 maxLength={16000}
                 rows={2}
                 placeholder="Ask Fortuna…"
@@ -531,10 +628,14 @@ export function ChatClient() {
                 <input
                   ref={fileInput}
                   type="file"
-                  accept=".pdf,.csv,.txt"
+                  accept={[".pdf", ".csv", ".txt", ...IMAGE_UPLOAD_TYPES].join(
+                    ",",
+                  )}
+                  multiple
+                  aria-label="Attach files"
                   className="hidden"
                   onChange={(e) => {
-                    if (e.target.files?.[0]) void upload(e.target.files[0]);
+                    void upload(Array.from(e.target.files || []));
                     e.target.value = "";
                   }}
                 />
@@ -545,7 +646,7 @@ export function ChatClient() {
                   leftIcon={<Paperclip size={16} />}
                   onClick={() => fileInput.current?.click()}
                 >
-                  Attach statement
+                  Attach file
                 </Button>
                 {generatingRun(run) ? (
                   <Button

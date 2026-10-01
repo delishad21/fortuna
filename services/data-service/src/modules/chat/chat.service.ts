@@ -117,6 +117,9 @@ export class ChatService extends ChatRepository {
               type: "attachment",
               id: f.id,
               filename: f.statementFile.filename,
+              mediaType: f.statementFile.contentType.startsWith("image/")
+                ? "image"
+                : "statement",
             })),
           ],
         },

@@ -2,7 +2,12 @@
 export type Block =
   | { type: "review"; id: string; title: string }
   | { type: "text"; text: string }
-  | { type: "attachment"; id: string; filename: string }
+  | {
+      type: "attachment";
+      id: string;
+      filename: string;
+      mediaType?: "image" | "statement";
+    }
   | {
       type: "link";
       kind: "draft" | "transaction" | "proposal";
@@ -71,6 +76,22 @@ export type ComponentBlock =
         points: Array<{ period: string; expense: string; income: string }>;
       }>;
     };
+/** A file attached to the message being composed. */
+export type PendingAttachment = {
+  attachmentId: string;
+  filename: string;
+  kind: "image" | "statement";
+  preview?: string;
+};
+export const IMAGE_UPLOAD_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+];
+export const IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024;
+export const attachmentContentPath = (id: string) =>
+  `/api/chat/attachments/${encodeURIComponent(id)}/content`;
 export const TRANSACTION_PAGE_SIZE = 50;
 export const fetchTransactionPage = (
   request: ChatRequest,

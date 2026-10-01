@@ -1,5 +1,7 @@
 import { ReviewService } from "./reviews.service";
 import { ReadTools } from "./tools/read";
+import { classifyUpload, isImageType } from "./media";
+import { createReadStream } from "node:fs";
 import { safeChatError } from "./errors";
 import multer from "multer";
 import { withDatabase } from "../../lib/database-context";
@@ -163,9 +165,15 @@ export function createChatRouter(db: PrismaClient) {
           "application/csv",
           "application/vnd.ms-excel",
           "application/octet-stream",
-        ].includes(file.mimetype)
+        ].includes(file.mimetype) &&
+        !file.mimetype.startsWith("image/")
       )
-        return cb(new ChatError(400, "Unsupported statement type"));
+        return cb(
+          new ChatError(
+            400,
+            "Attach a PDF, CSV or text statement, or an image",
+          ),
+        );
       cb(null, true);
     },
   });
@@ -175,7 +183,8 @@ export function createChatRouter(db: PrismaClient) {
     route(async (req, res) => {
       const userId = res.locals.userId;
       const conversationId = idSchema.parse(req.body.conversationId);
-      if (!req.file) throw new ChatError(400, "Choose a statement file");
+      if (!req.file) throw new ChatError(400, "Choose a file");
+      const upload = classifyUpload(req.file);
       if (
         !(await db.chatConversation.findFirst({
           where: { id: conversationId, userId, deletedAt: null },
@@ -192,10 +201,14 @@ export function createChatRouter(db: PrismaClient) {
           "Start another conversation to upload more statements",
         );
       const statement = await withDatabase(db, () =>
-        HermesWorkflowService.registerStatement(userId, req.file!, {
-          actorType: "user",
-          actorId: userId,
-        }),
+        HermesWorkflowService.registerStatement(
+          userId,
+          { ...req.file!, mimetype: upload.contentType },
+          {
+            actorType: "user",
+            actorId: userId,
+          },
+        ),
       );
       const attachment = await db.chatAttachment.upsert({
         where: {
@@ -212,7 +225,31 @@ export function createChatRouter(db: PrismaClient) {
         statementFileId: statement.id,
         filename: statement.filename,
         expiresAt: statement.expiresAt,
+        kind: upload.kind,
       });
+    }),
+  );
+  router.get(
+    "/attachments/:id/content",
+    route(async (req, res) => {
+      const attachment = await db.chatAttachment.findFirst({
+        where: { id: idSchema.parse(req.params.id), userId: res.locals.userId },
+        include: { statementFile: true },
+      });
+      const file = attachment?.statementFile;
+      if (
+        !file ||
+        !isImageType(file.contentType) ||
+        file.deletedAt ||
+        (!file.retained && file.expiresAt <= new Date())
+      )
+        throw new ChatError(404, "Image not found or expired");
+      res.setHeader("Content-Type", file.contentType);
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("Content-Security-Policy", "default-src 'none'");
+      createReadStream(file.storagePath)
+        .on("error", () => res.status(404).end())
+        .pipe(res);
     }),
   );
   router.get(

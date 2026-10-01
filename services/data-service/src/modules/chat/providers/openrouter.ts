@@ -3,6 +3,7 @@ import {
   ProviderInput,
   ProviderEvent,
   CHAT_INSTRUCTIONS,
+  imageLabel,
 } from "./provider";
 import { CHAT_LIMITS, ChatError, toolResultForModel } from "../contracts";
 export async function* readSse(response: Response): AsyncIterable<any> {
@@ -95,12 +96,28 @@ export class OpenRouterProvider implements ChatProvider {
   ): AsyncIterable<ProviderEvent> {
     const messages: any[] = [
       { role: "system", content: CHAT_INSTRUCTIONS },
-      ...input.messages,
+      ...input.messages.map(({ role, content, images }) =>
+        images?.length
+          ? {
+              role,
+              content: [
+                { type: "text", text: content },
+                ...images.flatMap((image) => [
+                  { type: "text", text: imageLabel(image) },
+                  { type: "image_url", image_url: { url: image.dataUrl } },
+                ]),
+              ],
+            }
+          : { role, content },
+      ),
     ];
+    const imageCharacters = input.messages
+      .flatMap((m) => m.images || [])
+      .reduce((n, image) => n + image.dataUrl.length, 0);
     let toolCount = 0;
     for (let turn = 0; turn < CHAT_LIMITS.modelTurns; turn++) {
       signal.throwIfAborted();
-      if (JSON.stringify(messages).length > 192000)
+      if (JSON.stringify(messages).length - imageCharacters > 192000)
         throw new Error(
           "Conversation context is too large. Start a new conversation.",
         );

@@ -374,3 +374,70 @@ test("chat renders assistant components and pages large transaction lists", asyn
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
 });
+
+const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+test("chat accepts screenshots, previews them and shows them in history", async ({ page, request }) => {
+  const username = `chat_media_${Date.now()}`, password = "chat-test-temporary-password";
+  const registered = await request.post("/api/auth/register", {
+    data: { username, password, name: "Chat QA", baseCurrency: "SGD" },
+  });
+  expect(registered.ok(), await registered.text()).toBeTruthy();
+  await page.goto("/login");
+  await page.getByLabel("Username").fill(username);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign In", exact: true }).click();
+  await expect(page).toHaveURL(/dashboard/, { timeout: 30000 });
+  // Real round trip through the authenticated proxy: upload, then read back the stored image.
+  const real = await page.evaluate(async (png) => {
+    const conversation = await fetch("/api/chat/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    }).then((r) => r.json());
+    const bytes = Uint8Array.from(atob(png), (c) => c.charCodeAt(0));
+    const form = new FormData();
+    form.append("conversationId", conversation.id);
+    form.append("file", new Blob([bytes], { type: "image/png" }), "pay.png");
+    const uploaded = await fetch("/api/chat/files", { method: "POST", body: form }).then((r) => r.json());
+    const content = await fetch(`/api/chat/attachments/${uploaded.attachmentId}/content`);
+    const back = new Uint8Array(await content.arrayBuffer());
+    return { kind: uploaded.kind, status: content.status, type: content.headers.get("content-type"), same: back.length === bytes.length && back.every((b, i) => b === bytes[i]) };
+  }, PNG_1PX);
+  expect(real).toEqual({ kind: "image", status: 200, type: "image/png", same: true });
+
+  let sent: any = null;
+  await page.route("**/api/chat/**", async route => {
+    const path = new URL(route.request().url()).pathname.replace("/api/chat", "");
+    if (path === "/attachments/img1/content")
+      return route.fulfill({ contentType: "image/png", body: Buffer.from(PNG_1PX, "base64") });
+    let body: any = {};
+    if (path === "/conversations") body = [{ id: "c1", title: "Apple Pay", updatedAt: "2026-10-01" }];
+    else if (path === "/files") body = { attachmentId: "img1", filename: "applepay.png", kind: "image" };
+    else if (path === "/conversations/c1/messages") { sent = route.request().postDataJSON(); body = { runId: "r1" }; }
+    else if (path === "/conversations/c1") body = {
+      id: "c1", title: "Apple Pay", attachments: [], runs: [],
+      messages: sent ? [{ id: "u1", role: "user", blocks: [
+        { type: "text", text: "Which of these are Apple Pay?" },
+        { type: "attachment", id: "img1", filename: "applepay.png", mediaType: "image" }] }] : [],
+    };
+    await route.fulfill({ json: body });
+  });
+  await page.goto("/chat?conversation=c1");
+  await expect(page.getByRole("button", { name: "Attach file" })).toBeVisible();
+  await page.getByLabel("Attach files").setInputFiles({
+    name: "applepay.png", mimeType: "image/png", buffer: Buffer.from(PNG_1PX, "base64"),
+  });
+  await expect(page.getByRole("list", { name: "Attached images" }).getByRole("img", { name: "applepay.png" })).toBeVisible();
+  await page.getByLabel("Message", { exact: true }).fill("Which of these are Apple Pay?");
+  await page.getByLabel("Message", { exact: true }).press("Enter");
+  await expect.poll(() => sent?.attachmentIds).toEqual(["img1"]);
+  await expect(page.getByRole("list", { name: "Attached images" })).toHaveCount(0);
+  const shown = page.getByRole("article").getByRole("img", { name: "applepay.png" });
+  await expect(shown).toBeVisible();
+  await expect.poll(() => shown.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1);
+  await page.getByLabel("Attach files").setInputFiles({
+    name: "photo.heic", mimeType: "image/heic", buffer: Buffer.from("heic"),
+  });
+  await expect(page.getByText(/HEIC photos aren't supported yet/)).toBeVisible();
+});

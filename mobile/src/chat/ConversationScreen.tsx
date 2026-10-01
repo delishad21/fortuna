@@ -11,6 +11,7 @@ import {
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import { Button, Input, Txt, useTheme, confirm } from "../ui";
 import {
   useChatApi,
@@ -20,12 +21,16 @@ import {
   emptyStream,
   mergeEvents,
   generatingRun,
+  PendingAttachment,
+  IMAGE_UPLOAD_TYPES,
+  IMAGE_UPLOAD_BYTES,
 } from "./api";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { ChatReviewCards } from "./ReviewCards";
 import { ChatHistory } from "./History";
 import { Details, Expandable } from "./Details";
 import { ChatComponent } from "./Components";
+import { AttachedImage } from "./AttachedImage";
 export function ChatConversationScreen({ route, navigation }: any) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [id, setId] = useState<string | undefined>(route.params?.id);
@@ -35,9 +40,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
     focused = useIsFocused();
   const [conversation, setConversation] = useState<Conversation | null>(null),
     [text, setText] = useState(""),
-    [files, setFiles] = useState<
-      Array<{ attachmentId: string; filename: string }>
-    >([]),
+    [files, setFiles] = useState<PendingAttachment[]>([]),
     [stream, setStream] = useState<Stream>(emptyStream),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
@@ -148,38 +151,87 @@ export function ChatConversationScreen({ route, navigation }: any) {
       await refresh();
     });
   }
-  async function attach() {
+  type PickedAsset = {
+    uri: string;
+    name: string;
+    mimeType?: string | null;
+    size?: number | null;
+  };
+  async function uploadAssets(pick: () => Promise<PickedAsset[] | null>) {
     await action(async () => {
+      const assets = await pick();
+      if (!assets?.length) return;
+      if (assets.length > 5 - files.length)
+        throw new Error(`You can attach ${5 - files.length} more files.`);
+      for (const asset of assets) {
+        const image = asset.mimeType?.startsWith("image/");
+        if (image && !IMAGE_UPLOAD_TYPES.includes(asset.mimeType!))
+          throw new Error(
+            `${asset.name}: use a PNG, JPEG, WebP or GIF image. HEIC photos aren't supported yet.`,
+          );
+        if ((asset.size || 0) > (image ? IMAGE_UPLOAD_BYTES : 25 * 1024 * 1024))
+          throw new Error(
+            `${asset.name}: choose ${image ? "an image smaller than 10" : "a statement smaller than 25"} MB.`,
+          );
+      }
       const target =
         id || (await api("/conversations", { method: "POST", body: {} })).id;
       if (!id) setId(target);
-      const picked = await DocumentPicker.getDocumentAsync({
-        type: ["application/pdf", "text/csv", "text/plain"],
-        copyToCacheDirectory: true,
-        multiple: false,
-      });
-      if (picked.canceled) return;
-      const asset = picked.assets[0];
-      if ((asset.size || 0) > 25 * 1024 * 1024)
-        throw new Error("Choose a statement smaller than 25 MB.");
-      const form = new FormData();
-      form.append("conversationId", target);
-      if (Platform.OS === "web") {
-        const blob = await fetch(asset.uri).then((r) => r.blob());
-        form.append("file", blob, asset.name);
-      } else
-        form.append("file", {
-          uri: asset.uri,
-          name: asset.name,
-          type: asset.mimeType || "application/octet-stream",
-        } as any);
-      const result = await api("/files", { method: "POST", body: form });
-      setFiles((prev) => [
-        ...prev.filter((f) => f.attachmentId !== result.attachmentId),
-        result,
-      ]);
+      for (const asset of assets) {
+        const form = new FormData();
+        form.append("conversationId", target);
+        if (Platform.OS === "web") {
+          const blob = await fetch(asset.uri).then((r) => r.blob());
+          form.append("file", blob, asset.name);
+        } else
+          form.append("file", {
+            uri: asset.uri,
+            name: asset.name,
+            type: asset.mimeType || "application/octet-stream",
+          } as any);
+        const result = await api("/files", { method: "POST", body: form });
+        setFiles((prev) => [
+          ...prev.filter((f) => f.attachmentId !== result.attachmentId),
+          {
+            ...result,
+            preview: result.kind === "image" ? asset.uri : undefined,
+          },
+        ]);
+        sendKey.current = null;
+      }
     });
   }
+  const attachFile = () =>
+    uploadAssets(async () => {
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: [
+          "application/pdf",
+          "text/csv",
+          "text/plain",
+          ...IMAGE_UPLOAD_TYPES,
+        ],
+        copyToCacheDirectory: true,
+        multiple: true,
+      });
+      return picked.canceled ? null : picked.assets;
+    });
+  const attachPhotos = () =>
+    uploadAssets(async () => {
+      const picked = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsMultipleSelection: true,
+        selectionLimit: Math.max(5 - files.length, 1),
+        quality: 1,
+      });
+      if (picked.canceled) return null;
+      return picked.assets.map((a, i) => ({
+        uri: a.uri,
+        name:
+          a.fileName || `photo-${i + 1}.${a.mimeType?.split("/")[1] || "jpg"}`,
+        mimeType: a.mimeType,
+        size: a.fileSize,
+      }));
+    });
   function renderBlock(block: Block, index: number) {
     if (block.type === "review")
       return (
@@ -192,7 +244,9 @@ export function ChatConversationScreen({ route, navigation }: any) {
         </Txt>
       );
     if (block.type === "attachment")
-      return (
+      return block.mediaType === "image" ? (
+        <AttachedImage key={index} id={block.id} filename={block.filename} />
+      ) : (
         <Txt key={index} muted size={12}>
           Statement: {block.filename}
         </Txt>
@@ -408,24 +462,66 @@ export function ChatConversationScreen({ route, navigation }: any) {
           </Txt>
         )}
         <Txt muted size={12}>
-          Statements expire after 7 days unless you approve retaining them as
-          parser fixtures.
+          Attach statements, or screenshots for Fortuna to read. Attachments
+          expire after 7 days.
         </Txt>
-        {files.map((file) => (
-          <View key={file.attachmentId} style={{ gap: 4 }}>
-            <Txt numberOfLines={1}>{file.filename}</Txt>
-            <Button
-              title="Remove attachment"
-              secondary
-              onPress={() => {
-                setFiles((prev) =>
-                  prev.filter((f) => f.attachmentId !== file.attachmentId),
-                );
-                sendKey.current = null;
-              }}
-            />
+        {files.some((f) => f.preview) && (
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            {files
+              .filter((f) => f.preview)
+              .map((file) => (
+                <View key={file.attachmentId}>
+                  <Image
+                    accessibilityLabel={file.filename}
+                    source={{ uri: file.preview }}
+                    style={{ width: 64, height: 64, borderRadius: 10 }}
+                  />
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remove ${file.filename}`}
+                    onPress={() => {
+                      setFiles((prev) =>
+                        prev.filter(
+                          (f) => f.attachmentId !== file.attachmentId,
+                        ),
+                      );
+                      sendKey.current = null;
+                    }}
+                    style={{
+                      position: "absolute",
+                      top: -6,
+                      right: -6,
+                      backgroundColor: colors.card,
+                      borderRadius: 12,
+                    }}
+                  >
+                    <Ionicons
+                      name="close-circle"
+                      size={22}
+                      color={colors.text}
+                    />
+                  </Pressable>
+                </View>
+              ))}
           </View>
-        ))}
+        )}
+        {files
+          .filter((f) => !f.preview)
+          .map((file) => (
+            <View key={file.attachmentId} style={{ gap: 4 }}>
+              <Txt numberOfLines={1}>{file.filename}</Txt>
+              <Button
+                title="Remove attachment"
+                secondary
+                onPress={() => {
+                  setFiles((prev) =>
+                    prev.filter((f) => f.attachmentId !== file.attachmentId),
+                  );
+                  sendKey.current = null;
+                }}
+              />
+            </View>
+          ))}
         <Input
           accessibilityLabel="Message"
           editable={!busy}
@@ -442,10 +538,18 @@ export function ChatConversationScreen({ route, navigation }: any) {
         <View style={{ flexDirection: "row", gap: 10 }}>
           <View style={{ flex: 1 }}>
             <Button
-              title="Attach statement"
+              title="Photos"
               secondary
               disabled={busy || files.length >= 5 || generatingRun(run)}
-              onPress={() => void attach()}
+              onPress={() => void attachPhotos()}
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Button
+              title="Files"
+              secondary
+              disabled={busy || files.length >= 5 || generatingRun(run)}
+              onPress={() => void attachFile()}
             />
           </View>
           <View style={{ flex: 1 }}>

@@ -1,3 +1,4 @@
+import { IMAGE_NOT_STATEMENT, isImageType } from "../media";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { ChatContext, ChatError, idSchema } from "../contracts";
@@ -171,8 +172,11 @@ export async function executeWorkflowTool(
         userId: context.userId,
         conversationId: context.conversationId,
       },
+      include: { statementFile: { select: { contentType: true } } },
     });
     if (!file) throw new ChatError(404, "Attachment not found");
+    if (isImageType(file.statementFile.contentType))
+      throw new ChatError(400, IMAGE_NOT_STATEMENT);
     return {
       statementFileId: file.statementFileId,
       ...(await factory.inspectStatement(context.userId, file.statementFileId)),

@@ -1,4 +1,6 @@
 import { compactBlocks } from "./tools/components";
+import { loadModelImages } from "./media";
+import { ProviderMessage } from "./providers/provider";
 import { safeChatError } from "./errors";
 import { PrismaClient } from "@prisma/client";
 import { withDatabase } from "../../lib/database-context";
@@ -47,7 +49,8 @@ export async function executeRun(
       },
     });
     if (!conversation) throw new ChatError(404, "Conversation not found");
-    const messages = conversation.messages.reverse().map((m) => ({
+    const history = conversation.messages.reverse();
+    const messages: ProviderMessage[] = history.map((m) => ({
       role: m.role as "user" | "assistant",
       content: JSON.stringify(compactBlocks(m.blocks)),
     }));
@@ -56,6 +59,13 @@ export async function executeRun(
         400,
         "This conversation is too long. Start a new conversation.",
       );
+    const images = await loadModelImages(db, run.userId, history);
+    history.forEach((m, i) => {
+      const attached = (Array.isArray(m.blocks) ? m.blocks : [])
+        .map((b: any) => b?.type === "attachment" && images.get(b.id))
+        .filter(Boolean) as NonNullable<ProviderMessage["images"]>;
+      if (attached.length) messages[i].images = attached;
+    });
     if (run.attempts > 1)
       await repo.appendEvent(run, {
         type: "reset",

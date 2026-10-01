@@ -21,6 +21,8 @@ export const CHAT_LIMITS = {
   messageCharacters: 16000,
   attachmentCount: 5,
   fileBytes: 25 * 1024 * 1024,
+  imageBytes: 10 * 1024 * 1024,
+  modelImages: 8,
   bulkTargets: 100,
 } as const;
 export const idSchema = z

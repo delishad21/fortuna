@@ -1,3 +1,4 @@
+import { IMAGE_NOT_STATEMENT, isImageType } from "../media";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { withDatabase } from "../../../lib/database-context";
@@ -187,6 +188,8 @@ export class ImportTools {
         404,
         "Statement expired or missing. Upload it again.",
       );
+    if (isImageType(attachment.statementFile.contentType))
+      throw new ChatError(400, IMAGE_NOT_STATEMENT);
     const draft = await workflow.createDraft(
       context.userId,
       {

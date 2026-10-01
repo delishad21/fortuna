@@ -4,6 +4,7 @@ import {
   ProviderEvent,
   ToolDefinition,
   CHAT_INSTRUCTIONS,
+  imageLabel,
 } from "./provider";
 import { CodexRuntime } from "./codex-runtime";
 import { CHAT_LIMITS, toolResultForModel } from "../contracts";
@@ -158,9 +159,17 @@ export class CodexProvider implements ChatProvider {
         input: [
           {
             type: "text",
-            text: JSON.stringify(input.messages),
+            text: JSON.stringify(
+              input.messages.map(({ images: _images, ...m }) => m),
+            ),
             text_elements: [],
           },
+          ...input.messages
+            .flatMap((m) => m.images || [])
+            .flatMap((image) => [
+              { type: "text", text: imageLabel(image), text_elements: [] },
+              { type: "image", url: image.dataUrl },
+            ]),
         ],
       });
       turnId = turn.turn.id;
