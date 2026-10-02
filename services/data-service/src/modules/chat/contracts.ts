@@ -75,6 +75,10 @@ export type ResultBlock =
     }
   | { type: "data"; title: string; data: unknown }
   | {
+      type: "activity";
+      steps: Array<{ name: string; ok: boolean }>;
+    }
+  | {
       type: "memory";
       id: string;
       content: string;

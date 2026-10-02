@@ -24,6 +24,7 @@ import {
   PendingAttachment,
   IMAGE_UPLOAD_TYPES,
   IMAGE_UPLOAD_BYTES,
+  stepLabel,
 } from "./api";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { ChatReviewCards } from "./ReviewCards";
@@ -249,6 +250,13 @@ export function ChatConversationScreen({ route, navigation }: any) {
       ) : (
         <Txt key={index} muted size={12}>
           Statement: {block.filename}
+        </Txt>
+      );
+    if (block.type === "activity")
+      return (
+        <Txt key={index} muted size={12}>
+          {block.steps.length} {block.steps.length === 1 ? "step" : "steps"}:{" "}
+          {block.steps.map((s) => stepLabel(s.name)).join(" · ")}
         </Txt>
       );
     if (block.type === "memory")

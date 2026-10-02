@@ -3,13 +3,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Paperclip,
-  Send,
+  ArrowUp,
+  Square,
+  FileText,
+  Upload,
   Plus,
   Settings2,
   PanelLeft,
   X,
   Trash2,
-  User,
   Bookmark,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -33,6 +35,8 @@ import { TransactionReviewEditor } from "./TransactionReviewEditor";
 import { ActionPreview } from "./ActionPreview";
 import { ChatTransactions, asTransactions } from "./ChatTransactions";
 import { ChatComponent } from "./ChatComponents";
+import { Markdown } from "./Markdown";
+import { ActivitySteps } from "./ActivitySteps";
 /** A sent image, fetched through the owner-scoped chat proxy. */
 function AttachedImage({ id, filename }: { id: string; filename: string }) {
   const [failed, setFailed] = useState(false);
@@ -77,7 +81,10 @@ export function ChatClient() {
     sendKey = useRef<string | null>(null),
     bottom = useRef<HTMLDivElement>(null),
     fileInput = useRef<HTMLInputElement>(null),
-    inFlight = useRef(false);
+    inFlight = useRef(false),
+    keepComposer = useRef(false),
+    dragDepth = useRef(0);
+  const [dragging, setDragging] = useState(false);
   selected.current = id;
   streamRef.current = stream;
   const refreshList = useCallback(
@@ -106,9 +113,12 @@ export function ChatClient() {
     setConversation(null);
     setStream(emptyStream());
     setError("");
-    setFiles([]);
-    setText("");
-    sendKey.current = null;
+    if (keepComposer.current) keepComposer.current = false;
+    else {
+      setFiles([]);
+      setText("");
+      sendKey.current = null;
+    }
     void refresh().catch((e) => setError(e.message));
   }, [id, refresh]);
   const run = conversation?.runs[0];
@@ -182,11 +192,24 @@ export function ChatClient() {
       await refreshList();
     });
   }
+  /** The open conversation, or a new one when typing or dropping files on the landing screen. */
+  async function ensureConversation() {
+    if (id) return id;
+    const created = await chatApi<Conversation>("/conversations", {
+      method: "POST",
+      body: {},
+    });
+    keepComposer.current = true;
+    setId(created.id);
+    void refreshList();
+    return created.id;
+  }
   async function send() {
-    if (!id || (!text.trim() && !files.length) || generatingRun(run)) return;
+    if ((!text.trim() && !files.length) || generatingRun(run)) return;
     await action(async () => {
+      const target = await ensureConversation();
       sendKey.current ||= crypto.randomUUID();
-      await chatApi(`/conversations/${id}/messages`, {
+      await chatApi(`/conversations/${target}/messages`, {
         method: "POST",
         body: {
           text,
@@ -204,7 +227,7 @@ export function ChatClient() {
     });
   }
   async function upload(chosen: File[]) {
-    if (!id || !chosen.length) return;
+    if (!chosen.length) return;
     const room = 5 - files.length;
     if (chosen.length > room) {
       setError(`You can attach ${room} more file${room === 1 ? "" : "s"}.`);
@@ -226,9 +249,10 @@ export function ChatClient() {
       }
     }
     await action(async () => {
+      const target = await ensureConversation();
       for (const file of chosen) {
         const form = new FormData();
-        form.append("conversationId", id);
+        form.append("conversationId", target);
         form.append("file", file);
         const result = await chatApi("/files", { method: "POST", body: form });
         const preview =
@@ -248,7 +272,7 @@ export function ChatClient() {
     );
     sendKey.current = null;
   }
-  function block(value: Block, index: number) {
+  function block(value: Block, index: number, role = "assistant") {
     if (value.type === "review")
       return (
         <TransactionReviewEditor
@@ -258,7 +282,9 @@ export function ChatClient() {
         />
       );
     if (value.type === "text")
-      return (
+      return role === "assistant" ? (
+        <Markdown key={index} text={value.text} />
+      ) : (
         <p
           key={index}
           className="whitespace-pre-wrap break-words leading-relaxed"
@@ -266,6 +292,8 @@ export function ChatClient() {
           {value.text}
         </p>
       );
+    if (value.type === "activity")
+      return <ActivitySteps key={index} steps={value.steps} />;
     if (value.type === "attachment")
       return value.mediaType === "image" ? (
         <AttachedImage key={index} id={value.id} filename={value.filename} />
@@ -401,6 +429,186 @@ export function ChatClient() {
       </div>
     );
   }
+  const generating = generatingRun(run);
+  const fileTypes = [".pdf", ".csv", ".txt", ...IMAGE_UPLOAD_TYPES].join(",");
+  const dropProps = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!e.dataTransfer.types.includes("Files")) return;
+      e.preventDefault();
+      dragDepth.current++;
+      setDragging(true);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (e.dataTransfer.types.includes("Files")) e.preventDefault();
+    },
+    onDragLeave: () => {
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (!dragDepth.current) setDragging(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      dragDepth.current = 0;
+      setDragging(false);
+      if (!e.dataTransfer.files.length) return;
+      e.preventDefault();
+      void upload(Array.from(e.dataTransfer.files));
+    },
+  };
+  const composer = (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        void send();
+      }}
+      className="mx-auto w-full max-w-3xl px-4 pb-4 md:px-6"
+    >
+      <div className="rounded-xl border border-stroke bg-white shadow-sm transition-colors focus-within:border-primary dark:border-stroke-dark dark:bg-dark-2">
+        {files.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-3 pt-3">
+            {files.some((f) => f.preview) && (
+              <ul className="flex flex-wrap gap-2" aria-label="Attached images">
+                {files
+                  .filter((f) => f.preview)
+                  .map((file) => (
+                    <li key={file.attachmentId} className="relative">
+                      {/* eslint-disable-next-line @next/next/no-img-element -- local blob preview */}
+                      <img
+                        src={file.preview}
+                        alt={file.filename}
+                        className="h-14 w-14 rounded-lg border border-stroke object-cover dark:border-stroke-dark"
+                      />
+                      <button
+                        type="button"
+                        aria-label={`Remove ${file.filename}`}
+                        onClick={() => removeFile(file)}
+                        className="absolute -right-1.5 -top-1.5 rounded-full bg-dark p-0.5 text-white shadow"
+                      >
+                        <X size={12} />
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            )}
+            {files
+              .filter((f) => !f.preview)
+              .map((file) => (
+                <span
+                  key={file.attachmentId}
+                  className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-stroke bg-gray-1 py-1 pl-2 pr-1 text-xs dark:border-stroke-dark dark:bg-dark-3"
+                >
+                  <FileText size={13} aria-hidden />
+                  <span className="truncate">{file.filename}</span>
+                  <button
+                    type="button"
+                    aria-label="Remove attachment"
+                    title={`Remove ${file.filename}`}
+                    onClick={() => removeFile(file)}
+                    className="rounded p-0.5 hover:bg-gray-2 dark:hover:bg-dark-2"
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+          </div>
+        )}
+        <label className="sr-only" htmlFor="chat-message">
+          Message
+        </label>
+        <textarea
+          id="chat-message"
+          disabled={busy}
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            sendKey.current = null;
+          }}
+          onKeyDown={(e) => {
+            if (
+              e.key === "Enter" &&
+              !e.shiftKey &&
+              !e.nativeEvent.isComposing
+            ) {
+              e.preventDefault();
+              if (!generating) void send();
+            }
+          }}
+          onPaste={(e) => {
+            const pasted = Array.from(e.clipboardData.files);
+            if (!pasted.length) return;
+            e.preventDefault();
+            void upload(pasted);
+          }}
+          maxLength={16000}
+          rows={2}
+          placeholder={
+            id ? "Reply to Fortuna…" : "Ask Fortuna about your money…"
+          }
+          className="block max-h-60 min-h-[3rem] w-full resize-none bg-transparent px-4 pt-3 text-[15px] outline-none placeholder:text-dark-5 dark:placeholder:text-dark-6"
+        />
+        <div className="flex items-center gap-2 px-2 pb-2">
+          <input
+            ref={fileInput}
+            type="file"
+            accept={fileTypes}
+            multiple
+            aria-label="Attach files"
+            className="hidden"
+            onChange={(e) => {
+              void upload(Array.from(e.target.files || []));
+              e.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            aria-label="Attach file"
+            title="Attach statements, screenshots or photos"
+            disabled={busy || files.length >= 5 || generating}
+            onClick={() => fileInput.current?.click()}
+            className="rounded-lg p-2 text-dark-5 hover:bg-gray-2 hover:text-dark disabled:opacity-40 dark:text-dark-6 dark:hover:bg-dark-3 dark:hover:text-white"
+          >
+            <Paperclip size={18} />
+          </button>
+          <span className="hidden min-w-0 flex-1 truncate text-xs text-dark-5 dark:text-dark-6 sm:block">
+            Enter to send · Shift+Enter for a new line · Drop files to attach
+          </span>
+          <span className="flex-1 sm:hidden" />
+          {generating ? (
+            <button
+              type="button"
+              aria-label="Stop"
+              title="Stop"
+              disabled={busy}
+              onClick={() =>
+                void action(async () => {
+                  await chatApi(`/runs/${run!.id}/cancel`, {
+                    method: "POST",
+                    body: {},
+                  });
+                  await refresh();
+                })
+              }
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-dark text-white hover:opacity-90 dark:bg-white dark:text-dark"
+            >
+              <Square size={14} fill="currentColor" />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              aria-label="Send message"
+              title="Send message"
+              disabled={busy || (!text.trim() && !files.length)}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+            >
+              <ArrowUp size={18} />
+            </button>
+          )}
+        </div>
+      </div>
+      <p className="mt-1.5 px-1 text-center text-[11px] text-dark-5 dark:text-dark-6">
+        Fortuna only changes your records after you approve. Attachments expire
+        after 7 days.
+      </p>
+    </form>
+  );
   return (
     <div className="relative flex h-full min-h-0 text-dark dark:text-white">
       {historyOpen && (
@@ -408,19 +616,19 @@ export function ChatClient() {
           className="absolute inset-y-0 left-0 z-30 flex w-72 max-w-[85vw] flex-col border-r border-stroke bg-white shadow-lg dark:border-stroke-dark dark:bg-gray-dark lg:relative lg:shrink-0 lg:shadow-none"
           aria-label="Chat history"
         >
-          <div className="flex items-center justify-between p-4">
-            <h2 className="font-semibold">Conversations</h2>
+          <div className="flex items-center justify-between px-4 py-3">
+            <h2 className="text-sm font-semibold">Conversations</h2>
             <button
-              className="rounded-lg p-2 hover:bg-gray-2 dark:hover:bg-dark-3"
+              className="rounded-lg p-1.5 hover:bg-gray-2 dark:hover:bg-dark-3"
               aria-label="Close chat history"
               onClick={() => setHistoryOpen(false)}
             >
-              <X size={20} />
+              <X size={18} />
             </button>
           </div>
           <nav
             aria-label="Conversations"
-            className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3"
+            className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2"
           >
             {list.map((item) => conversationItem(item))}
             {!list.length && (
@@ -431,9 +639,9 @@ export function ChatClient() {
           </nav>
           <Link
             href="/settings?tab=ai"
-            className="m-3 flex items-center gap-2 rounded-lg border-t border-stroke p-3 text-sm dark:border-stroke-dark"
+            className="m-2 flex items-center gap-2 rounded-lg border-t border-stroke p-3 text-sm dark:border-stroke-dark"
           >
-            <Settings2 size={18} />
+            <Settings2 size={16} />
             AI connection
           </Link>
         </aside>
@@ -446,275 +654,180 @@ export function ChatClient() {
         />
       )}
       <section
-        className="flex min-h-0 min-w-0 flex-1 flex-col bg-white dark:bg-gray-dark"
+        className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-gray-1 dark:bg-[#020d1a]"
         aria-label="Conversation"
+        {...dropProps}
       >
-        <header className="flex shrink-0 items-center gap-3 border-b border-stroke px-4 py-3 dark:border-stroke-dark">
+        {dragging && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-2 z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/10 backdrop-blur-[1px]"
+          >
+            <p className="flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-primary shadow dark:bg-dark-2">
+              <Upload size={16} aria-hidden />
+              Drop files to attach
+            </p>
+          </div>
+        )}
+        <header className="flex shrink-0 items-center gap-2 border-b border-stroke bg-white px-3 py-2 dark:border-stroke-dark dark:bg-gray-dark">
           <button
             aria-label="Toggle chat history"
             aria-expanded={historyOpen}
             onClick={() => setHistoryOpen(!historyOpen)}
-            className="rounded-lg p-2 hover:bg-gray-2 dark:hover:bg-dark-3"
+            className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-gray-2 dark:hover:bg-dark-3"
           >
-            <PanelLeft size={20} />
+            <PanelLeft size={18} className="shrink-0" />
           </button>
           <h2 className="min-w-0 flex-1 truncate text-sm font-medium">
-            {conversation?.title || "Fortuna"}
+            {conversation?.title || "New conversation"}
           </h2>
           {id && (
             <Button
               variant="ghost"
+              size="sm"
               disabled={busy}
               onClick={() => void create()}
-              leftIcon={<Plus size={18} />}
+              leftIcon={<Plus size={16} />}
             >
               New chat
             </Button>
           )}
         </header>
-        {!id ? (
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto w-full max-w-2xl space-y-6 px-5 py-8 md:px-10">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-2xl font-semibold">Conversations</h2>
-                <Button
-                  disabled={busy}
-                  onClick={() => void create()}
-                  leftIcon={<Plus size={18} />}
-                >
-                  New chat
-                </Button>
-              </div>
-              {list.length ? (
-                <nav aria-label="Recent conversations" className="space-y-1">
-                  {list.map((item) => conversationItem(item))}
-                </nav>
-              ) : (
-                <p className="text-dark-5 dark:text-dark-6">
-                  Ask about your spending, review a statement, or prepare
-                  changes to your transactions. You review consequential changes
-                  before they’re applied.
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {!id ? (
+            <div className="mx-auto w-full max-w-3xl space-y-8 px-4 pb-6 pt-12 md:px-6">
+              <div className="flex flex-col items-center gap-3 text-center">
+                <BrandMark className="h-12 w-12" />
+                <p className="text-xl font-semibold">
+                  What would you like to understand?
                 </p>
-              )}
+                <p className="max-w-md text-sm text-dark-5 dark:text-dark-6">
+                  Ask about your spending, drop in a statement or screenshot, or
+                  prepare changes to your transactions.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-sm font-semibold text-dark-5 dark:text-dark-6">
+                    Conversations
+                  </h2>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => void create()}
+                    leftIcon={<Plus size={16} />}
+                  >
+                    New chat
+                  </Button>
+                </div>
+                {list.length ? (
+                  <nav
+                    aria-label="Recent conversations"
+                    className="divide-y divide-stroke overflow-hidden rounded-xl border border-stroke bg-white dark:divide-stroke-dark dark:border-stroke-dark dark:bg-gray-dark"
+                  >
+                    {list.map((item) => conversationItem(item))}
+                  </nav>
+                ) : (
+                  <p className="text-sm text-dark-5 dark:text-dark-6">
+                    Your conversations will appear here.
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
-        ) : (
-          <>
-            <div className="min-h-0 flex-1 space-y-8 overflow-y-auto px-5 py-8 md:px-10">
+          ) : (
+            <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-6 md:px-6">
               {conversation?.messages.length === 0 && (
-                <p className="text-dark-5 dark:text-dark-6">
-                  Try “How much did I spend on food last month?” or attach a
+                <p className="text-center text-sm text-dark-5 dark:text-dark-6">
+                  Try “How much did I spend on food last month?” or drop in a
                   statement to begin.
                 </p>
               )}
-              {conversation?.messages.map((message) => (
-                <article
-                  key={message.id}
-                  className={`space-y-3 ${message.role === "user" ? "ml-auto max-w-[90%] rounded-2xl bg-gray-2 p-4 dark:bg-dark-3" : "max-w-full"}`}
-                >
-                  <div className="flex items-center gap-2 text-sm font-semibold">
-                    {message.role === "user" ? (
-                      <span className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-3 dark:bg-dark-2">
-                        <User size={18} />
-                      </span>
-                    ) : (
-                      <BrandMark className="h-8 w-8" />
-                    )}
-                    {message.role === "user" ? "You" : "Fortuna"}
-                  </div>
-                  {message.blocks.map(block)}
-                </article>
-              ))}
+              {conversation?.messages.map((message) =>
+                message.role === "user" ? (
+                  <article
+                    key={message.id}
+                    aria-label="Your message"
+                    className="space-y-2 rounded-xl border border-stroke bg-white px-4 py-3 dark:border-stroke-dark dark:bg-dark-2"
+                  >
+                    {message.blocks.map((b, i) => block(b, i, "user"))}
+                  </article>
+                ) : (
+                  <article
+                    key={message.id}
+                    aria-label="Fortuna"
+                    className="flex gap-3"
+                  >
+                    <BrandMark className="mt-0.5 h-6 w-6 shrink-0" />
+                    <div className="min-w-0 flex-1 space-y-3">
+                      {message.blocks.map((b, i) => block(b, i, "assistant"))}
+                    </div>
+                  </article>
+                ),
+              )}
               {run && ["queued", "running"].includes(run.status) && (
-                <article className="space-y-3" aria-label="Assistant response">
-                  <p role="status" className="text-sm capitalize text-primary">
-                    {stream.activity}…
-                  </p>
-                  <p className="whitespace-pre-wrap">{stream.text}</p>
-                  {stream.blocks
-                    .filter(
-                      (b) =>
-                        b.type === "link" ||
-                        b.type === "component" ||
-                        b.type === "memory" ||
-                        (b.type === "data" && asTransactions(b.data)),
-                    )
-                    .map(block)}
+                <article className="flex gap-3" aria-label="Assistant response">
+                  <BrandMark className="mt-0.5 h-6 w-6 shrink-0 animate-pulse" />
+                  <div className="min-w-0 flex-1 space-y-3">
+                    {stream.steps.length > 0 ? (
+                      <ActivitySteps steps={stream.steps} live />
+                    ) : (
+                      <p
+                        role="status"
+                        className="text-sm capitalize text-dark-5 dark:text-dark-6"
+                      >
+                        {stream.activity}…
+                      </p>
+                    )}
+                    {stream.text && <Markdown text={stream.text} />}
+                    {stream.blocks
+                      .filter(
+                        (b) =>
+                          b.type === "link" ||
+                          b.type === "component" ||
+                          b.type === "memory" ||
+                          (b.type === "data" && asTransactions(b.data)),
+                      )
+                      .map((b, i) => block(b, i))}
+                  </div>
                 </article>
               )}
               {run?.status === "awaiting_confirmation" && (
-                <p role="status" className="text-sm">
+                <p
+                  role="status"
+                  className="text-center text-xs text-dark-5 dark:text-dark-6"
+                >
                   Review the pending changes, or send a new message to move on.
                 </p>
               )}
               {run?.status === "failed" && (
-                <p role="alert" className="text-red">
+                <p
+                  role="alert"
+                  className="rounded-lg bg-red/10 px-3 py-2 text-sm text-red"
+                >
                   {run.error ||
                     "The assistant could not finish. You can try again."}
                 </p>
               )}
               <div ref={bottom} />
             </div>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void send();
-              }}
-              onDragOver={(e) => {
-                if (e.dataTransfer.types.includes("Files")) e.preventDefault();
-              }}
-              onDrop={(e) => {
-                if (!e.dataTransfer.files.length) return;
-                e.preventDefault();
-                void upload(Array.from(e.dataTransfer.files));
-              }}
-              className="shrink-0 space-y-3 border-t border-stroke px-5 py-4 dark:border-stroke-dark md:px-10"
-            >
-              <p className="text-xs text-dark-5 dark:text-dark-6">
-                Attach statements, or screenshots and photos for Fortuna to
-                read. Attachments expire after 7 days unless you approve
-                retaining a statement as a parser fixture.
+          )}
+        </div>
+        {(error || notice) && (
+          <div className="mx-auto w-full max-w-3xl px-4 md:px-6">
+            {error && (
+              <p role="alert" className="pb-2 text-sm text-red">
+                {error}
               </p>
-              {files.some((f) => f.preview) && (
-                <ul
-                  className="flex flex-wrap gap-2"
-                  aria-label="Attached images"
-                >
-                  {files
-                    .filter((f) => f.preview)
-                    .map((file) => (
-                      <li key={file.attachmentId} className="relative">
-                        {/* eslint-disable-next-line @next/next/no-img-element -- local blob preview */}
-                        <img
-                          src={file.preview}
-                          alt={file.filename}
-                          className="h-20 w-20 rounded-lg border border-stroke object-cover dark:border-stroke-dark"
-                        />
-                        <button
-                          type="button"
-                          aria-label={`Remove ${file.filename}`}
-                          onClick={() => removeFile(file)}
-                          className="absolute -right-2 -top-2 rounded-full bg-dark p-1 text-white shadow"
-                        >
-                          <X size={14} />
-                        </button>
-                      </li>
-                    ))}
-                </ul>
-              )}
-              {files
-                .filter((f) => !f.preview)
-                .map((file) => (
-                  <div
-                    key={file.attachmentId}
-                    className="flex items-center justify-between gap-2 text-sm"
-                  >
-                    <span className="truncate">{file.filename}</span>
-                    <button
-                      type="button"
-                      onClick={() => removeFile(file)}
-                      className="p-2 text-primary"
-                    >
-                      Remove attachment
-                    </button>
-                  </div>
-                ))}
-              <label className="sr-only" htmlFor="chat-message">
-                Message
-              </label>
-              <textarea
-                id="chat-message"
-                disabled={busy}
-                value={text}
-                onChange={(e) => {
-                  setText(e.target.value);
-                  sendKey.current = null;
-                }}
-                onKeyDown={(e) => {
-                  if (
-                    e.key === "Enter" &&
-                    !e.shiftKey &&
-                    !e.nativeEvent.isComposing
-                  ) {
-                    e.preventDefault();
-                    if (!generatingRun(run)) void send();
-                  }
-                }}
-                onPaste={(e) => {
-                  const pasted = Array.from(e.clipboardData.files);
-                  if (!pasted.length) return;
-                  e.preventDefault();
-                  void upload(pasted);
-                }}
-                maxLength={16000}
-                rows={2}
-                placeholder="Ask Fortuna…"
-                className="w-full resize-none rounded-lg border border-stroke bg-transparent p-3 focus:outline-primary dark:border-stroke-dark"
-              />
-              <div className="flex items-center justify-between gap-3">
-                <input
-                  ref={fileInput}
-                  type="file"
-                  accept={[".pdf", ".csv", ".txt", ...IMAGE_UPLOAD_TYPES].join(
-                    ",",
-                  )}
-                  multiple
-                  aria-label="Attach files"
-                  className="hidden"
-                  onChange={(e) => {
-                    void upload(Array.from(e.target.files || []));
-                    e.target.value = "";
-                  }}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={busy || files.length >= 5 || generatingRun(run)}
-                  leftIcon={<Paperclip size={16} />}
-                  onClick={() => fileInput.current?.click()}
-                >
-                  Attach file
-                </Button>
-                {generatingRun(run) ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    disabled={busy}
-                    onClick={() =>
-                      void action(async () => {
-                        await chatApi(`/runs/${run!.id}/cancel`, {
-                          method: "POST",
-                          body: {},
-                        });
-                        await refresh();
-                      })
-                    }
-                  >
-                    Stop
-                  </Button>
-                ) : (
-                  <Button
-                    type="submit"
-                    disabled={busy || (!text.trim() && !files.length)}
-                    leftIcon={<Send size={16} />}
-                  >
-                    Send message
-                  </Button>
-                )}
-              </div>
-            </form>
-          </>
+            )}
+            {notice && (
+              <p role="status" className="pb-2 text-sm">
+                {notice}
+              </p>
+            )}
+          </div>
         )}
-        {error && (
-          <p role="alert" className="px-5 pb-4 text-red">
-            {error}
-          </p>
-        )}
-        {notice && (
-          <p role="status" className="px-5 pb-4">
-            {notice}
-          </p>
-        )}
+        <div className="shrink-0 pt-2">{composer}</div>
       </section>
       {proposal && (
         <ActionPreview

@@ -15,6 +15,7 @@ export type Block =
       label: string;
     }
   | { type: "data"; title: string; data: any }
+  | { type: "activity"; steps: Array<{ name: string; ok: boolean }> }
   | {
       type: "memory";
       id: string;
@@ -223,13 +224,40 @@ export type Stream = {
   cursor: number;
   text: string;
   activity: string;
+  /** Tool steps so far in this run, in order. */
+  steps: Array<{ name: string; done: boolean }>;
   blocks: Block[];
   pending: ChatEvent[];
 };
+/** Plain-language names for the assistant's tool steps. */
+export const STEP_LABELS: Record<string, string> = {
+  get_context: "Loaded accounts and categories",
+  spending_summary: "Calculated totals",
+  find_transactions: "Searched transactions",
+  show_component: "Prepared a view",
+  propose_transaction_edits: "Prepared changes for approval",
+  propose_action: "Prepared a change for approval",
+  request_transaction_review: "Opened a review",
+  read_attachment: "Read an attachment",
+  stage_rows: "Staged transactions",
+  inspect_statement: "Read a statement",
+  stage_statement: "Staged a statement",
+  list_parsers: "Checked available parsers",
+  list_staged_imports: "Checked staged imports",
+  inspect_staged_import: "Inspected a staged import",
+  assign_draft_account: "Assigned an account",
+  suggest_draft_labels: "Suggested labels",
+  remember: "Saved a note",
+  forget: "Removed a note",
+};
+export const stepLabel = (name: string) =>
+  STEP_LABELS[name] ||
+  name.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 export const emptyStream = (): Stream => ({
   cursor: 0,
   text: "",
   activity: "Waiting for the assistant",
+  steps: [],
   blocks: [],
   pending: [],
 });
@@ -240,6 +268,7 @@ export function mergeEvents(state: Stream, events: ChatEvent[]): Stream {
       .filter((e) => e.sequence > state.cursor)
       .sort((a, b) => a.sequence - b.sequence),
     blocks: [...state.blocks],
+    steps: [...state.steps],
   };
   while (next.pending.length) {
     const event = next.pending[0];
@@ -254,11 +283,20 @@ export function mergeEvents(state: Stream, events: ChatEvent[]): Stream {
     if (p.type === "reset") {
       next.text = "";
       next.blocks = [];
+      next.steps = [];
     }
     if (p.type === "text_delta") next.text += p.text || "";
-    if (p.type === "tool_call")
+    if (p.type === "tool_call") {
       next.activity = (p.name || "Working").replace(/_/g, " ");
-    if (p.type === "tool_result") next.blocks.push(...(p.result?.blocks || []));
+      next.steps.push({ name: p.name || "working", done: false });
+    }
+    if (p.type === "tool_result") {
+      next.blocks.push(...(p.result?.blocks || []));
+      const open =
+        next.steps.find((s) => !s.done && s.name === p.name) ||
+        next.steps.find((s) => !s.done);
+      if (open) open.done = true;
+    }
   }
   return next;
 }

@@ -229,7 +229,13 @@ export async function executeRun(
         USER_VISIBLE_BLOCKS.has(b.type),
       ),
     );
+    // The steps the assistant took, shown as a compact activity row above its reply.
+    const steps = outcomes.map((v) => {
+      const first = (v.result as unknown as ToolResult).blocks[0];
+      return { name: v.name, ok: first?.type !== "text" };
+    });
     const blocks: any[] = [
+      ...(steps.length ? [{ type: "activity", steps }] : []),
       { type: "text", text: output },
       ...dropRepeatedLists(shown, await coveredTransactionIds(db, run.id)),
     ];
