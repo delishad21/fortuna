@@ -1527,6 +1527,20 @@ test("staged imports open beside the chat and return to it", async ({ page, requ
   await expect(panel.getByText("PAYNOW JS FNB GRO BM").first()).toBeVisible({ timeout: 15000 });
   await expect(page).toHaveURL(/\/chat\?conversation=c1/);
   await page.screenshot({ path: "/tmp/fortuna-staged-panel.png" });
+  // The category picker opens in place inside the panel (fixed-position menus must not be offset).
+  const cell = panel.getByText("Uncategorized").first();
+  await cell.click();
+  const search = page.getByLabel("Search categories");
+  await expect(search).toBeVisible();
+  const cellBox = (await cell.boundingBox())!, menuBox = (await search.boundingBox())!;
+  expect(Math.abs(menuBox.x - cellBox.x)).toBeLessThan(80);
+  expect(menuBox.y).toBeGreaterThan(cellBox.y);
+  expect(menuBox.y - cellBox.y).toBeLessThan(120);
+  await page.screenshot({ path: "/tmp/fortuna-staged-panel-category.png" });
+  // Escape in the picker's search box closes the picker, not the panel.
+  await search.press("Escape");
+  await expect(panel).toBeVisible();
+  await panel.getByRole("heading", { name: "PayLah Sep 2026" }).click();
   const full = panel.getByRole("link", { name: "Full page" });
   await expect(full).toHaveAttribute("href", new RegExp(`/imports/drafts/${draftId}\\?returnTo=%2Fchat%3Fconversation%3Dc1`));
   await page.keyboard.press("Escape");

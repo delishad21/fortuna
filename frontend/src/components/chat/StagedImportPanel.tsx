@@ -19,7 +19,10 @@ export function StagedImportPanel({
 }) {
   const [draft, setDraft] = useState<Record<string, any> | null>(null),
     [error, setError] = useState(""),
-    [shown, setShown] = useState(false);
+    [shown, setShown] = useState(false),
+    // Once slid in, drop the transform: a transformed ancestor becomes the containing block
+    // for position:fixed menus (like the category picker) and pushes them out of view.
+    [settled, setSettled] = useState(false);
   const panel = useRef<HTMLElement>(null);
   // The chat re-renders while polling; keep focus and listeners stable across those renders.
   const close = useRef(onClose);
@@ -41,7 +44,14 @@ export function StagedImportPanel({
     const frame = requestAnimationFrame(() => setShown(true));
     const previous = document.activeElement as HTMLElement | null;
     panel.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close.current();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      // Escape in a field or open picker belongs to that control, not the panel.
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable=true]"))
+        return;
+      close.current();
+    };
     window.addEventListener("keydown", onKey);
     return () => {
       cancelAnimationFrame(frame);
@@ -57,7 +67,8 @@ export function StagedImportPanel({
         role="dialog"
         aria-modal="true"
         aria-label="Staged import"
-        className={`flex h-full w-full flex-col bg-white outline-none transition-transform duration-200 ease-out dark:bg-gray-dark ${shown ? "translate-x-0" : "translate-x-full"}`}
+        onTransitionEnd={() => shown && setSettled(true)}
+        className={`flex h-full w-full flex-col bg-white outline-none transition-transform duration-200 ease-out dark:bg-gray-dark ${settled ? "" : shown ? "translate-x-0" : "translate-x-full"}`}
       >
         <header className="flex shrink-0 items-center gap-3 border-b border-stroke px-4 py-3 dark:border-stroke-dark">
           <h2 className="min-w-0 flex-1 truncate font-semibold">
