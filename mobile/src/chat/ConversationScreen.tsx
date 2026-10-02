@@ -31,6 +31,7 @@ import { ChatReviewCards } from "./ReviewCards";
 import { ChatHistory } from "./History";
 import { Details, Expandable } from "./Details";
 import { ChatComponent } from "./Components";
+import { ActionCard } from "./ActionCard";
 import { AttachedImage } from "./AttachedImage";
 export function ChatConversationScreen({ route, navigation }: any) {
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -311,10 +312,17 @@ export function ChatConversationScreen({ route, navigation }: any) {
         </Txt>
       ) : null;
     return (
-      <Button
+      <ActionCard
         key={index}
-        title={block.label}
-        secondary
+        label={block.label}
+        kind={block.kind}
+        proposal={
+          block.kind === "proposal"
+            ? conversation?.runs
+                .flatMap((r) => r.proposals)
+                .find((p) => p.id === block.id)
+            : undefined
+        }
         onPress={() =>
           navigation.navigate(
             block.kind === "proposal"
@@ -508,10 +516,11 @@ export function ChatConversationScreen({ route, navigation }: any) {
               >
                 <Txt bold>Waiting for your approval</Txt>
                 {unlinked.map((p) => (
-                  <Button
+                  <ActionCard
                     key={p.id}
-                    secondary
-                    title={`Review: ${p.preview?.title || "proposed change"}`}
+                    kind={p.kind}
+                    proposal={p}
+                    label={`Review: ${p.preview?.title || "proposed change"}`}
                     onPress={() =>
                       navigation.navigate("ChatApproval", {
                         conversationId: id,

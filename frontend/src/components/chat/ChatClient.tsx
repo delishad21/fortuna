@@ -35,6 +35,7 @@ import {
 import { BrandMark } from "@/components/ui/Brand";
 import { TransactionReviewEditor } from "./TransactionReviewEditor";
 import { ActionPreview } from "./ActionPreview";
+import { LinkCard, ProposalCard } from "./ActionCard";
 import { ChatTransactions, asTransactions } from "./ChatTransactions";
 import { ChatComponent } from "./ChatComponents";
 import { Markdown } from "./Markdown";
@@ -369,33 +370,28 @@ export function ChatClient() {
           </Link>
         </p>
       );
-    if (value.kind === "proposal") {
-      const found = conversation?.runs
-        .flatMap((r) => r.proposals)
-        .find((p) => p.id === value.id);
+    if (value.kind === "proposal")
       return (
-        <Button
+        <ProposalCard
           key={index}
-          variant="secondary"
-          disabled={!found}
-          onClick={() => found && setProposal(found)}
-        >
-          {found?.status === "applied" ? "Changes applied" : value.label}
-        </Button>
+          label={value.label}
+          proposal={conversation?.runs
+            .flatMap((r) => r.proposals)
+            .find((p) => p.id === value.id)}
+          onOpen={setProposal}
+        />
       );
-    }
     return (
-      <Link
+      <LinkCard
         key={index}
+        kind={value.kind}
+        label={value.label}
         href={
           value.kind === "draft"
             ? `/imports/drafts/${encodeURIComponent(value.id)}`
             : `/chat/transactions/${encodeURIComponent(value.id)}`
         }
-        className="inline-block rounded-lg border border-primary px-4 py-2 text-primary"
-      >
-        {value.label}
-      </Link>
+      />
     );
   }
   function conversationItem(item: ConversationSummary) {
@@ -494,7 +490,7 @@ export function ChatClient() {
         e.preventDefault();
         void send();
       }}
-      className="mx-auto w-full max-w-3xl px-4 pb-4 md:px-6"
+      className="mx-auto w-full max-w-6xl px-4 pb-4 md:px-6"
     >
       <div className="rounded-xl border border-stroke bg-white shadow-sm transition-colors focus-within:border-primary dark:border-stroke-dark dark:bg-dark-2">
         {generating && (
@@ -760,7 +756,7 @@ export function ChatClient() {
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto">
           {!id ? (
-            <div className="mx-auto w-full max-w-3xl space-y-8 px-4 pb-6 pt-12 md:px-6">
+            <div className="mx-auto w-full max-w-6xl space-y-8 px-4 pb-6 pt-12 md:px-6">
               <div className="flex flex-col items-center gap-3 text-center">
                 <BrandMark className="h-12 w-12" />
                 <p className="text-xl font-semibold">
@@ -801,7 +797,7 @@ export function ChatClient() {
               </div>
             </div>
           ) : (
-            <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-6 md:px-6">
+            <div className="mx-auto w-full max-w-6xl space-y-6 px-4 py-6 md:px-6">
               {conversation?.messages.length === 0 && (
                 <p className="text-center text-sm text-dark-5 dark:text-dark-6">
                   Try “How much did I spend on food last month?” or drop in a
@@ -873,16 +869,14 @@ export function ChatClient() {
                   <p className="text-sm font-medium">
                     Waiting for your approval
                   </p>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="space-y-2">
                     {unlinked.map((p) => (
-                      <Button
+                      <ProposalCard
                         key={p.id}
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => setProposal(p)}
-                      >
-                        Review: {p.preview?.title || "proposed change"}
-                      </Button>
+                        proposal={p}
+                        label={`Review: ${p.preview?.title || "proposed change"}`}
+                        onOpen={setProposal}
+                      />
                     ))}
                   </div>
                 </section>
@@ -901,7 +895,7 @@ export function ChatClient() {
           )}
         </div>
         {(error || notice) && (
-          <div className="mx-auto w-full max-w-3xl px-4 md:px-6">
+          <div className="mx-auto w-full max-w-6xl px-4 md:px-6">
             {error && (
               <p role="alert" className="pb-2 text-sm text-red">
                 {error}

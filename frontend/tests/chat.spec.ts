@@ -883,6 +883,12 @@ test("approval previews are readable for bulk edits, reimbursements and rules", 
   await expect(page.getByText("Prepared the changes.")).toBeVisible();
   await expect(page.getByText("list parsers")).toHaveCount(0);
   await expect(page.getByText("generic_csv")).toHaveCount(0);
+  await page.getByRole("article", { name: "Fortuna" }).screenshot({ path: "/tmp/fortuna-action-cards.png" });
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.evaluate(() => document.documentElement.classList.add("dark"));
+  await page.waitForTimeout(400); // let colour transitions finish before capturing
+  await page.getByRole("article", { name: "Fortuna" }).screenshot({ path: "/tmp/fortuna-action-cards-dark.png" });
+  await page.evaluate(() => document.documentElement.classList.remove("dark"));
 
   await page
     .getByRole("button", { name: "Review 3 transaction changes" })

@@ -277,3 +277,109 @@ export function reviewSuggestionSummary(
       .map(([text]) => text),
   };
 }
+
+/** One-line description of what a proposal would do, for compact cards. */
+export function proposalSummary(proposal: {
+  kind: string;
+  status: string;
+  expiresAt?: string;
+  preview: any;
+}): { title: string; detail: string; color?: string | null; state: string } {
+  const preview = proposal.preview || {};
+  const expired =
+    proposal.status === "pending" &&
+    !!proposal.expiresAt &&
+    new Date(proposal.expiresAt) <= new Date();
+  const state = expired
+    ? "Expired"
+    : proposal.status === "pending"
+      ? "Needs approval"
+      : proposal.status === "applied"
+        ? "Applied"
+        : proposal.status === "rejected"
+          ? "Rejected"
+          : proposal.status === "stale"
+            ? "Out of date"
+            : proposal.status;
+  const title = preview.title || "Proposed change";
+  if (proposal.kind === "edit_transactions" || preview.changes) {
+    const changes = preview.changes || [];
+    const [first] = groupTransactionChanges(changes);
+    const effect = first?.diffs
+      .slice(0, 2)
+      .map((d) =>
+        d.key === "category"
+          ? `Category → ${categoryChip(d.after)?.name || "None"}`
+          : d.key === "linkage"
+            ? `Type → ${linkageView(d.after).label}`
+            : `${FIELD_LABELS[d.key] || d.key} edited`,
+      )
+      .join(" · ");
+    return {
+      title,
+      detail: `${changes.length} ${changes.length === 1 ? "transaction" : "transactions"}${effect ? ` · ${effect}` : ""}`,
+      state,
+    };
+  }
+  if (proposal.kind === "create_account")
+    return {
+      title,
+      detail: `${preview.after?.accountIdentifier || "New account"}`,
+      color: preview.after?.color,
+      state,
+    };
+  if (proposal.kind === "create_category")
+    return {
+      title,
+      detail: `${preview.after?.name || "New category"}`,
+      color: preview.after?.color,
+      state,
+    };
+  if (proposal.kind === "update_import_rule") {
+    const rule = ruleSummary({
+      ...(preview.before || {}),
+      ...(preview.after || {}),
+    });
+    return {
+      title,
+      detail: rule
+        ? `${rule.conditions[0]} → ${rule.effects[0]}`
+        : "Import rule",
+      state,
+    };
+  }
+  if (proposal.kind === "retain_fixture") {
+    const files = preview.details?.files || [];
+    return {
+      title,
+      detail:
+        files.length === 1 ? files[0].filename : `${files.length} statements`,
+      state,
+    };
+  }
+  if (proposal.kind === "commit_drafts") {
+    const drafts = preview.drafts || [];
+    const rows = drafts.reduce(
+      (n: number, d: any) =>
+        n + Number(d.summary?.selected ?? d.summary?.rows ?? 0),
+      0,
+    );
+    return {
+      title,
+      detail: `${rows} ${rows === 1 ? "row" : "rows"} from ${drafts.length} ${drafts.length === 1 ? "import" : "imports"}${preview.valid === false ? " · needs attention" : ""}`,
+      state,
+    };
+  }
+  const details = preview.details || {};
+  return {
+    title,
+    detail:
+      [
+        details.name || details.parserId,
+        details.version && `v${details.version}`,
+      ]
+        .filter(Boolean)
+        .join(" · ") || "Parser change",
+    state,
+  };
+}
