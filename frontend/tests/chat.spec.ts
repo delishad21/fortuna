@@ -1531,6 +1531,10 @@ test("staged imports open beside the chat and return to it", async ({ page, requ
   await expect(full).toHaveAttribute("href", new RegExp(`/imports/drafts/${draftId}\\?returnTo=%2Fchat%3Fconversation%3Dc1`));
   await page.keyboard.press("Escape");
   await expect(panel).toHaveCount(0);
+  await page.getByRole("button", { name: /Review staged import/ }).click();
+  await panel.getByRole("button", { name: "Back to chat" }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(page.getByText("Staged September.")).toBeVisible();
   // The full page links back to the chat it came from.
   await page.goto(`/imports/drafts/${draftId}?returnTo=${encodeURIComponent("/chat?conversation=c1")}`);
   await expect(page.getByRole("link", { name: "← Back to chat" })).toHaveAttribute("href", "/chat?conversation=c1");

@@ -1,11 +1,11 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ExternalLink, X } from "lucide-react";
+import { ArrowLeft, ExternalLink } from "lucide-react";
 import { getAgentDraft } from "@/app/actions/agentDrafts";
 import { AgentDraftReviewClient } from "@/components/import/AgentDraftReviewClient";
 
-/** A staged import opened beside the conversation, sliding in from the right. */
+/** A staged import opened over the whole chat area, sliding in from the right. */
 export function StagedImportPanel({
   draftId,
   returnTo,
@@ -50,19 +50,14 @@ export function StagedImportPanel({
     };
   }, []);
   return (
-    <div className="absolute inset-0 z-40 flex justify-end">
-      <button
-        aria-label="Close staged import"
-        onClick={onClose}
-        className={`absolute inset-0 bg-black/30 transition-opacity duration-200 ${shown ? "opacity-100" : "opacity-0"}`}
-      />
+    <div className="absolute inset-0 z-40 overflow-hidden">
       <section
         ref={panel}
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label="Staged import"
-        className={`relative flex h-full w-full max-w-[min(1100px,92%)] flex-col border-l border-stroke bg-white shadow-xl outline-none transition-transform duration-200 ease-out dark:border-stroke-dark dark:bg-gray-dark ${shown ? "translate-x-0" : "translate-x-full"}`}
+        className={`flex h-full w-full flex-col bg-white outline-none transition-transform duration-200 ease-out dark:bg-gray-dark ${shown ? "translate-x-0" : "translate-x-full"}`}
       >
         <header className="flex shrink-0 items-center gap-3 border-b border-stroke px-4 py-3 dark:border-stroke-dark">
           <h2 className="min-w-0 flex-1 truncate font-semibold">
@@ -77,10 +72,10 @@ export function StagedImportPanel({
           </Link>
           <button
             onClick={onClose}
-            aria-label="Close"
-            className="rounded-lg p-1.5 hover:bg-gray-2 dark:hover:bg-dark-3"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-stroke px-3 py-1.5 text-sm font-medium hover:bg-gray-2 dark:border-stroke-dark dark:hover:bg-dark-3"
           >
-            <X size={18} />
+            <ArrowLeft size={15} aria-hidden />
+            Back to chat
           </button>
         </header>
         <div className="min-h-0 flex-1 overflow-hidden p-4">
