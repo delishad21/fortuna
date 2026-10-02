@@ -76,11 +76,17 @@ export function AgentDraftReviewClient({
   initialDrafts,
   embedded = false,
   onCommitted,
+  returnTo,
+  fill = false,
 }: {
   initialDraft?: Draft;
   initialDrafts?: Draft[];
   embedded?: boolean;
   onCommitted?: () => void;
+  /** Where "back" and a finished commit go, e.g. the chat that opened this import. */
+  returnTo?: string;
+  /** Embedded in a container that sets the height, such as the chat's side panel. */
+  fill?: boolean;
 }) {
   const router = useRouter();
   const [drafts, setDrafts] = useState<Draft[]>(
@@ -275,7 +281,7 @@ export function AgentDraftReviewClient({
       setPendingCommit(null);
       if (onCommitted) onCommitted();
       else {
-        router.push("/imports?tab=history");
+        router.push(returnTo || "/imports?tab=history");
         router.refresh();
       }
     } catch (error) {
@@ -352,12 +358,20 @@ export function AgentDraftReviewClient({
   };
 
   return (
-    <div className={embedded ? "h-[68vh]" : "h-[calc(100vh-9rem)] space-y-3"}>
+    <div
+      className={
+        embedded
+          ? fill
+            ? "h-full"
+            : "h-[68vh]"
+          : "h-[calc(100vh-9rem)] space-y-3"
+      }
+    >
       {!embedded && (
         <div className="flex items-end justify-between">
           <div>
-            <Link href="/imports" className="text-sm text-primary">
-              ← Imports
+            <Link href={returnTo || "/imports"} className="text-sm text-primary">
+              {returnTo ? "← Back to chat" : "← Imports"}
             </Link>
             <h1 className="font-display text-2xl font-bold text-dark dark:text-white">
               {drafts.length === 1

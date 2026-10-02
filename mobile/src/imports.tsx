@@ -1332,10 +1332,13 @@ export function DraftScreen({ route, navigation }: any) {
         await call("commitAgentDraft", item.draftId, item.validation.confirmationToken);
       }
       setPendingCommit(null);
-      navigation.navigate("Main", {
-        screen: "Import",
-        params: { openTab: "History", refreshKey: Date.now() },
-      });
+      // Opened from a chat: return to that conversation instead of the imports tab.
+      if (route.params?.fromChat) navigation.goBack();
+      else
+        navigation.navigate("Main", {
+          screen: "Import",
+          params: { openTab: "History", refreshKey: Date.now() },
+        });
     } catch (error: any) {
       setMessage(error.message || "Could not save this import");
       await result.reload();

@@ -36,6 +36,7 @@ import { BrandMark } from "@/components/ui/Brand";
 import { TransactionReviewEditor } from "./TransactionReviewEditor";
 import { ActionPreview } from "./ActionPreview";
 import { LinkCard, ProposalCard } from "./ActionCard";
+import { StagedImportPanel } from "./StagedImportPanel";
 import { ChatTransactions, asTransactions } from "./ChatTransactions";
 import { ChatComponent } from "./ChatComponents";
 import { Markdown } from "./Markdown";
@@ -78,7 +79,8 @@ export function ChatClient() {
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
-    [proposal, setProposal] = useState<Proposal | null>(null);
+    [proposal, setProposal] = useState<Proposal | null>(null),
+    [stagedDraft, setStagedDraft] = useState<string | null>(null);
   const streamRef = useRef(stream),
     selected = useRef(id),
     sendKey = useRef<string | null>(null),
@@ -386,9 +388,16 @@ export function ChatClient() {
         key={index}
         kind={value.kind}
         label={value.label}
+        onOpen={
+          value.kind === "draft" ? () => setStagedDraft(value.id) : undefined
+        }
         href={
           value.kind === "draft"
-            ? `/imports/drafts/${encodeURIComponent(value.id)}`
+            ? `/imports/drafts/${encodeURIComponent(value.id)}${
+                id
+                  ? `?returnTo=${encodeURIComponent(`/chat?conversation=${id}`)}`
+                  : ""
+              }`
             : `/chat/transactions/${encodeURIComponent(value.id)}`
         }
       />
@@ -910,6 +919,18 @@ export function ChatClient() {
         )}
         <div className="shrink-0 pt-2">{composer}</div>
       </section>
+      {stagedDraft && (
+        <StagedImportPanel
+          draftId={stagedDraft}
+          returnTo={`/chat${id ? `?conversation=${id}` : ""}`}
+          onClose={() => setStagedDraft(null)}
+          onCommitted={() => {
+            setStagedDraft(null);
+            setNotice("Import saved");
+            void refresh();
+          }}
+        />
+      )}
       {proposal && (
         <ActionPreview
           proposal={proposal}

@@ -332,7 +332,9 @@ export function ChatConversationScreen({ route, navigation }: any) {
                 : "ChatTransaction",
             block.kind === "proposal"
               ? { conversationId: id, id: block.id }
-              : { id: block.id },
+              : block.kind === "draft"
+                ? { id: block.id, fromChat: true }
+                : { id: block.id },
           )
         }
       />

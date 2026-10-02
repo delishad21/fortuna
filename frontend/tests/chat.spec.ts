@@ -1483,3 +1483,57 @@ test("pending proposals from a stopped run stay reachable", async ({ page, reque
   await waiting.getByRole("button", { name: "Review: Create bank account" }).click();
   await expect(page.getByRole("dialog")).toContainText("SimplyGo");
 });
+
+test("staged imports open beside the chat and return to it", async ({ page, request }) => {
+  const { execFileSync } = await import("node:child_process");
+  const username = `chat_panel_${Date.now()}`, password = "chat-test-temporary-password";
+  const registered = await request.post("/api/auth/register", {
+    data: { username, password, name: "Chat QA", baseCurrency: "SGD" },
+  });
+  expect(registered.ok(), await registered.text()).toBeTruthy();
+  // A real staged import for this user, so the panel loads it through the normal server action.
+  const draftId = `draft_${Date.now()}`;
+  const sql = `
+    INSERT INTO import_drafts (id, user_id, mode, parser_id, source_filename, source_sha256, status, expires_at, updated_at)
+      SELECT '${draftId}', id, 'main', 'assistant_rows', 'PayLah Sep 2026', '${draftId}', 'review', now() + interval '1 day', now()
+      FROM users WHERE username = '${username}';
+    INSERT INTO import_draft_rows (id, draft_id, row_index, parsed_payload, current_payload, review_status, updated_at) VALUES
+      ('${draftId}_r1', '${draftId}', 0, '{}', '{"date":"2026-09-01T00:00:00.000Z","description":"PAYNOW JS FNB GRO BM","label":"Chicken rice","amountOut":6.5,"currency":"SGD","accountIdentifier":"8888880012044058"}', 'edited', now());`;
+  execFileSync("docker", ["exec", "-i", "finance-postgres-dev", "psql", "-U", "financeuser", "-d", "personal_finance", "-v", "ON_ERROR_STOP=1"], { input: sql });
+
+  await page.goto("/login");
+  await page.getByLabel("Username").fill(username);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign In", exact: true }).click();
+  await expect(page).toHaveURL(/dashboard/, { timeout: 30000 });
+  await page.route("**/api/chat/**", async route => {
+    const path = new URL(route.request().url()).pathname.replace("/api/chat", "");
+    let body: any = {};
+    if (path === "/conversations") body = [{ id: "c1", title: "PayLah September", updatedAt: "2026-10-03" }];
+    else if (path === "/conversations/c1") body = {
+      id: "c1", title: "PayLah September", attachments: [], runs: [],
+      messages: [{ id: "a1", role: "assistant", blocks: [
+        { type: "text", text: "Staged September." },
+        { type: "link", kind: "draft", id: draftId, label: "Review staged import" },
+      ] }],
+    };
+    await route.fulfill({ json: body });
+  });
+  await page.goto("/chat?conversation=c1");
+  await page.getByRole("button", { name: /Review staged import/ }).click();
+  const panel = page.getByRole("dialog", { name: "Staged import" });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "PayLah Sep 2026" })).toBeVisible();
+  await expect(panel.getByText("PAYNOW JS FNB GRO BM").first()).toBeVisible({ timeout: 15000 });
+  await expect(page).toHaveURL(/\/chat\?conversation=c1/);
+  await page.screenshot({ path: "/tmp/fortuna-staged-panel.png" });
+  const full = panel.getByRole("link", { name: "Full page" });
+  await expect(full).toHaveAttribute("href", new RegExp(`/imports/drafts/${draftId}\\?returnTo=%2Fchat%3Fconversation%3Dc1`));
+  await page.keyboard.press("Escape");
+  await expect(panel).toHaveCount(0);
+  // The full page links back to the chat it came from.
+  await page.goto(`/imports/drafts/${draftId}?returnTo=${encodeURIComponent("/chat?conversation=c1")}`);
+  await expect(page.getByRole("link", { name: "← Back to chat" })).toHaveAttribute("href", "/chat?conversation=c1");
+  await page.goto(`/imports/drafts/${draftId}?returnTo=${encodeURIComponent("https://evil.example")}`);
+  await expect(page.getByRole("link", { name: "← Imports" })).toBeVisible();
+});

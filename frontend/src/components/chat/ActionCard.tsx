@@ -115,27 +115,38 @@ export function ProposalCard({
   );
 }
 
-/** A link to a staged import or a saved transaction. */
+/** A link to a staged import or a saved transaction; opens in place when onOpen is given. */
 export function LinkCard({
   href,
   label,
   kind,
+  onOpen,
 }: {
   href: string;
   label: string;
   kind: "draft" | "transaction";
+  onOpen?: () => void;
 }) {
+  const body = (
+    <CardBody
+      Icon={kind === "draft" ? FileText : Receipt}
+      title={label}
+      detail={
+        kind === "draft"
+          ? "Staged import · review before it is saved"
+          : "Saved transaction"
+      }
+    />
+  );
+  if (onOpen)
+    return (
+      <button type="button" className={CARD} onClick={onOpen}>
+        {body}
+      </button>
+    );
   return (
     <Link href={href} className={CARD}>
-      <CardBody
-        Icon={kind === "draft" ? FileText : Receipt}
-        title={label}
-        detail={
-          kind === "draft"
-            ? "Staged import · review before it is saved"
-            : "Saved transaction"
-        }
-      />
+      {body}
     </Link>
   );
 }
