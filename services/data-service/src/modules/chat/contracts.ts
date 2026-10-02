@@ -16,7 +16,10 @@ export const CHAT_LIMITS = {
   activeRunsPerUser: 1,
   modelTurns: 12,
   toolCalls: 40,
-  runMilliseconds: 900000,
+  /** Hard cap on one run; long multi-step tasks at high reasoning effort need room. */
+  runMilliseconds: 45 * 60 * 1000,
+  /** A run that makes no progress (no model output or tool activity) for this long is stopped. */
+  idleMilliseconds: 10 * 60 * 1000,
   eventsPerPage: 100,
   messageCharacters: 16000,
   attachmentCount: 5,

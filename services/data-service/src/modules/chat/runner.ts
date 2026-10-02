@@ -64,6 +64,27 @@ export function dropRepeatedLists<T extends { type: string }>(
     );
   });
 }
+/** The reply as the user sees it: steps taken, text, and what the tools displayed. */
+async function replyBlocks(db: PrismaClient, runId: string, output: string) {
+  const outcomes = await db.chatToolInvocation.findMany({
+    where: { runId, status: "completed" },
+    orderBy: { createdAt: "asc" },
+  });
+  const shown = outcomes.flatMap((v) =>
+    (v.result as unknown as ToolResult).blocks.filter((b) =>
+      USER_VISIBLE_BLOCKS.has(b.type),
+    ),
+  );
+  const steps = outcomes.map((v) => {
+    const first = (v.result as unknown as ToolResult).blocks[0];
+    return { name: v.name, ok: first?.type !== "text" };
+  });
+  return [
+    ...(steps.length ? [{ type: "activity", steps }] : []),
+    { type: "text", text: output },
+    ...dropRepeatedLists(shown, await coveredTransactionIds(db, runId)),
+  ] as any[];
+}
 export async function executeRun(
   db: PrismaClient,
   run: ClaimedRun,
@@ -73,19 +94,32 @@ export async function executeRun(
   const repo = new RunRepository(db),
     tools = createToolRegistry(db),
     controller = new AbortController();
-  const signal = AbortSignal.any([
-    parentSignal,
-    controller.signal,
-    AbortSignal.timeout(CHAT_LIMITS.runMilliseconds),
-  ]);
-  const heartbeat = setInterval(() => {
-    void repo
-      .heartbeat(run)
-      .then((ok) => {
-        if (!ok) controller.abort();
-      })
-      .catch(() => controller.abort());
-  }, 15000);
+  const signal = AbortSignal.any([parentSignal, controller.signal]);
+  const started = Date.now();
+  let lastProgress = started;
+  let stopReason: "idle" | "limit" | "lease" | null = null;
+  const progress = () => {
+    lastProgress = Date.now();
+  };
+  const stop = (reason: NonNullable<typeof stopReason>) => {
+    stopReason ??= reason;
+    controller.abort();
+  };
+  const heartbeat = setInterval(
+    () => {
+      const now = Date.now();
+      if (now - started >= CHAT_LIMITS.runMilliseconds) return stop("limit");
+      if (now - lastProgress >= CHAT_LIMITS.idleMilliseconds)
+        return stop("idle");
+      void repo
+        .heartbeat(run)
+        .then((ok) => {
+          if (!ok) stop("lease");
+        })
+        .catch(() => stop("lease"));
+    },
+    Math.min(15000, CHAT_LIMITS.idleMilliseconds),
+  );
   const context = {
     userId: run.userId,
     runId: run.id,
@@ -138,6 +172,7 @@ export async function executeRun(
       callId: string,
     ): Promise<ToolResult> => {
       signal.throwIfAborted();
+      progress();
       const connection = await db.chatConnection.findFirst({
         where: {
           userId: run.userId,
@@ -196,6 +231,7 @@ export async function executeRun(
         where: { id: invocation.id },
         data: { status: "completed", result: json(result) },
       });
+      progress();
       await repo.appendEvent(run, {
         type: "tool_result",
         name,
@@ -208,6 +244,7 @@ export async function executeRun(
       signal,
     )) {
       signal.throwIfAborted();
+      progress();
       if (event.type === "text_delta") {
         output += event.text;
         if (output.length > 100000)
@@ -220,25 +257,7 @@ export async function executeRun(
       await repo.appendEvent(run, json(event));
     }
     if (!completed) throw new Error("Provider response interrupted");
-    const outcomes = await db.chatToolInvocation.findMany({
-      where: { runId: run.id, status: "completed" },
-      orderBy: { createdAt: "asc" },
-    });
-    const shown = outcomes.flatMap((v) =>
-      (v.result as unknown as ToolResult).blocks.filter((b) =>
-        USER_VISIBLE_BLOCKS.has(b.type),
-      ),
-    );
-    // The steps the assistant took, shown as a compact activity row above its reply.
-    const steps = outcomes.map((v) => {
-      const first = (v.result as unknown as ToolResult).blocks[0];
-      return { name: v.name, ok: first?.type !== "text" };
-    });
-    const blocks: any[] = [
-      ...(steps.length ? [{ type: "activity", steps }] : []),
-      { type: "text", text: output },
-      ...dropRepeatedLists(shown, await coveredTransactionIds(db, run.id)),
-    ];
+    const blocks = await replyBlocks(db, run.id, output);
     const pending = await db.chatActionProposal.count({
       where: { runId: run.id, status: "pending" },
     });
@@ -253,12 +272,27 @@ export async function executeRun(
       json(blocks),
     );
   } catch (error) {
-    const message = signal.aborted
-      ? "Conversation stopped or timed out. Saved data is preserved."
-      : safeChatError(error) ||
-        "The assistant could not finish. Check the provider connection and try again; saved data is preserved.";
+    const message =
+      stopReason === "limit"
+        ? "Stopped after 45 minutes. Everything prepared so far is kept below; send a message to continue."
+        : stopReason === "idle"
+          ? "Stopped after 10 minutes without progress. Everything prepared so far is kept below; send a message to continue."
+          : signal.aborted
+            ? "Conversation stopped. Everything prepared so far is kept below."
+            : safeChatError(error) ||
+              "The assistant could not finish. Check the provider connection and try again; everything prepared so far is kept below.";
+    // Keep what the run already produced (reviews, proposals, components) reachable.
+    const salvaged = await replyBlocks(db, run.id, output).catch(() => []);
     await repo
-      .finish(run, "failed", json([{ type: "text", text: message }]), message)
+      .finish(
+        run,
+        "failed",
+        json([
+          ...salvaged.filter((b) => !(b.type === "text" && !b.text)),
+          { type: "text", text: message },
+        ]),
+        message,
+      )
       .catch(() => {});
   } finally {
     clearInterval(heartbeat);

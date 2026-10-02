@@ -1444,3 +1444,36 @@ test("chat accepts dropped files, starts from the landing composer and shows ste
   ).toBeTruthy();
   await page.screenshot({ path: "/tmp/fortuna-chat-layout-mobile.png" });
 });
+
+test("pending proposals from a stopped run stay reachable", async ({ page, request }) => {
+  const username = `chat_stopped_${Date.now()}`, password = "chat-test-temporary-password";
+  const registered = await request.post("/api/auth/register", {
+    data: { username, password, name: "Chat QA", baseCurrency: "SGD" },
+  });
+  expect(registered.ok(), await registered.text()).toBeTruthy();
+  await page.goto("/login");
+  await page.getByLabel("Username").fill(username);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign In", exact: true }).click();
+  await expect(page).toHaveURL(/dashboard/, { timeout: 30000 });
+  const proposal = {
+    id: "p-acct", kind: "create_account", status: "pending", expiresAt: "2099-01-01T00:00:00Z",
+    preview: { title: "Create bank account", before: null, after: { kind: "create_account", accountIdentifier: "SimplyGo", color: "#0B3D91" } },
+  };
+  await page.route("**/api/chat/**", async route => {
+    const path = new URL(route.request().url()).pathname.replace("/api/chat", "");
+    let body: any = {};
+    if (path === "/conversations") body = [{ id: "c1", title: "SimplyGo August", updatedAt: "2026-10-02" }];
+    else if (path === "/conversations/c1") body = {
+      id: "c1", title: "SimplyGo August", attachments: [],
+      runs: [{ id: "r1", status: "failed", error: "Stopped after 10 minutes without progress.", proposals: [proposal] }],
+      messages: [{ id: "a1", role: "assistant", blocks: [{ type: "text", text: "Conversation stopped or timed out. Saved data is preserved." }] }],
+    };
+    await route.fulfill({ json: body });
+  });
+  await page.goto("/chat?conversation=c1");
+  const waiting = page.getByRole("region", { name: "Waiting for your approval" });
+  await expect(waiting).toBeVisible();
+  await waiting.getByRole("button", { name: "Review: Create bank account" }).click();
+  await expect(page.getByRole("dialog")).toContainText("SimplyGo");
+});

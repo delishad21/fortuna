@@ -102,7 +102,7 @@ export const workflowDefinitions: ToolDefinition[] = [
   {
     name: "parser_step",
     description:
-      "Develop a parser in an approved fixture workspace. Operations: guide, inspect, save, test, submit, definitions. Source entrypoint parse(content: bytes, specification: dict) returns a transaction list. Retaining fixtures and approval/activation require propose_action.",
+      "Develop a parser in an approved fixture workspace. Operations: guide and definitions need nothing else; inspect needs workspaceId and fileId; save needs workspaceId and candidate; test and submit need workspaceId and candidateId. A workspace only exists after the user approves a retain_fixture proposal for the statement (propose_action); until then, stop and ask the user to approve it. Source entrypoint parse(content: bytes, specification: dict) returns a transaction list. Approval and activation require propose_action.",
     inputSchema: obj(
       {
         operation: {
@@ -260,25 +260,36 @@ export async function executeWorkflowTool(
       };
     if (input.operation === "definitions")
       return factory.definitions(context.userId);
-    const workspaceId = idSchema.parse(input.workspaceId);
+    const need = (value: string | undefined, field: string) => {
+      if (value) return value;
+      throw new ChatError(
+        400,
+        field === "workspaceId"
+          ? `parser_step ${input.operation} needs workspaceId. A workspace is created when the user approves a retain_fixture proposal for the statement; if that is still pending, stop and ask the user to approve it.`
+          : `parser_step ${input.operation} needs ${field}.`,
+      );
+    };
+    const workspaceId = need(input.workspaceId, "workspaceId");
     if (input.operation === "inspect")
       return factory.inspect(
         context.userId,
         workspaceId,
-        idSchema.parse(input.fileId),
+        need(input.fileId, "fileId"),
       );
-    if (input.operation === "save")
+    if (input.operation === "save") {
+      if (input.candidate === undefined) need(undefined, "candidate");
       return factory.save(context.userId, workspaceId, input.candidate);
+    }
     if (input.operation === "test")
       return factory.test(
         context.userId,
         workspaceId,
-        idSchema.parse(input.candidateId),
+        need(input.candidateId, "candidateId"),
       );
     return factory.submit(
       context.userId,
       workspaceId,
-      idSchema.parse(input.candidateId),
+      need(input.candidateId, "candidateId"),
     );
   }
   throw new ChatError(400, "Tool is unavailable");

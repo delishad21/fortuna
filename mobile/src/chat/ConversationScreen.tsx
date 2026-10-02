@@ -74,6 +74,18 @@ export function ChatConversationScreen({ route, navigation }: any) {
     setId(route.params?.id);
   }, [route.params?.id]);
   const run = conversation?.runs[0];
+  // Proposals no reply links to (e.g. from a run that stopped early) stay reachable.
+  const linked = new Set(
+    [
+      ...(conversation?.messages.flatMap((m) => m.blocks) || []),
+      ...stream.blocks,
+    ]
+      .filter((b) => b.type === "link" && b.kind === "proposal")
+      .map((b) => (b as { id: string }).id),
+  );
+  const unlinked = (conversation?.runs || [])
+    .flatMap((r) => r.proposals)
+    .filter((p) => p.status === "pending" && !linked.has(p.id));
   useEffect(() => {
     cursor.current = emptyStream();
     setStream(emptyStream());
@@ -456,7 +468,18 @@ export function ChatConversationScreen({ route, navigation }: any) {
             {run && ["queued", "running"].includes(run.status) && (
               <>
                 <Txt muted accessibilityLiveRegion="polite">
-                  {stream.activity}…
+                  Fortuna is working ·{" "}
+                  {(() => {
+                    const current = [...stream.steps]
+                      .reverse()
+                      .find((s) => !s.done);
+                    return current
+                      ? stepLabel(current.name)
+                      : stream.text
+                        ? "Writing a reply"
+                        : "Thinking";
+                  })()}
+                  …
                 </Txt>
                 <Txt selectable>{stream.text}</Txt>
                 {stream.blocks
@@ -473,6 +496,31 @@ export function ChatConversationScreen({ route, navigation }: any) {
               <Txt>
                 Review the pending changes, or send a new message to move on.
               </Txt>
+            )}
+            {unlinked.length > 0 && (
+              <View
+                style={{
+                  gap: 8,
+                  padding: 12,
+                  borderRadius: 12,
+                  backgroundColor: colors.tint,
+                }}
+              >
+                <Txt bold>Waiting for your approval</Txt>
+                {unlinked.map((p) => (
+                  <Button
+                    key={p.id}
+                    secondary
+                    title={`Review: ${p.preview?.title || "proposed change"}`}
+                    onPress={() =>
+                      navigation.navigate("ChatApproval", {
+                        conversationId: id,
+                        id: p.id,
+                      })
+                    }
+                  />
+                ))}
+              </View>
             )}
             {run?.status === "failed" && (
               <Txt>

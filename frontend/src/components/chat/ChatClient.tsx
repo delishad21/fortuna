@@ -446,6 +446,18 @@ export function ChatClient() {
     );
   }
   const generating = generatingRun(run);
+  // Proposals that no reply links to (e.g. from a run that stopped early) stay reachable here.
+  const linked = new Set(
+    [
+      ...(conversation?.messages.flatMap((m) => m.blocks) || []),
+      ...stream.blocks,
+    ]
+      .filter((b) => b.type === "link" && b.kind === "proposal")
+      .map((b) => (b as { id: string }).id),
+  );
+  const unlinked = (conversation?.runs || [])
+    .flatMap((r) => r.proposals)
+    .filter((p) => p.status === "pending" && !linked.has(p.id));
   const currentStep = [...stream.steps].reverse().find((s) => !s.done);
   const workingOn = currentStep
     ? stepLabel(currentStep.name)
@@ -852,6 +864,28 @@ export function ChatClient() {
                 >
                   Review the pending changes, or send a new message to move on.
                 </p>
+              )}
+              {unlinked.length > 0 && (
+                <section
+                  aria-label="Waiting for your approval"
+                  className="space-y-2 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3"
+                >
+                  <p className="text-sm font-medium">
+                    Waiting for your approval
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {unlinked.map((p) => (
+                      <Button
+                        key={p.id}
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setProposal(p)}
+                      >
+                        Review: {p.preview?.title || "proposed change"}
+                      </Button>
+                    ))}
+                  </div>
+                </section>
               )}
               {run?.status === "failed" && (
                 <p
