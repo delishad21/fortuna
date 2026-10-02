@@ -23,6 +23,46 @@ export function invalidArguments(error: ZodError) {
     1500,
   );
 }
+/** Transactions this run already shows inside a review or an approval preview. */
+async function coveredTransactionIds(db: PrismaClient, runId: string) {
+  const [reviews, proposals] = await Promise.all([
+    db.chatTransactionReview.findMany({
+      where: { runId },
+      select: { rows: true },
+    }),
+    db.chatActionProposal.findMany({
+      where: { runId },
+      select: { preview: true },
+    }),
+  ]);
+  return new Set<string>([
+    ...reviews.flatMap((r) =>
+      ((r.rows as any[]) || []).flatMap((row) =>
+        row?.source?.transactionId ? [String(row.source.transactionId)] : [],
+      ),
+    ),
+    ...proposals.flatMap((p) =>
+      (((p.preview as any)?.changes as any[]) || []).map((c) => String(c.id)),
+    ),
+  ]);
+}
+/** A transaction list that only repeats a review's or proposal's transactions adds nothing. */
+export function dropRepeatedLists<T extends { type: string }>(
+  blocks: T[],
+  covered: Set<string>,
+) {
+  if (!covered.size) return blocks;
+  return blocks.filter((b: any) => {
+    if (b.type !== "component" || b.component !== "transaction_list")
+      return true;
+    const rows: Array<{ id: string }> = b.rows || [];
+    return !(
+      b.total <= covered.size &&
+      rows.length > 0 &&
+      rows.every((r) => covered.has(String(r.id)))
+    );
+  });
+}
 export async function executeRun(
   db: PrismaClient,
   run: ClaimedRun,
@@ -177,13 +217,14 @@ export async function executeRun(
       where: { runId: run.id, status: "completed" },
       orderBy: { createdAt: "asc" },
     });
+    const shown = outcomes.flatMap((v) =>
+      (v.result as unknown as ToolResult).blocks.filter((b) =>
+        USER_VISIBLE_BLOCKS.has(b.type),
+      ),
+    );
     const blocks: any[] = [
       { type: "text", text: output },
-      ...outcomes.flatMap((v) =>
-        (v.result as unknown as ToolResult).blocks.filter((b) =>
-          USER_VISIBLE_BLOCKS.has(b.type),
-        ),
-      ),
+      ...dropRepeatedLists(shown, await coveredTransactionIds(db, run.id)),
     ];
     const pending = await db.chatActionProposal.count({
       where: { runId: run.id, status: "pending" },

@@ -2,7 +2,11 @@
 import { useEffect, useRef, useState } from "react";
 import { TransactionTable } from "@/components/transaction-table/TransactionTable";
 import type { Transaction } from "@/components/transaction-table/types";
-import { chatApi, TransactionReview } from "@/lib/chat/client";
+import {
+  chatApi,
+  TransactionReview,
+  reviewSuggestionSummary,
+} from "@/lib/chat/client";
 export function TransactionReviewEditor({
   id,
   onSubmitted,
@@ -126,27 +130,40 @@ export function TransactionReviewEditor({
       }) as Transaction,
   );
   const closed = review.status !== "pending";
+  const suggestions = reviewSuggestionSummary(review.rows, review.categories);
   return (
     <div
       ref={container}
       className="min-w-0 space-y-3"
       aria-label={review.title}
     >
-      <div>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h3 className="font-semibold">{review.title}</h3>
-        <p className="mt-1 text-sm text-dark-5 dark:text-dark-6">
-          {review.instructions}
+        <p role="status" className="text-xs text-dark-5 dark:text-dark-6">
+          {closed
+            ? review.status === "submitted"
+              ? "Sent to Fortuna"
+              : "Closed"
+            : saving
+              ? "Saving…"
+              : "Changes save automatically"}
         </p>
       </div>
-      <p role="status" className="text-xs text-dark-5 dark:text-dark-6">
-        {closed
-          ? review.status === "submitted"
-            ? "Sent to Fortuna."
-            : "Closed when you sent a new message."
-          : saving
-            ? "Saving…"
-            : "Edits save when you leave a cell. Send the review when ready; ledger changes still require approval."}
-      </p>
+      {review.instructions && (
+        <p className="text-sm text-dark-5 dark:text-dark-6">
+          {review.instructions}
+        </p>
+      )}
+      {suggestions.changed > 0 && (
+        <p className="inline-flex flex-wrap items-center gap-x-2 rounded-md bg-primary/10 px-3 py-1.5 text-sm text-primary">
+          <span className="font-medium">
+            Pre-filled · {suggestions.changed} of {suggestions.total} rows
+          </span>
+          {suggestions.effects.map((effect) => (
+            <span key={effect}>· {effect}</span>
+          ))}
+        </p>
+      )}
       {error && (
         <div className="text-sm text-red">
           <p role="alert">{error}</p>

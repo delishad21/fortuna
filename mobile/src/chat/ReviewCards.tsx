@@ -10,7 +10,12 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { Button, Input, Txt, Choice, useTheme } from "../ui";
-import { useChatApi, TransactionReview, ReviewRow } from "./api";
+import {
+  useChatApi,
+  TransactionReview,
+  ReviewRow,
+  reviewSuggestionSummary,
+} from "./api";
 import { Expandable } from "./Details";
 export function ChatReviewCards({
   id,
@@ -139,16 +144,27 @@ export function ChatReviewCards({
   }
   if (!review) return <Txt>{error || "Loading transaction review…"}</Txt>;
   const closed = review.status !== "pending";
+  const suggestions = reviewSuggestionSummary(review.rows, review.categories);
   return (
     <View style={{ gap: 12 }}>
       <Txt bold>{review.title}</Txt>
-      <Txt muted>{review.instructions}</Txt>
+      {!!review.instructions && <Txt muted>{review.instructions}</Txt>}
+      {suggestions.changed > 0 && (
+        <View
+          style={{ backgroundColor: colors.tint, borderRadius: 8, padding: 10 }}
+        >
+          <Txt size={13} style={{ color: colors.purple }}>
+            Pre-filled · {suggestions.changed} of {suggestions.total} rows
+            {suggestions.effects.map((e) => ` · ${e}`).join("")}
+          </Txt>
+        </View>
+      )}
       <Txt muted size={12}>
         {closed
           ? review.status === "submitted"
-            ? "Sent to Fortuna."
-            : "Closed when you sent a new message."
-          : "Save each row to sync it. Sending the review does not apply ledger changes."}
+            ? "Sent to Fortuna"
+            : "Closed"
+          : "Save each row to sync it"}
       </Txt>
       {!!error && (
         <Txt accessibilityRole="alert" style={{ color: colors.red }}>

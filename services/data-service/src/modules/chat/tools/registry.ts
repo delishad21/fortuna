@@ -164,13 +164,37 @@ export function createToolRegistry(db: PrismaClient) {
   definitions.push({
     name: "request_transaction_review",
     description:
-      "Show an editable transaction review to the user: spreadsheet on web, cards on phone. Use whenever the user needs to analyse or supply edits. Draft edits sync across devices without changing finance records. Wait for a submitted review before proposing consequential changes. A new user task supersedes pending reviews.",
+      "Open an editable review (spreadsheet on web, cards on phone) ONLY when the user must decide or supply values row by row. If the user's request already determines the edits (e.g. 'mark all of these internal'), call propose_transaction_edits instead; approval is the user's check. Always pre-fill every change you can infer in suggestions so the user only adjusts. The review already displays its transactions: never also show them with show_component. Draft edits sync across devices without changing records; wait for the submitted review before proposing. A new user task supersedes pending reviews.",
     inputSchema: objectSchema(
       {
-        title: str,
-        instructions: str,
+        title: {
+          type: "string",
+          maxLength: 120,
+          description: "Short heading, e.g. 'BUS/MRT on card 4591'",
+        },
+        instructions: {
+          type: "string",
+          maxLength: 160,
+          description:
+            "Optional. One short sentence, only if the user must do something non-obvious. Omit otherwise.",
+        },
         transactionIds: { type: "array", items: str, maxItems: 100 },
         stagedRowIds: { type: "array", items: str, maxItems: 100 },
+        suggestions: {
+          type: "array",
+          maxItems: 100,
+          description:
+            "Pre-filled edits per row. Fields: label, description, date, categoryId (from get_context), accountIdentifier, amountIn, amountOut, currency, linkage ({type:'internal'} | {type:'reimbursement', reimbursesAllocations:[{transactionId, amount}]} | null).",
+          items: {
+            type: "object",
+            properties: {
+              transactionId: str,
+              stagedRowId: str,
+              patch: { type: "object" },
+            },
+            required: ["patch"],
+          },
+        },
       },
       ["title"],
     ),

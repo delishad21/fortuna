@@ -53,12 +53,23 @@ export type ReviewRow = {
 export const requestReviewSchema = z
   .object({
     title: z.string().min(1).max(120),
-    instructions: z
-      .string()
-      .max(2000)
-      .default("Review these transactions and send your edits back."),
+    instructions: z.string().max(160).default(""),
     transactionIds: z.array(idSchema).max(100).default([]),
     stagedRowIds: z.array(idSchema).max(100).default([]),
+    /** Pre-filled edits; the user adjusts these instead of typing every change. */
+    suggestions: z
+      .array(
+        z
+          .object({
+            transactionId: idSchema.optional(),
+            stagedRowId: idSchema.optional(),
+            patch: reviewPatch,
+          })
+          .strict()
+          .refine((s) => !!s.transactionId !== !!s.stagedRowId),
+      )
+      .max(100)
+      .default([]),
   })
   .strict()
   .refine(
@@ -103,6 +114,51 @@ export class ReviewService {
           404,
           "A transaction was not found or is no longer staged",
         );
+      const suggested = new Map(
+        input.suggestions.map((s) => [
+          (s.transactionId || s.stagedRowId)!,
+          s.patch as Record<string, unknown>,
+        ]),
+      );
+      if (
+        [...suggested.keys()].some(
+          (id) =>
+            !input.transactionIds.includes(id) &&
+            !input.stagedRowIds.includes(id),
+        )
+      )
+        throw new ChatError(
+          400,
+          "Suggestions must target transactions in this review",
+        );
+      const patches = [...suggested.values()];
+      const categoryIds = patches.flatMap((p) =>
+        typeof p.categoryId === "string" ? [p.categoryId] : [],
+      );
+      const accounts = patches.flatMap((p) =>
+        typeof p.accountIdentifier === "string" ? [p.accountIdentifier] : [],
+      );
+      if (
+        (categoryIds.length &&
+          (await tx.category.count({
+            where: { userId: context.userId, id: { in: categoryIds } },
+          })) !== new Set(categoryIds).size) ||
+        (accounts.length &&
+          (await tx.accountIdentifier.count({
+            where: {
+              userId: context.userId,
+              accountIdentifier: { in: accounts },
+            },
+          })) !== new Set(accounts).size)
+      )
+        throw new ChatError(
+          404,
+          "A suggested category or account was not found",
+        );
+      const withSuggestion = (id: string, original: any) => ({
+        ...original,
+        ...(suggested.get(id) || {}),
+      });
       const rows: ReviewRow[] = [
         ...saved.map((t) => {
           const value = {
@@ -122,7 +178,7 @@ export class ReviewService {
             version: 1,
             source: { transactionId: t.id },
             original: value,
-            value,
+            value: withSuggestion(t.id, value),
           };
         }),
         ...staged.map((r) => ({
@@ -130,7 +186,7 @@ export class ReviewService {
           version: 1,
           source: { draftId: r.draftId, rowId: r.id },
           original: r.currentPayload,
-          value: r.currentPayload,
+          value: withSuggestion(r.id, r.currentPayload),
         })),
       ].sort((a, b) =>
         String((a.value as any)?.date).localeCompare(

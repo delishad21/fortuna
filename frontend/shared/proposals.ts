@@ -240,3 +240,40 @@ export const summaryValue = (value: unknown): string =>
               .map(([k, v]) => `${summaryLabel(k)}: ${summaryValue(v)}`)
               .join(" · ")
           : String(value);
+
+/** What a review's pre-filled suggestions change, e.g. "Category → Internal". */
+export function reviewSuggestionSummary(
+  rows: Array<{ original: any; value: any }>,
+  categories: Array<{ id: string; name: string }> = [],
+) {
+  const names = new Map(categories.map((c) => [c.id, c.name]));
+  const effects = new Map<string, number>();
+  let changed = 0;
+  for (const row of rows || []) {
+    const keys = Object.keys(row.value || {}).filter(
+      (k) => !same(row.value[k], row.original?.[k]),
+    );
+    if (!keys.length) continue;
+    changed++;
+    for (const key of keys) {
+      const value = row.value[key];
+      const text =
+        key === "categoryId"
+          ? `Category → ${names.get(value) || "None"}`
+          : key === "linkage"
+            ? `Type → ${linkageView(value).label}`
+            : key === "label"
+              ? `Label → ${value || "None"}`
+              : `${FIELD_LABELS[key] || key} edited`;
+      effects.set(text, (effects.get(text) || 0) + 1);
+    }
+  }
+  return {
+    changed,
+    total: rows?.length || 0,
+    effects: [...effects.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([text]) => text),
+  };
+}

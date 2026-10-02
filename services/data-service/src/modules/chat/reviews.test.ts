@@ -271,3 +271,84 @@ test("staged rows remain unchanged and concurrent devices cannot overwrite each 
       draft.id,
     );
   }));
+
+test("reviews arrive pre-filled with owned suggestions and keep the original", () =>
+  withChatDb(async (db) => {
+    const user = await db.user.create({ data: { username: "review-suggest" } });
+    const other = await db.user.create({ data: { username: "review-other" } });
+    const c = await new ChatService(db).createConversation(user.id);
+    const run = await db.chatRun.create({
+      data: {
+        userId: user.id,
+        conversationId: c.id,
+        idempotencyKey: "suggest",
+        provider: "codex",
+        model: "test",
+        status: "running",
+      },
+    });
+    const internal = await db.category.create({
+      data: { userId: user.id, name: "Internal", color: "#999999" },
+    });
+    const foreign = await db.category.create({
+      data: { userId: other.id, name: "Theirs", color: "#000000" },
+    });
+    const [a, b] = await Promise.all(
+      ["BUS/MRT 1", "BUS/MRT 2"].map((description) =>
+        db.transaction.create({
+          data: {
+            userId: user.id,
+            date: new Date("2026-08-24"),
+            description,
+            amountOut: 2,
+          },
+        }),
+      ),
+    );
+    const service = new ReviewService(db);
+    const context = { userId: user.id, conversationId: c.id, runId: run.id };
+    const patch = {
+      categoryId: internal.id,
+      linkage: { type: "internal" as const },
+    };
+    const review = await service.create(context, {
+      title: "BUS/MRT on card 4591",
+      transactionIds: [a.id, b.id],
+      suggestions: [
+        { transactionId: a.id, patch },
+        { transactionId: b.id, patch },
+      ],
+    });
+    assert.equal(review.instructions, "");
+    for (const row of review.rows) {
+      assert.equal(row.original.categoryId, null);
+      assert.equal(row.value.categoryId, internal.id);
+      assert.deepEqual(row.value.linkage, { type: "internal" });
+      assert.equal(row.value.description, row.original.description);
+    }
+    await assert.rejects(
+      service.create(context, {
+        title: "Foreign category",
+        transactionIds: [a.id],
+        suggestions: [
+          { transactionId: a.id, patch: { categoryId: foreign.id } },
+        ],
+      }),
+      /category or account was not found/,
+    );
+    await assert.rejects(
+      service.create(context, {
+        title: "Outside the review",
+        transactionIds: [a.id],
+        suggestions: [{ transactionId: b.id, patch: { label: "x" } }],
+      }),
+      /must target transactions in this review/,
+    );
+    await assert.rejects(
+      service.create(context, {
+        title: "Wordy",
+        instructions: "x".repeat(161),
+        transactionIds: [a.id],
+      }),
+    );
+  }));

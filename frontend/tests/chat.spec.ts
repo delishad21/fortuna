@@ -541,3 +541,52 @@ test("approval previews are readable for bulk edits, reimbursements and rules", 
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
 });
+
+test("reviews show pre-filled suggestions with a short header", async ({ page, request }) => {
+  const username = `chat_review_${Date.now()}`, password = "chat-test-temporary-password";
+  const registered = await request.post("/api/auth/register", {
+    data: { username, password, name: "Chat QA", baseCurrency: "SGD" },
+  });
+  expect(registered.ok(), await registered.text()).toBeTruthy();
+  await page.goto("/login");
+  await page.getByLabel("Username").fill(username);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign In", exact: true }).click();
+  await expect(page).toHaveURL(/dashboard/, { timeout: 30000 });
+  const original = (id: string) => ({
+    date: "2026-08-24T00:00:00.000Z", description: `BUS/MRT ${id}`, label: "BUS/MRT", categoryId: "transport",
+    accountIdentifier: "4265-****-****-4591", amountIn: null, amountOut: 4.2, balance: null, currency: "SGD", linkage: null,
+  });
+  const review = {
+    id: "rv1", conversationId: "c1", title: "BUS/MRT on card 4591", instructions: "", status: "pending", version: 1,
+    categories: [{ id: "transport", name: "Transportation", color: "#2196f3" }, { id: "internal", name: "Internal", color: "#9e9e9e" }],
+    accounts: [{ id: "a1", accountIdentifier: "4265-****-****-4591", color: "#e91e63" }],
+    rows: ["t1", "t2"].map((id) => ({
+      id, version: 1, source: { transactionId: id }, original: original(id),
+      value: { ...original(id), categoryId: "internal", linkage: { type: "internal" } },
+    })),
+  };
+  await page.route("**/api/chat/**", async route => {
+    const path = new URL(route.request().url()).pathname.replace("/api/chat", "");
+    let body: any = {};
+    if (path === "/conversations") body = [{ id: "c1", title: "Bus rides", updatedAt: "2026-10-02" }];
+    else if (path === "/reviews/rv1") body = review;
+    else if (path === "/conversations/c1") body = {
+      id: "c1", title: "Bus rides", attachments: [],
+      runs: [{ id: "r1", status: "awaiting_confirmation", proposals: [] }],
+      messages: [{ id: "a1", role: "assistant", blocks: [
+        { type: "text", text: "I pre-filled the review." },
+        { type: "review", id: "rv1", title: review.title },
+      ] }],
+    };
+    await route.fulfill({ json: body });
+  });
+  await page.goto("/chat?conversation=c1");
+  await expect(page.getByRole("heading", { name: "BUS/MRT on card 4591" })).toBeVisible();
+  await expect(page.getByText("Pre-filled · 2 of 2 rows")).toBeVisible();
+  await expect(page.getByText("· Category → Internal")).toBeVisible();
+  await expect(page.getByText("· Type → Internal transfer")).toBeVisible();
+  await expect(page.getByText("Changes save automatically")).toBeVisible();
+  await expect(page.getByText(/Edits save when you leave a cell/)).toHaveCount(0);
+  await page.screenshot({ path: "/tmp/fortuna-review-prefilled.png" });
+});

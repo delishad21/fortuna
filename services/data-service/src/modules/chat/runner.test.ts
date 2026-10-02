@@ -93,3 +93,22 @@ test("invalid tool arguments name the failing fields for the model", async () =>
   );
   assert.match(text, /Unrecognized key/);
 });
+
+test("transaction lists that repeat a review or proposal are not shown again", async () => {
+  const { dropRepeatedLists } = await import("./runner");
+  const list = (ids: string[], total = ids.length) => ({
+    type: "component",
+    component: "transaction_list",
+    total,
+    rows: ids.map((id) => ({ id })),
+  });
+  const review = { type: "review", id: "r" };
+  const covered = new Set(["t1", "t2", "t3"]);
+  assert.deepEqual(dropRepeatedLists([review, list(["t1", "t2"])], covered), [
+    review,
+  ]);
+  // A list with transactions beyond the review is kept.
+  assert.equal(dropRepeatedLists([list(["t1", "t9"])], covered).length, 1);
+  assert.equal(dropRepeatedLists([list(["t1"], 40)], covered).length, 1);
+  assert.equal(dropRepeatedLists([list(["t1"])], new Set()).length, 1);
+});
