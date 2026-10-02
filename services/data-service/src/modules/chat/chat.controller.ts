@@ -1,5 +1,6 @@
 import { ReviewService } from "./reviews.service";
 import { ReadTools } from "./tools/read";
+import { MemoryService } from "./memories.service";
 import { classifyUpload, isImageType } from "./media";
 import { createReadStream } from "node:fs";
 import { safeChatError } from "./errors";
@@ -251,6 +252,42 @@ export function createChatRouter(db: PrismaClient) {
         .on("error", () => res.status(404).end())
         .pipe(res);
     }),
+  );
+  const memories = new MemoryService(db);
+  router.get(
+    "/memories",
+    route(async (_req, res) =>
+      res.json(await memories.list(res.locals.userId)),
+    ),
+  );
+  router.post(
+    "/memories",
+    route(async (req, res) =>
+      res
+        .status(201)
+        .json(
+          await memories.save(res.locals.userId, {
+            content: req.body?.content,
+          }),
+        ),
+    ),
+  );
+  router.put(
+    "/memories/:id",
+    route(async (req, res) =>
+      res.json(
+        await memories.save(res.locals.userId, {
+          id: idSchema.parse(req.params.id),
+          content: req.body?.content,
+        }),
+      ),
+    ),
+  );
+  router.delete(
+    "/memories/:id",
+    route(async (req, res) =>
+      res.json(await memories.remove(res.locals.userId, req.params.id)),
+    ),
   );
   router.get(
     "/settings",

@@ -7,6 +7,8 @@ export type StagedRowSummary = {
   description: string;
   amountIn: number | null;
   amountOut: number | null;
+  /** The source lists these rows separately (e.g. two people on the same bus), so identical rows are not duplicates. */
+  distinctWithinDraft?: boolean;
 };
 
 export type DuplicateFinding = {
@@ -35,11 +37,22 @@ function descriptionSimilarity(left: string, right: string) {
   return (2 * shared) / (firstPairs.length + secondPairs.length);
 }
 
-export function compareStagedRows(left: StagedRowSummary, right: StagedRowSummary) {
-  const days = Math.abs(new Date(left.date).getTime() - new Date(right.date).getTime()) / 86_400_000;
+export function compareStagedRows(
+  left: StagedRowSummary,
+  right: StagedRowSummary,
+) {
+  const days =
+    Math.abs(new Date(left.date).getTime() - new Date(right.date).getTime()) /
+    86_400_000;
   if (!Number.isFinite(days) || days > 2) return null;
-  const sameCredit = left.amountIn != null && left.amountIn > 0 && left.amountIn === right.amountIn;
-  const sameDebit = left.amountOut != null && left.amountOut > 0 && left.amountOut === right.amountOut;
+  const sameCredit =
+    left.amountIn != null &&
+    left.amountIn > 0 &&
+    left.amountIn === right.amountIn;
+  const sameDebit =
+    left.amountOut != null &&
+    left.amountOut > 0 &&
+    left.amountOut === right.amountOut;
   if (!sameCredit && !sameDebit) return null;
 
   const reasons: string[] = [];
@@ -69,10 +82,18 @@ export function compareStagedRows(left: StagedRowSummary, right: StagedRowSummar
   return score >= 0.8 ? { score, reasons } : null;
 }
 
-export function findStagedDuplicates(rows: StagedRowSummary[]): DuplicateFinding[] {
+export function findStagedDuplicates(
+  rows: StagedRowSummary[],
+): DuplicateFinding[] {
   const findings: DuplicateFinding[] = [];
   for (let index = 0; index < rows.length; index++) {
     for (let prior = 0; prior < index; prior++) {
+      if (
+        rows[index].distinctWithinDraft &&
+        rows[prior].distinctWithinDraft &&
+        rows[index].draftId === rows[prior].draftId
+      )
+        continue;
       const comparison = compareStagedRows(rows[index], rows[prior]);
       if (!comparison) continue;
       findings.push({

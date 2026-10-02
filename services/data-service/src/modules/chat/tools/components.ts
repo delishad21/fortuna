@@ -15,25 +15,49 @@ export const showComponentSchema = z
       "summary_tiles",
       "breakdown",
       "trend",
+      "comparison",
     ]),
     title: z.string().min(1).max(120),
-    filters: filtersSchema,
+    filters: filtersSchema.optional(),
+    series: z
+      .array(
+        z
+          .object({
+            label: z.string().trim().min(1).max(60),
+            filters: filtersSchema,
+          })
+          .strict(),
+      )
+      .min(2)
+      .max(4)
+      .optional(),
+    metric: z.enum(["expense", "income", "net"]).default("expense"),
+    byMonth: z.boolean().default(false),
     groupBy: z.enum(["category", "merchant", "account"]).default("category"),
     limit: z.number().int().min(3).max(20).default(8),
     interval: z.enum(["day", "week", "month"]).default("month"),
     compareToPrevious: z.boolean().default(true),
   })
-  .strict();
+  .strict()
+  .refine((v) => (v.component === "comparison" ? !!v.series : !!v.filters), {
+    message: "comparison needs series; other components need filters",
+  });
 const str = { type: "string" };
 export const showComponentDefinition: ToolDefinition = {
   name: "show_component",
   description:
-    "Display data to the user as a rich component. The user cannot see other tool results. Components compute exact totals in the database; do not repeat their numbers at length in text. transaction_list: matching transactions as cards; any size, the UI paginates. summary_tiles: spent, income, net and count per currency, optionally against the previous period of equal length. breakdown: spending ranked by category, merchant or account, top `limit` plus Other. trend: spending and income over time by day, week or month.",
+    "Display data to the user as a rich component. The user cannot see other tool results. Components compute exact totals in the database; do not repeat their numbers at length in text. transaction_list: matching transactions as cards; any size, the UI paginates. summary_tiles: spent, income, net and count per currency, optionally against the previous period of equal length. breakdown: spending ranked by category, merchant or account, top `limit` plus Other. trend: spending and income over time by day, week or month. comparison: 2-4 labelled queries (series, each with its own filters) totalled side by side per currency, with the difference between the first two and optionally a month-by-month running difference; use it to reconcile two sources (e.g. a wallet's journeys vs the card charges that fund it) or compare periods or accounts. Internal transfers are excluded unless a series sets includeInternal=true, which reconciling wallet top-ups needs.",
   inputSchema: {
     type: "object",
     properties: {
       component: {
-        enum: ["transaction_list", "summary_tiles", "breakdown", "trend"],
+        enum: [
+          "transaction_list",
+          "summary_tiles",
+          "breakdown",
+          "trend",
+          "comparison",
+        ],
       },
       title: { type: "string", description: "Short heading for the user" },
       filters: {
@@ -56,6 +80,28 @@ export const showComponentDefinition: ToolDefinition = {
         required: ["dateFrom", "dateTo"],
         additionalProperties: false,
       },
+      series: {
+        type: "array",
+        minItems: 2,
+        maxItems: 4,
+        description: "comparison only: labelled queries to compare",
+        items: {
+          type: "object",
+          properties: {
+            label: { type: "string" },
+            filters: { type: "object", description: "Same fields as filters" },
+          },
+          required: ["label", "filters"],
+        },
+      },
+      metric: {
+        enum: ["expense", "income", "net"],
+        description: "comparison only; default expense",
+      },
+      byMonth: {
+        type: "boolean",
+        description: "comparison only: add a month-by-month running difference",
+      },
       groupBy: {
         enum: ["category", "merchant", "account"],
         description: "breakdown only",
@@ -72,7 +118,7 @@ export const showComponentDefinition: ToolDefinition = {
         description: "summary_tiles only",
       },
     },
-    required: ["component", "title", "filters"],
+    required: ["component", "title"],
     additionalProperties: false,
   },
 };
@@ -124,7 +170,9 @@ export class ComponentTools {
   ) {}
   async show(userId: string, raw: unknown): Promise<ComponentBlock> {
     const input = showComponentSchema.parse(raw);
-    const { title, filters } = input;
+    if (input.component === "comparison") return this.comparison(userId, input);
+    const { title } = input;
+    const filters = input.filters!;
     if (input.component === "transaction_list") {
       const page = await this.read.transactionPage(userId, {
         ...filters,
@@ -274,8 +322,93 @@ export class ComponentTools {
       }),
     };
   }
+  private async comparison(
+    userId: string,
+    input: ComparisonInput,
+  ): Promise<ComponentBlock> {
+    const series = input.series!;
+    const metric = input.metric;
+    const totals = await Promise.all(
+      series.map((s) =>
+        this.read.summary(userId, { ...s.filters, groupBy: "currency" }),
+      ),
+    );
+    const currencies = [
+      ...new Set(totals.flatMap((t) => t.totals.map((r) => r.currency))),
+    ].sort();
+    const perSeries = totals.map((t) => byCurrency(t.totals));
+    let months: Array<{
+      period: string;
+      currency: string;
+      values: string[];
+      difference: string | null;
+      cumulative: string | null;
+    }> = [];
+    if (input.byMonth) {
+      const daily = await Promise.all(
+        series.map((s) =>
+          this.read.summary(userId, { ...s.filters, groupBy: "day" }),
+        ),
+      );
+      const periods = [
+        ...new Set(
+          daily.flatMap((d) => d.totals.map((r) => r.group.slice(0, 7))),
+        ),
+      ].sort();
+      if (periods.length > MAX_COMPARISON_MONTHS)
+        throw new ChatError(400, "Compare at most 60 months at a time.");
+      for (const currency of currencies) {
+        let running = new D(0);
+        for (const period of periods) {
+          const values = daily.map((d) =>
+            metricOf(
+              d.totals.filter(
+                (r) => r.currency === currency && r.group.startsWith(period),
+              ),
+              metric,
+            ),
+          );
+          const difference =
+            values.length >= 2 ? values[0].minus(values[1]) : null;
+          if (difference) running = running.plus(difference);
+          months.push({
+            period,
+            currency,
+            values: values.map((v) => v.toFixed(2)),
+            difference: difference?.toFixed(2) ?? null,
+            cumulative: difference ? running.toFixed(2) : null,
+          });
+        }
+      }
+    }
+    return {
+      type: "component",
+      component: "comparison",
+      title: input.title,
+      metric,
+      series: series.map((s) => ({ label: s.label, query: s.filters })),
+      currencies: currencies.map((currency) => {
+        const values = perSeries.map((m) =>
+          metricOf(m.get(currency) || [], metric),
+        );
+        return {
+          currency,
+          totals: values.map((v) => v.toFixed(2)),
+          difference:
+            values.length >= 2 ? values[0].minus(values[1]).toFixed(2) : null,
+        };
+      }),
+      ...(input.byMonth ? { months } : {}),
+    };
+  }
 }
 
+type ComparisonInput = z.infer<typeof showComponentSchema>;
+const metricOf = (rows: Totals, metric: "expense" | "income" | "net") =>
+  metric === "net"
+    ? sum(rows, "income").minus(sum(rows, "expense"))
+    : sum(rows, metric);
+const MAX_COMPARISON_MONTHS = 60;
 /**
  * What the model sees of a displayed component: the query and headline numbers, never bulk rows.
  * `preview` keeps the first rows' IDs for the current turn so follow-up edits can reference them.
@@ -300,6 +433,15 @@ export function componentForModel(block: ComponentBlock, preview: boolean) {
             })),
           }
         : {}),
+    };
+  if (block.component === "comparison")
+    return {
+      displayed: block.component,
+      title: block.title,
+      metric: block.metric,
+      series: block.series,
+      currencies: block.currencies,
+      ...(preview && block.months ? { months: block.months } : {}),
     };
   if (block.component === "trend")
     return {

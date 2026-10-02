@@ -10,6 +10,7 @@ import {
   X,
   Trash2,
   User,
+  Bookmark,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import {
@@ -299,6 +300,31 @@ export function ChatClient() {
       // Raw tool data from older replies is for the model, not the reader.
       return null;
     }
+    if (value.type === "memory")
+      return (
+        <p
+          key={index}
+          className="flex flex-wrap items-center gap-2 rounded-md bg-gray-1 px-3 py-2 text-sm dark:bg-dark-2"
+        >
+          <Bookmark size={14} className="text-primary" aria-hidden />
+          <span className="font-medium">
+            {value.action === "saved" ? "Remembered" : "Forgot"}:
+          </span>
+          <span
+            className={
+              value.action === "forgotten" ? "line-through text-dark-5" : ""
+            }
+          >
+            {value.content}
+          </span>
+          <Link
+            href="/settings?tab=ai#memories"
+            className="ml-auto text-xs text-primary"
+          >
+            Manage
+          </Link>
+        </p>
+      );
     if (value.kind === "proposal") {
       const found = conversation?.runs
         .flatMap((r) => r.proposals)
@@ -510,6 +536,7 @@ export function ChatClient() {
                       (b) =>
                         b.type === "link" ||
                         b.type === "component" ||
+                        b.type === "memory" ||
                         (b.type === "data" && asTransactions(b.data)),
                     )
                     .map(block)}

@@ -15,6 +15,7 @@ import {
   TransactionReview,
   ReviewRow,
   reviewSuggestionSummary,
+  isUnsure,
 } from "./api";
 import { Expandable } from "./Details";
 export function ChatReviewCards({
@@ -177,7 +178,7 @@ export function ChatReviewCards({
           style={{
             padding: 16,
             borderWidth: 1,
-            borderColor: colors.line,
+            borderColor: isUnsure(row) && !closed ? colors.red : colors.line,
             borderRadius: 12,
             gap: 8,
           }}
@@ -191,6 +192,15 @@ export function ChatReviewCards({
                 {String(row.value.date).slice(0, 10)} ·{" "}
                 {row.value.accountIdentifier || "Unassigned"}
               </Txt>
+              {!!row.suggestion?.reason && (
+                <Txt size={12} style={{ color: colors.purple }}>
+                  {isUnsure(row) ? "Check: " : ""}
+                  {row.suggestion.reason}
+                  {row.suggestion.confidence !== undefined
+                    ? ` (${Math.round(row.suggestion.confidence * 100)}% sure)`
+                    : ""}
+                </Txt>
+              )}
             </View>
             {!closed && (
               <Pressable

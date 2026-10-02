@@ -345,6 +345,107 @@ function Trend({ block }: { block: Of<"trend"> }) {
   );
 }
 
+const METRIC_LABEL = { expense: "Spent", income: "Income", net: "Net" };
+function Comparison({ block }: { block: Of<"comparison"> }) {
+  const { colors } = useTheme();
+  const [a, b] = block.series;
+  return (
+    <Frame title={block.title} aside={METRIC_LABEL[block.metric]}>
+      {!block.currencies.length && (
+        <Txt muted>No transactions in this period.</Txt>
+      )}
+      {block.currencies.map((c) => {
+        const max = Math.max(...c.totals.map((t) => Math.abs(Number(t))), 0);
+        const months = (block.months || []).filter(
+          (m) => m.currency === c.currency,
+        );
+        return (
+          <View key={c.currency} style={{ gap: 10 }}>
+            {block.series.map((s, i) => (
+              <View
+                key={s.label}
+                accessible
+                accessibilityLabel={`${s.label}, ${formatMoney(c.totals[i], c.currency)}`}
+                style={{ gap: 4 }}
+              >
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    gap: 8,
+                  }}
+                >
+                  <Txt size={13} numberOfLines={1} style={{ flex: 1 }}>
+                    {s.label}
+                  </Txt>
+                  <Txt bold size={13}>
+                    {formatMoney(c.totals[i], c.currency)}
+                  </Txt>
+                </View>
+                <View
+                  style={{
+                    height: 8,
+                    borderRadius: 4,
+                    backgroundColor: colors.line,
+                  }}
+                >
+                  <View
+                    style={{
+                      height: 8,
+                      borderRadius: 4,
+                      backgroundColor: colors.purple,
+                      width: `${max ? Math.max((Math.abs(Number(c.totals[i])) / max) * 100, 1) : 0}%`,
+                    }}
+                  />
+                </View>
+              </View>
+            ))}
+            {c.difference !== null && (
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  borderTopWidth: 1,
+                  borderColor: colors.line,
+                  paddingTop: 8,
+                }}
+              >
+                <Txt muted size={13} style={{ flex: 1 }}>
+                  Difference ({a.label} − {b.label})
+                </Txt>
+                <Txt bold size={13}>
+                  {formatMoney(c.difference, c.currency)}
+                </Txt>
+              </View>
+            )}
+            {months.map((m) => (
+              <View
+                key={m.period}
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  gap: 8,
+                }}
+              >
+                <Txt muted size={12}>
+                  {periodLabel(m.period, "month")}
+                </Txt>
+                <Txt size={12}>
+                  {m.values.map((v) => formatMoney(v, c.currency)).join(" · ")}
+                  {m.cumulative !== null
+                    ? ` · running ${formatMoney(m.cumulative, c.currency)}`
+                    : ""}
+                </Txt>
+              </View>
+            ))}
+          </View>
+        );
+      })}
+    </Frame>
+  );
+}
+
 export function ChatComponent({
   block,
   onOpenTransaction,
@@ -360,5 +461,6 @@ export function ChatComponent({
     return <SummaryTiles block={block} />;
   if (block.component === "breakdown") return <Breakdown block={block} />;
   if (block.component === "trend") return <Trend block={block} />;
+  if (block.component === "comparison") return <Comparison block={block} />;
   return null;
 }

@@ -79,6 +79,7 @@ model User {
 
   chatConnections ChatConnection[]
   chatConversations ChatConversation[]
+  chatMemories ChatMemory[]
 
   @@map("users")
 }
@@ -657,6 +658,18 @@ model ClassificationPattern {
   @@index([userId, status])
   @@index([userId, patternType])
   @@map("classification_patterns")
+}
+
+/// Notes the user asked the chat assistant to remember across conversations.
+model ChatMemory {
+  id String @id @default(dbgenerated("gen_random_uuid()::text"))
+  userId String @map("user_id")
+  content String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  @@index([userId, updatedAt])
+  @@map("chat_memories")
 }
 
 model ChatConnection {

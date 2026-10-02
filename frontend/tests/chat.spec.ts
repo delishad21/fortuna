@@ -590,3 +590,100 @@ test("reviews show pre-filled suggestions with a short header", async ({ page, r
   await expect(page.getByText(/Edits save when you leave a cell/)).toHaveCount(0);
   await page.screenshot({ path: "/tmp/fortuna-review-prefilled.png" });
 });
+
+test("saved notes, comparisons and unsure review rows work end to end", async ({ page, request }) => {
+  const username = `chat_generic_${Date.now()}`, password = "chat-test-temporary-password";
+  const registered = await request.post("/api/auth/register", {
+    data: { username, password, name: "Chat QA", baseCurrency: "SGD" },
+  });
+  expect(registered.ok(), await registered.text()).toBeTruthy();
+  await page.goto("/login");
+  await page.getByLabel("Username").fill(username);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign In", exact: true }).click();
+  await expect(page).toHaveURL(/dashboard/, { timeout: 30000 });
+
+  // Real memory API through the authenticated proxy.
+  const api = await page.evaluate(async () => {
+    const call = (path: string, method = "GET", body?: unknown) =>
+      fetch(`/api/chat${path}`, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : {},
+        body: body ? JSON.stringify(body) : undefined,
+      }).then(async (r) => ({ status: r.status, body: await r.json() }));
+    const created = await call("/memories", "POST", { content: "Townsville journeys are hers" });
+    const updated = await call(`/memories/${created.body.id}`, "PUT", { content: "Simei–Townsville journeys are hers" });
+    const listed = await call("/memories");
+    return { created: created.status, updated: updated.body.content, listed: listed.body.map((n: any) => n.content) };
+  });
+  expect(api).toEqual({ created: 201, updated: "Simei–Townsville journeys are hers", listed: ["Simei–Townsville journeys are hers"] });
+
+  // Settings panel lists, adds, edits and deletes notes.
+  await page.goto("/settings?tab=ai");
+  const panel = page.getByRole("region", { name: "Saved notes" });
+  await expect(panel.getByText("Simei–Townsville journeys are hers")).toBeVisible();
+  await panel.getByLabel("New note", { exact: true }).fill("She repays me at the end of each month");
+  await panel.getByRole("button", { name: "Add note" }).click();
+  await expect(panel.getByText("She repays me at the end of each month")).toBeVisible();
+  await panel.getByRole("button", { name: "Edit note: She repays me at the end of each month" }).click();
+  await panel.getByLabel("Edit note", { exact: true }).fill("She repays me monthly");
+  await panel.getByRole("button", { name: "Save" }).click();
+  await expect(panel.getByText("She repays me monthly")).toBeVisible();
+  page.once("dialog", (d) => d.accept());
+  await panel.getByRole("button", { name: "Delete note: She repays me monthly" }).click();
+  await expect(panel.getByText("She repays me monthly")).toHaveCount(0);
+  await page.screenshot({ path: "/tmp/fortuna-saved-notes.png", fullPage: true });
+
+  const query = { dateFrom: "2026-08-01T00:00:00+08:00", dateTo: "2026-10-01T00:00:00+08:00" };
+  const original = (id: string, description: string) => ({
+    date: "2026-08-29T00:00:00.000Z", description, label: null, categoryId: null,
+    accountIdentifier: "SimplyGo 4591", amountIn: null, amountOut: 1.28, balance: null, currency: "SGD", linkage: null,
+  });
+  const review = {
+    id: "rv2", conversationId: "c1", title: "Whose journeys", instructions: "", status: "pending", version: 1,
+    categories: [{ id: "partner", name: "Partner transport", color: "#ff9800" }],
+    accounts: [{ id: "a1", accountIdentifier: "SimplyGo 4591", color: "#e91e63" }],
+    rows: [
+      { id: "j2", version: 1, source: { rowId: "j2", draftId: "d1" }, original: original("j2", "Bus 9 Blk 233 - Bedok Mkt Pl"),
+        value: { ...original("j2", "Bus 9 Blk 233 - Bedok Mkt Pl"), categoryId: "partner" },
+        suggestion: { reason: "Same bus and minute as your ride, so one is hers", confidence: 0.5 } },
+      { id: "j1", version: 1, source: { rowId: "j1", draftId: "d1" }, original: original("j1", "Simei - Townsville Pr Sch"),
+        value: { ...original("j1", "Simei - Townsville Pr Sch"), categoryId: "partner" },
+        suggestion: { reason: "Her weekday school commute", confidence: 0.95 } },
+    ],
+  };
+  await page.route("**/api/chat/**", async route => {
+    const path = new URL(route.request().url()).pathname.replace("/api/chat", "");
+    let body: any = {};
+    if (path === "/conversations") body = [{ id: "c1", title: "August transit", updatedAt: "2026-10-02" }];
+    else if (path === "/reviews/rv2") body = review;
+    else if (path === "/conversations/c1") body = {
+      id: "c1", title: "August transit", attachments: [],
+      runs: [{ id: "r1", status: "awaiting_confirmation", proposals: [] }],
+      messages: [{ id: "a1", role: "assistant", blocks: [
+        { type: "text", text: "Staged August and split the journeys." },
+        { type: "memory", id: "m1", content: "Simei–Townsville journeys are hers", action: "saved" },
+        { type: "component", component: "comparison", title: "SimplyGo vs card charges", metric: "expense",
+          series: [{ label: "SimplyGo journeys", query }, { label: "Card BUS/MRT charges", query }],
+          currencies: [{ currency: "SGD", totals: ["55.80", "52.30"], difference: "3.50" }],
+          months: [
+            { period: "2026-08", currency: "SGD", values: ["55.80", "48.10"], difference: "7.70", cumulative: "7.70" },
+            { period: "2026-09", currency: "SGD", values: ["0.00", "4.20"], difference: "-4.20", cumulative: "3.50" },
+          ] },
+        { type: "review", id: "rv2", title: review.title },
+      ] }],
+    };
+    await route.fulfill({ json: body });
+  });
+  await page.goto("/chat?conversation=c1");
+  await expect(page.getByText("Remembered:")).toBeVisible();
+  await expect(page.getByText("Simei–Townsville journeys are hers")).toBeVisible();
+  const comparison = page.locator("section.rounded-lg").filter({ has: page.getByRole("heading", { name: "SimplyGo vs card charges" }) });
+  await expect(comparison.getByText("SGD 55.80").first()).toBeVisible();
+  await expect(comparison.getByText("Difference (SimplyGo journeys − Card BUS/MRT charges)")).toBeVisible();
+  await expect(comparison.getByText("SGD 3.50").first()).toBeVisible();
+  await expect(comparison.getByRole("cell", { name: "-SGD 4.20" })).toBeVisible();
+  await expect(page.getByText("Check the first 1 row: Fortuna wasn’t sure")).toBeVisible();
+  await expect(page.getByText(/Same bus and minute as your ride, so one is hers/)).toBeVisible();
+  await page.screenshot({ path: "/tmp/fortuna-generic-tools.png", fullPage: true });
+});

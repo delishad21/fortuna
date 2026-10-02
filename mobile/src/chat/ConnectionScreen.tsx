@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Linking, View } from "react-native";
 import { Button, Card, Input, Screen, Txt } from "../ui";
 import { useChatApi, Connection, DeviceLogin } from "./api";
+import { MemoryCard } from "./MemoryCard";
 export function AIConnectionScreen() {
   const api = useChatApi(),
     [connections, setConnections] = useState<Connection[]>([]),
@@ -184,6 +185,7 @@ export function AIConnectionScreen() {
           </Card>
         );
       })}
+      <MemoryCard />
     </Screen>
   );
 }

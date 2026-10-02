@@ -373,6 +373,123 @@ function Trend({
   );
 }
 
+const METRIC_LABEL = { expense: "Spent", income: "Income", net: "Net" };
+function Comparison({
+  block,
+}: {
+  block: Extract<ComponentBlock, { component: "comparison" }>;
+}) {
+  const [a, b] = block.series;
+  return (
+    <Frame
+      title={block.title}
+      aside={`${METRIC_LABEL[block.metric]} · ${rangeLabel(block.series[0].query)}`}
+    >
+      {!block.currencies.length && (
+        <p className="text-sm text-dark-5">No transactions in this period.</p>
+      )}
+      {block.currencies.map((c) => {
+        const max = Math.max(...c.totals.map((t) => Math.abs(Number(t))), 0);
+        return (
+          <div key={c.currency} className="space-y-3">
+            <ul className="space-y-2.5">
+              {block.series.map((s, i) => (
+                <li key={s.label}>
+                  <div className="flex items-baseline justify-between gap-3 text-sm">
+                    <span className="truncate">{s.label}</span>
+                    <span className="shrink-0 font-medium tabular-nums">
+                      {formatMoney(c.totals[i], c.currency)}
+                    </span>
+                  </div>
+                  <div className="mt-1 h-2 rounded-full bg-gray-2 dark:bg-dark-3">
+                    <div
+                      className="h-2 rounded-full"
+                      style={{
+                        width: `${max ? Math.max((Math.abs(Number(c.totals[i])) / max) * 100, 1) : 0}%`,
+                        backgroundColor: PRIMARY,
+                      }}
+                    />
+                  </div>
+                </li>
+              ))}
+            </ul>
+            {c.difference !== null && (
+              <p className="flex items-baseline justify-between gap-3 border-t border-stroke pt-2 text-sm dark:border-stroke-dark">
+                <span className="text-dark-5 dark:text-dark-6">
+                  Difference ({a.label} − {b.label})
+                </span>
+                <span className="font-semibold tabular-nums">
+                  {formatMoney(c.difference, c.currency)}
+                </span>
+              </p>
+            )}
+            {block.months &&
+              block.months.some((m) => m.currency === c.currency) && (
+                <div className="max-h-72 overflow-auto">
+                  <table className="w-full text-left text-sm tabular-nums">
+                    <caption className="sr-only">Month by month</caption>
+                    <thead className="text-xs text-dark-5 dark:text-dark-6">
+                      <tr>
+                        <th className="py-1 font-medium">Month</th>
+                        {block.series.map((s) => (
+                          <th
+                            key={s.label}
+                            className="py-1 text-right font-medium"
+                          >
+                            {s.label}
+                          </th>
+                        ))}
+                        {block.series.length >= 2 && (
+                          <>
+                            <th className="py-1 text-right font-medium">
+                              Difference
+                            </th>
+                            <th className="py-1 text-right font-medium">
+                              Running
+                            </th>
+                          </>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {block.months
+                        .filter((m) => m.currency === c.currency)
+                        .map((m) => (
+                          <tr
+                            key={m.period}
+                            className="border-t border-stroke dark:border-stroke-dark"
+                          >
+                            <td className="py-1">
+                              {periodLabel(m.period, "month")}
+                            </td>
+                            {m.values.map((v, i) => (
+                              <td key={i} className="py-1 text-right">
+                                {formatMoney(v, c.currency)}
+                              </td>
+                            ))}
+                            {m.difference !== null && (
+                              <>
+                                <td className="py-1 text-right">
+                                  {formatMoney(m.difference, c.currency)}
+                                </td>
+                                <td className="py-1 text-right font-medium">
+                                  {formatMoney(m.cumulative!, c.currency)}
+                                </td>
+                              </>
+                            )}
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+          </div>
+        );
+      })}
+    </Frame>
+  );
+}
+
 export function ChatComponent({ block }: { block: ComponentBlock }) {
   if (block.component === "transaction_list")
     return <TransactionList block={block} />;
@@ -380,5 +497,6 @@ export function ChatComponent({ block }: { block: ComponentBlock }) {
     return <SummaryTiles block={block} />;
   if (block.component === "breakdown") return <Breakdown block={block} />;
   if (block.component === "trend") return <Trend block={block} />;
+  if (block.component === "comparison") return <Comparison block={block} />;
   return null;
 }

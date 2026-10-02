@@ -8,12 +8,15 @@ import {
   ChatContext,
   ChatError,
   ComponentBlock,
+  idSchema,
   ToolResult,
 } from "../contracts";
 import { ToolDefinition } from "../providers/provider";
 import { ApprovalService } from "../approvals.service";
 import { TransactionActions, json } from "./transactions";
 import { ReadTools } from "./read";
+import { documentDefinitions, executeDocumentTool } from "./documents";
+import { MemoryService, memoryDefinitions } from "../memories.service";
 import {
   ComponentTools,
   componentForModel,
@@ -191,6 +194,17 @@ export function createToolRegistry(db: PrismaClient) {
               transactionId: str,
               stagedRowId: str,
               patch: { type: "object" },
+              reason: {
+                type: "string",
+                maxLength: 200,
+                description: "Short why, e.g. 'Matches her weekday commute'",
+              },
+              confidence: {
+                type: "number",
+                minimum: 0,
+                maximum: 1,
+                description: "Below 0.7 asks the user to check this row first",
+              },
             },
             required: ["patch"],
           },
@@ -200,6 +214,9 @@ export function createToolRegistry(db: PrismaClient) {
     ),
   });
   definitions.push(showComponentDefinition);
+  definitions.push(...documentDefinitions);
+  definitions.push(...memoryDefinitions);
+  const memories = new MemoryService(db);
   definitions.push(...workflowDefinitions);
   async function execute(
     context: ChatContext,
@@ -251,6 +268,51 @@ export function createToolRegistry(db: PrismaClient) {
       const proposal = await approvals.proposeAction(context, action);
       return proposalResult(proposal);
     }
+    if (name === "remember") {
+      const note = await memories.save(context.userId, input);
+      return {
+        blocks: [
+          {
+            type: "memory",
+            id: note.id,
+            content: note.content,
+            action: "saved",
+          },
+        ],
+        model: { saved: note },
+      };
+    }
+    if (name === "forget") {
+      const { id } = z.object({ id: idSchema }).strict().parse(input);
+      const note = await memories.remove(context.userId, id);
+      return {
+        blocks: [
+          {
+            type: "memory",
+            id: note.id,
+            content: note.content,
+            action: "forgotten",
+          },
+        ],
+        model: { forgotten: note.id },
+      };
+    }
+    if (documentDefinitions.some((d) => d.name === name)) {
+      const data = json(await executeDocumentTool(db, context, name, input));
+      if (name === "stage_rows")
+        return {
+          blocks: [
+            {
+              type: "link",
+              kind: "draft",
+              id: String((data as { id: string }).id),
+              label: "Review staged import",
+            },
+          ],
+          model: data,
+        };
+      return { blocks: [], model: data };
+    }
     if (workflowDefinitions.some((d) => d.name === name)) {
       const data = await executeWorkflowTool(db, context, name, input);
       // Workflow results inform the model; the user only sees links and components.
@@ -283,6 +345,7 @@ export function createToolRegistry(db: PrismaClient) {
         "spending_summary",
         "find_transactions",
         "show_component",
+        "read_attachment",
         "list_parsers",
         "list_staged_imports",
         "inspect_staged_import",

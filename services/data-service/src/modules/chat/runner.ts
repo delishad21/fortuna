@@ -1,6 +1,7 @@
 import { ZodError } from "zod";
 import { compactBlocks } from "./tools/components";
 import { loadModelImages } from "./media";
+import { MemoryService } from "./memories.service";
 import { ProviderMessage } from "./providers/provider";
 import { safeChatError } from "./errors";
 import { PrismaClient } from "@prisma/client";
@@ -11,7 +12,7 @@ import { createToolRegistry } from "./tools/registry";
 import { json, stateHash } from "./tools/transactions";
 import { CHAT_LIMITS, ChatError, ToolResult } from "./contracts";
 /** Tool output the user sees in the saved reply; everything else is for the model only. */
-const USER_VISIBLE_BLOCKS = new Set(["link", "review", "component"]);
+const USER_VISIBLE_BLOCKS = new Set(["link", "review", "component", "memory"]);
 /** Name each invalid field so the model can correct its own call. */
 export function invalidArguments(error: ZodError) {
   const issues = error.issues
@@ -104,10 +105,16 @@ export async function executeRun(
     });
     if (!conversation) throw new ChatError(404, "Conversation not found");
     const history = conversation.messages.reverse();
-    const messages: ProviderMessage[] = history.map((m) => ({
-      role: m.role as "user" | "assistant",
-      content: JSON.stringify(compactBlocks(m.blocks)),
-    }));
+    const notes = await new MemoryService(db).forModel(run.userId);
+    const messages: ProviderMessage[] = [
+      ...(notes
+        ? [{ role: "user" as const, content: JSON.stringify(notes) }]
+        : []),
+      ...history.map((m) => ({
+        role: m.role as "user" | "assistant",
+        content: JSON.stringify(compactBlocks(m.blocks)),
+      })),
+    ];
     if (JSON.stringify(messages).length > 192000)
       throw new ChatError(
         400,
@@ -118,7 +125,7 @@ export async function executeRun(
       const attached = (Array.isArray(m.blocks) ? m.blocks : [])
         .map((b: any) => b?.type === "attachment" && images.get(b.id))
         .filter(Boolean) as NonNullable<ProviderMessage["images"]>;
-      if (attached.length) messages[i].images = attached;
+      if (attached.length) messages[i + (notes ? 1 : 0)].images = attached;
     });
     if (run.attempts > 1)
       await repo.appendEvent(run, {

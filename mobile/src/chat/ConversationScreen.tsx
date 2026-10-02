@@ -251,6 +251,26 @@ export function ChatConversationScreen({ route, navigation }: any) {
           Statement: {block.filename}
         </Txt>
       );
+    if (block.type === "memory")
+      return (
+        <View
+          key={index}
+          style={{
+            flexDirection: "row",
+            gap: 6,
+            alignItems: "center",
+            backgroundColor: colors.tint,
+            borderRadius: 8,
+            padding: 10,
+          }}
+        >
+          <Ionicons name="bookmark-outline" size={14} color={colors.purple} />
+          <Txt size={13} style={{ flex: 1 }}>
+            {block.action === "saved" ? "Remembered" : "Forgot"}:{" "}
+            {block.content}
+          </Txt>
+        </View>
+      );
     if (block.type === "component")
       return (
         <ChatComponent
@@ -432,7 +452,12 @@ export function ChatConversationScreen({ route, navigation }: any) {
                 </Txt>
                 <Txt selectable>{stream.text}</Txt>
                 {stream.blocks
-                  .filter((b) => b.type === "link" || b.type === "component")
+                  .filter(
+                    (b) =>
+                      b.type === "link" ||
+                      b.type === "component" ||
+                      b.type === "memory",
+                  )
                   .map(renderBlock)}
               </>
             )}

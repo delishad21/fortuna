@@ -15,6 +15,12 @@ export type Block =
       label: string;
     }
   | { type: "data"; title: string; data: any }
+  | {
+      type: "memory";
+      id: string;
+      content: string;
+      action: "saved" | "forgotten";
+    }
   | ComponentBlock;
 export type ComponentRow = {
   id: string;
@@ -63,6 +69,25 @@ export type ComponentBlock =
           color?: string;
           other?: boolean;
         }>;
+      }>;
+    }
+  | {
+      type: "component";
+      component: "comparison";
+      title: string;
+      metric: "expense" | "income" | "net";
+      series: Array<{ label: string; query: Record<string, unknown> }>;
+      currencies: Array<{
+        currency: string;
+        totals: string[];
+        difference: string | null;
+      }>;
+      months?: Array<{
+        period: string;
+        currency: string;
+        values: string[];
+        difference: string | null;
+        cumulative: string | null;
       }>;
     }
   | {
@@ -302,7 +327,15 @@ export type ReviewRow = {
   source: { transactionId?: string; draftId?: string; rowId?: string };
   original: Record<string, any>;
   value: Record<string, any>;
+  /** Why the assistant pre-filled this row and how sure it is (0–1). */
+  suggestion?: { reason?: string; confidence?: number };
 };
+/** Rows the assistant is unsure about are shown to the user first. */
+export const UNSURE_CONFIDENCE = 0.7;
+export const isUnsure = (row: ReviewRow) =>
+  row.suggestion?.confidence !== undefined &&
+  row.suggestion.confidence < UNSURE_CONFIDENCE;
+export type ChatMemory = { id: string; content: string; updatedAt: string };
 export type TransactionReview = {
   id: string;
   conversationId: string;

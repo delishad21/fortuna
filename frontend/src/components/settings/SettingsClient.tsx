@@ -1,5 +1,6 @@
 "use client";
 import {ConnectionPanel} from "@/components/chat/ConnectionPanel";
+import { MemoryPanel } from "@/components/chat/MemoryPanel";
 
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -537,7 +538,7 @@ export function SettingsClient({
         onChange={setActiveTab}
       />
 
-      {activeTab === "ai" ? <ConnectionPanel/> : activeTab === "profile" ? (
+      {activeTab === "ai" ? <><ConnectionPanel/><MemoryPanel/></> : activeTab === "profile" ? (
       <>
       <Card>
         <CardHeader className="flex flex-col gap-4">

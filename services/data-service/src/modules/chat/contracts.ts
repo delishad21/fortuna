@@ -74,6 +74,12 @@ export type ResultBlock =
       label: string;
     }
   | { type: "data"; title: string; data: unknown }
+  | {
+      type: "memory";
+      id: string;
+      content: string;
+      action: "saved" | "forgotten";
+    }
   | ComponentBlock;
 type ComponentQuery = Record<string, unknown>;
 /** Rich display blocks. Amounts are decimal strings; currencies are never mixed or converted. */
@@ -122,6 +128,25 @@ export type ComponentBlock =
           color?: string;
           other?: boolean;
         }>;
+      }>;
+    }
+  | {
+      type: "component";
+      component: "comparison";
+      title: string;
+      metric: "expense" | "income" | "net";
+      series: Array<{ label: string; query: ComponentQuery }>;
+      currencies: Array<{
+        currency: string;
+        totals: string[];
+        difference: string | null;
+      }>;
+      months?: Array<{
+        period: string;
+        currency: string;
+        values: string[];
+        difference: string | null;
+        cumulative: string | null;
       }>;
     }
   | {

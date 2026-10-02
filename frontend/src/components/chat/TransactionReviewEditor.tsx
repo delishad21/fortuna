@@ -6,6 +6,7 @@ import {
   chatApi,
   TransactionReview,
   reviewSuggestionSummary,
+  isUnsure,
 } from "@/lib/chat/client";
 export function TransactionReviewEditor({
   id,
@@ -126,11 +127,23 @@ export function TransactionReviewEditor({
         label: r.value.label ?? "",
         categoryId: r.value.categoryId ?? undefined,
         accountIdentifier: r.value.accountIdentifier ?? undefined,
-        metadata: r.value.metadata || {},
+        metadata: {
+          ...(r.value.metadata || {}),
+          ...(r.suggestion?.reason
+            ? {
+                "Fortuna's note": `${r.suggestion.reason}${
+                  r.suggestion.confidence !== undefined
+                    ? ` (${Math.round(r.suggestion.confidence * 100)}% sure)`
+                    : ""
+                }`,
+              }
+            : {}),
+        },
       }) as Transaction,
   );
   const closed = review.status !== "pending";
   const suggestions = reviewSuggestionSummary(review.rows, review.categories);
+  const unsure = review.rows.filter(isUnsure);
   return (
     <div
       ref={container}
@@ -149,6 +162,24 @@ export function TransactionReviewEditor({
               : "Changes save automatically"}
         </p>
       </div>
+      {unsure.length > 0 && !closed && (
+        <div className="rounded-md border border-orange/40 bg-orange/5 px-3 py-2 text-sm">
+          <p className="font-medium">
+            Check the first {unsure.length}{" "}
+            {unsure.length === 1 ? "row" : "rows"}: Fortuna wasn’t sure
+          </p>
+          <ul className="mt-1 space-y-0.5 text-dark-5 dark:text-dark-6">
+            {unsure.slice(0, 5).map((row) => (
+              <li key={row.id} className="truncate">
+                {String(row.value.date).slice(0, 10)} ·{" "}
+                {row.value.label || row.value.description} —{" "}
+                {row.suggestion?.reason || "Needs your call"}
+              </li>
+            ))}
+            {unsure.length > 5 && <li>…and {unsure.length - 5} more</li>}
+          </ul>
+        </div>
+      )}
       {review.instructions && (
         <p className="text-sm text-dark-5 dark:text-dark-6">
           {review.instructions}

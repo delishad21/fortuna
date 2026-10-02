@@ -477,3 +477,145 @@ test("phone chat attaches photos and shows sent images", async ({ page }) => {
   await expect.poll(() => imageAuth).toContain("Bearer qa-token");
   await page.screenshot({ path: "/tmp/fortuna-mobile-chat-image.png" });
 });
+
+test("phone chat shows comparisons, saved notes and unsure review rows", async ({
+  page,
+}) => {
+  const server = "http://chat-fixture.local";
+  await page.addInitScript(
+    ({ server }) =>
+      sessionStorage.setItem(
+        "fortuna.mobile.session",
+        JSON.stringify({ server, token: "qa-token", expiresAt: "2099-01-01" }),
+      ),
+    { server },
+  );
+  await page.route("http://chat-fixture.local/api/mobile/**", (route) =>
+    route.fulfill({
+      json: {
+        data:
+          route.request().postDataJSON()?.operation === "getCurrentUser"
+            ? { name: "Chat QA", username: "qa", baseCurrency: "SGD" }
+            : null,
+      },
+    }),
+  );
+  const query = {
+    dateFrom: "2026-08-01T00:00:00+08:00",
+    dateTo: "2026-09-01T00:00:00+08:00",
+  };
+  const original = {
+    date: "2026-08-29T00:00:00.000Z",
+    description: "Bus 9 Blk 233 - Bedok Mkt Pl",
+    label: null,
+    categoryId: null,
+    accountIdentifier: "SimplyGo 4591",
+    amountIn: null,
+    amountOut: 1.28,
+    balance: null,
+    currency: "SGD",
+    linkage: null,
+  };
+  await page.route("http://chat-fixture.local/api/chat/**", async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(
+      "/api/chat",
+      "",
+    );
+    let data: any = {};
+    if (path === "/conversations")
+      data = [{ id: "c1", title: "August transit", updatedAt: "2026-10-02" }];
+    else if (path === "/reviews/rv2")
+      data = {
+        id: "rv2",
+        conversationId: "c1",
+        title: "Whose journeys",
+        instructions: "",
+        status: "pending",
+        version: 1,
+        categories: [
+          { id: "partner", name: "Partner transport", color: "#ff9800" },
+        ],
+        accounts: [
+          { id: "a1", accountIdentifier: "SimplyGo 4591", color: "#e91e63" },
+        ],
+        rows: [
+          {
+            id: "j2",
+            version: 1,
+            source: { rowId: "j2", draftId: "d1" },
+            original,
+            value: { ...original, categoryId: "partner" },
+            suggestion: {
+              reason: "Same bus and minute as your ride",
+              confidence: 0.5,
+            },
+          },
+        ],
+      };
+    else if (path === "/conversations/c1")
+      data = {
+        id: "c1",
+        title: "August transit",
+        attachments: [],
+        runs: [{ id: "r1", status: "awaiting_confirmation", proposals: [] }],
+        messages: [
+          {
+            id: "a1",
+            role: "assistant",
+            blocks: [
+              { type: "text", text: "Split the journeys." },
+              {
+                type: "memory",
+                id: "m1",
+                content: "Townsville journeys are hers",
+                action: "saved",
+              },
+              {
+                type: "component",
+                component: "comparison",
+                title: "SimplyGo vs card",
+                metric: "expense",
+                series: [
+                  { label: "SimplyGo journeys", query },
+                  { label: "Card charges", query },
+                ],
+                currencies: [
+                  {
+                    currency: "SGD",
+                    totals: ["55.80", "52.30"],
+                    difference: "3.50",
+                  },
+                ],
+              },
+              { type: "review", id: "rv2", title: "Whose journeys" },
+            ],
+          },
+        ],
+      };
+    else if (path === "/settings") data = [];
+    await route.fulfill({ json: data });
+  });
+  await page.goto("/");
+  await page.getByRole("tab", { name: /Chat/ }).click();
+  await page
+    .getByRole("button", { name: "Toggle chat history", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "August transit", exact: true })
+    .click();
+  await expect(
+    page.getByText("Remembered: Townsville journeys are hers"),
+  ).toBeVisible();
+  await expect(page.getByText("SimplyGo vs card")).toBeVisible();
+  await expect(
+    page.getByText("Difference (SimplyGo journeys − Card charges)"),
+  ).toBeVisible();
+  await expect(page.getByText("SGD 3.50")).toBeVisible();
+  await expect(
+    page.getByText("Check: Same bus and minute as your ride (50% sure)"),
+  ).toBeVisible();
+  await page.screenshot({
+    path: "/tmp/fortuna-mobile-generic.png",
+    fullPage: true,
+  });
+});

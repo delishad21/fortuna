@@ -49,6 +49,8 @@ export type ReviewRow = {
   source: { transactionId?: string; draftId?: string; rowId?: string };
   original: any;
   value: any;
+  /** Why the assistant pre-filled this row, and how sure it is (0–1). */
+  suggestion?: { reason?: string; confidence?: number };
 };
 export const requestReviewSchema = z
   .object({
@@ -64,6 +66,8 @@ export const requestReviewSchema = z
             transactionId: idSchema.optional(),
             stagedRowId: idSchema.optional(),
             patch: reviewPatch,
+            reason: z.string().trim().min(1).max(200).optional(),
+            confidence: z.number().min(0).max(1).optional(),
           })
           .strict()
           .refine((s) => !!s.transactionId !== !!s.stagedRowId),
@@ -77,6 +81,13 @@ export const requestReviewSchema = z
       v.transactionIds.length + v.stagedRowIds.length > 0 &&
       v.transactionIds.length + v.stagedRowIds.length <= 100,
   );
+const UNSURE_CONFIDENCE = 0.7;
+const unsureRank = (row: ReviewRow) => {
+  const confidence = row.suggestion?.confidence;
+  return confidence !== undefined && confidence < UNSURE_CONFIDENCE
+    ? confidence
+    : 1;
+};
 export class ReviewService {
   constructor(private db: PrismaClient) {}
   async create(context: ChatContext, raw: unknown) {
@@ -119,6 +130,14 @@ export class ReviewService {
           (s.transactionId || s.stagedRowId)!,
           s.patch as Record<string, unknown>,
         ]),
+      );
+      const notes = new Map(
+        input.suggestions
+          .filter((s) => s.reason || s.confidence !== undefined)
+          .map((s) => [
+            (s.transactionId || s.stagedRowId)!,
+            { reason: s.reason, confidence: s.confidence },
+          ]),
       );
       if (
         [...suggested.keys()].some(
@@ -179,6 +198,7 @@ export class ReviewService {
             source: { transactionId: t.id },
             original: value,
             value: withSuggestion(t.id, value),
+            ...(notes.has(t.id) ? { suggestion: notes.get(t.id) } : {}),
           };
         }),
         ...staged.map((r) => ({
@@ -187,11 +207,15 @@ export class ReviewService {
           source: { draftId: r.draftId, rowId: r.id },
           original: r.currentPayload,
           value: withSuggestion(r.id, r.currentPayload),
+          ...(notes.has(r.id) ? { suggestion: notes.get(r.id) } : {}),
         })),
-      ].sort((a, b) =>
-        String((a.value as any)?.date).localeCompare(
-          String((b.value as any)?.date),
-        ),
+      ].sort(
+        // Rows the assistant is unsure about come first, least sure first; then by date.
+        (a, b) =>
+          unsureRank(a) - unsureRank(b) ||
+          String((a.value as any)?.date).localeCompare(
+            String((b.value as any)?.date),
+          ),
       );
       const review = await tx.chatTransactionReview.create({
         data: {

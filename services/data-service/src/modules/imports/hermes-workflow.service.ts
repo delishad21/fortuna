@@ -26,6 +26,8 @@ const STORAGE_ROOT = path.resolve(
 const PARSER_SERVICE_URL =
   process.env.PARSER_SERVICE_URL || "http://file-parser:4000";
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+/** Parser ID recorded on drafts whose rows were extracted by the assistant rather than a parser. */
+export const ASSISTANT_ROWS_PARSER_ID = "assistant_rows";
 const COMMIT_TOKEN_TTL_MS = 10 * 60 * 1000;
 
 function commitSecret() {
@@ -178,6 +180,96 @@ export class HermesWorkflowService {
       return next;
     });
     return { ...publicFile(record), duplicate: false };
+  }
+
+  /**
+   * Stage rows extracted from a document (for example by the chat assistant) so they follow the
+   * normal review, duplicate check and approval flow. Import rules apply as for parsed statements.
+   */
+  static async createDraftFromRows(
+    userId: string,
+    input: {
+      sourceFileId?: string | null;
+      sourceFilename: string;
+      rows: Array<Record<string, unknown>>;
+      rowsAreDistinct: boolean;
+    },
+    actor: Actor,
+  ) {
+    const file = input.sourceFileId
+      ? await prisma.statementFile.findFirst({
+          where: { id: input.sourceFileId, userId, deletedAt: null },
+        })
+      : null;
+    if (input.sourceFileId && !file)
+      throw Object.assign(new Error("Source document not found"), { status: 404 });
+    const sourceSha256 = createHash("sha256")
+      .update(JSON.stringify({ file: file?.sha256 ?? null, rows: input.rows }))
+      .digest("hex");
+    const existing = await prisma.importDraft.findFirst({
+      where: {
+        userId,
+        sourceSha256,
+        mode: "main",
+        status: { notIn: ["committed", "discarded", "failed"] },
+      },
+      include: { rows: { orderBy: { rowIndex: "asc" } } },
+    });
+    if (existing) return { ...existing, duplicate: true };
+    await TransactionService.bootstrapDefaultImportRules(userId);
+    const ruled = await TransactionService.applyImportRules(
+      userId,
+      undefined,
+      input.rows as never[],
+    );
+    return prisma.$transaction(async (tx) => {
+      const draft = await tx.importDraft.create({
+        data: {
+          userId,
+          mode: "main",
+          parserId: ASSISTANT_ROWS_PARSER_ID,
+          parserVersion: "assistant",
+          sourceFilename: input.sourceFilename,
+          sourceFileId: file?.id ?? null,
+          sourceSha256,
+          status: "review",
+          expiresAt: new Date(Date.now() + SEVEN_DAYS_MS),
+        },
+      });
+      await tx.importDraftRow.createMany({
+        data: ruled.map((transaction, rowIndex) => {
+          const metadata = {
+            ...((transaction as any).metadata || {}),
+            ...(input.rowsAreDistinct ? { distinctWithinDraft: true } : {}),
+          };
+          const fixedRuleId = String(metadata.fixedRuleId || "");
+          return {
+            draftId: draft.id,
+            rowIndex,
+            parsedPayload: input.rows[rowIndex] as Prisma.InputJsonValue,
+            currentPayload: { ...transaction, metadata } as unknown as Prisma.InputJsonValue,
+            reviewStatus: fixedRuleId ? "auto_applied" : "unresolved",
+            provenance: {
+              source: "assistant",
+              ...(fixedRuleId ? { fixedRuleId } : {}),
+            } as Prisma.InputJsonValue,
+          };
+        }),
+      });
+      await audit(tx, userId, actor, {
+        toolName: "stage_rows",
+        targetType: "import_draft",
+        targetId: draft.id,
+        metadata: { rowCount: ruled.length, sourceFileId: file?.id ?? null },
+      });
+      return {
+        ...(await tx.importDraft.findUniqueOrThrow({
+          where: { id: draft.id },
+          include: { rows: { orderBy: { rowIndex: "asc" } } },
+        })),
+        duplicate: false,
+      };
+    });
   }
 
   static async createDraft(
@@ -1289,6 +1381,8 @@ export class HermesWorkflowService {
         description: String(payload.description || ""),
         amountIn: payload.amountIn == null ? null : Number(payload.amountIn),
         amountOut: payload.amountOut == null ? null : Number(payload.amountOut),
+        distinctWithinDraft:
+          (payload.metadata as Record<string, unknown> | undefined)?.distinctWithinDraft === true,
       };
     };
 

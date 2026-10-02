@@ -197,7 +197,14 @@ def inspect_candidate_fixture():
         return jsonify({"error": "No fixture file provided"}), 400
     try:
         fixture = request.files["file"]
-        return jsonify({"fixture": inspect_fixture(fixture.read(), fixture.filename or "statement")})
+        start_page = int(request.form.get("startPage") or 1)
+        return jsonify(
+            {
+                "fixture": inspect_fixture(
+                    fixture.read(), fixture.filename or "statement", start_page
+                )
+            }
+        )
     except Exception as error:
         return jsonify({"error": str(error)}), 400
 
