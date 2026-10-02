@@ -7,6 +7,7 @@ import {
   Square,
   FileText,
   Upload,
+  Loader2,
   Plus,
   Settings2,
   PanelLeft,
@@ -25,6 +26,7 @@ import {
   emptyStream,
   mergeEvents,
   generatingRun,
+  stepLabel,
   PendingAttachment,
   IMAGE_UPLOAD_TYPES,
   IMAGE_UPLOAD_BYTES,
@@ -84,7 +86,9 @@ export function ChatClient() {
     inFlight = useRef(false),
     keepComposer = useRef(false),
     dragDepth = useRef(0);
-  const [dragging, setDragging] = useState(false);
+  const [dragging, setDragging] = useState(false),
+    [seconds, setSeconds] = useState(0),
+    [blockedHint, setBlockedHint] = useState(false);
   selected.current = id;
   streamRef.current = stream;
   const refreshList = useCallback(
@@ -122,6 +126,18 @@ export function ChatClient() {
     void refresh().catch((e) => setError(e.message));
   }, [id, refresh]);
   const run = conversation?.runs[0];
+  const running = generatingRun(run);
+  useEffect(() => {
+    setBlockedHint(false);
+    if (!running) return;
+    const started = Date.now();
+    setSeconds(0);
+    const timer = setInterval(
+      () => setSeconds(Math.floor((Date.now() - started) / 1000)),
+      1000,
+    );
+    return () => clearInterval(timer);
+  }, [running, run?.id]);
   useEffect(() => {
     streamRef.current = emptyStream();
     setStream(emptyStream());
@@ -430,6 +446,13 @@ export function ChatClient() {
     );
   }
   const generating = generatingRun(run);
+  const currentStep = [...stream.steps].reverse().find((s) => !s.done);
+  const workingOn = currentStep
+    ? stepLabel(currentStep.name)
+    : stream.text
+      ? "Writing a reply"
+      : "Thinking";
+  const elapsed = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   const fileTypes = [".pdf", ".csv", ".txt", ...IMAGE_UPLOAD_TYPES].join(",");
   const dropProps = {
     onDragEnter: (e: React.DragEvent) => {
@@ -462,6 +485,32 @@ export function ChatClient() {
       className="mx-auto w-full max-w-3xl px-4 pb-4 md:px-6"
     >
       <div className="rounded-xl border border-stroke bg-white shadow-sm transition-colors focus-within:border-primary dark:border-stroke-dark dark:bg-dark-2">
+        {generating && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex items-center gap-2 border-b border-stroke px-4 py-2 text-sm dark:border-stroke-dark"
+          >
+            <Loader2
+              size={15}
+              className="shrink-0 animate-spin text-primary"
+              aria-hidden
+            />
+            <span className="font-medium">Fortuna is working</span>
+            <span className="min-w-0 truncate text-dark-5 dark:text-dark-6">
+              · {workingOn}
+            </span>
+            <span className="ml-auto shrink-0 tabular-nums text-xs text-dark-5 dark:text-dark-6">
+              {elapsed}
+            </span>
+          </div>
+        )}
+        {generating && blockedHint && (
+          <p className="px-4 pt-2 text-xs text-dark-5 dark:text-dark-6">
+            Your draft is kept. Send it when Fortuna finishes, or stop this
+            reply first.
+          </p>
+        )}
         {files.length > 0 && (
           <div className="flex flex-wrap gap-2 px-3 pt-3">
             {files.some((f) => f.preview) && (
@@ -528,7 +577,8 @@ export function ChatClient() {
               !e.nativeEvent.isComposing
             ) {
               e.preventDefault();
-              if (!generating) void send();
+              if (generating) setBlockedHint(true);
+              else void send();
             }
           }}
           onPaste={(e) => {
@@ -540,7 +590,11 @@ export function ChatClient() {
           maxLength={16000}
           rows={2}
           placeholder={
-            id ? "Reply to Fortuna…" : "Ask Fortuna about your money…"
+            generating
+              ? "Fortuna is working. You can draft your next message here."
+              : id
+                ? "Reply to Fortuna…"
+                : "Ask Fortuna about your money…"
           }
           className="block max-h-60 min-h-[3rem] w-full resize-none bg-transparent px-4 pt-3 text-[15px] outline-none placeholder:text-dark-5 dark:placeholder:text-dark-6"
         />
@@ -574,8 +628,6 @@ export function ChatClient() {
           {generating ? (
             <button
               type="button"
-              aria-label="Stop"
-              title="Stop"
               disabled={busy}
               onClick={() =>
                 void action(async () => {
@@ -586,9 +638,10 @@ export function ChatClient() {
                   await refresh();
                 })
               }
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-dark text-white hover:opacity-90 dark:bg-white dark:text-dark"
+              className="inline-flex h-9 items-center gap-1.5 rounded-full bg-dark px-3.5 text-sm font-medium text-white hover:opacity-90 dark:bg-white dark:text-dark"
             >
-              <Square size={14} fill="currentColor" />
+              <Square size={12} fill="currentColor" aria-hidden />
+              Stop
             </button>
           ) : (
             <button

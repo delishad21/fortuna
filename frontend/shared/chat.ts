@@ -243,6 +243,7 @@ export const STEP_LABELS: Record<string, string> = {
   inspect_statement: "Read a statement",
   stage_statement: "Staged a statement",
   list_parsers: "Checked available parsers",
+  parser_step: "Worked on a parser",
   list_staged_imports: "Checked staged imports",
   inspect_staged_import: "Inspected a staged import",
   assign_draft_account: "Assigned an account",

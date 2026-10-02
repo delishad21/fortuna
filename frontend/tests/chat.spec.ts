@@ -1425,6 +1425,16 @@ test("chat accepts dropped files, starts from the landing composer and shows ste
   ).toContainText("Read an attachment");
   await expect(live.getByText("Staged transactions…")).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  const working = page.getByRole("status").filter({ hasText: "Fortuna is working" });
+  await expect(working).toContainText("Staged transactions");
+  await expect(working).toContainText(/\d+:\d\d/);
+  await expect(page.getByRole("button", { name: "Send message" })).toHaveCount(0);
+  const draft = page.getByLabel("Message", { exact: true });
+  await expect(draft).toHaveAttribute("placeholder", /draft your next message/);
+  await draft.fill("Also check September");
+  await draft.press("Enter");
+  await expect(draft).toHaveValue("Also check September");
+  await expect(page.getByText(/Your draft is kept/)).toBeVisible();
   await page.screenshot({ path: "/tmp/fortuna-chat-layout.png" });
   await page.setViewportSize({ width: 390, height: 844 });
   expect(
