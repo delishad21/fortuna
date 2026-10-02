@@ -41,7 +41,7 @@ export function reviewDraftRow(row: Row) {
       ? ["Suggestion rejected; review the current classification"]
       : []),
     ...(row.reviewStatus === "unresolved"
-      ? ["Agent left this row unresolved"]
+      ? [payload.metadata?.assistantNote || "Agent left this row unresolved"]
       : []),
   ];
   return {

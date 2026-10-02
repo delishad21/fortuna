@@ -1258,7 +1258,7 @@ test("saved notes, comparisons and unsure review rows work end to end", async ({
     comparison.getByRole("cell", { name: "-SGD 4.20" }),
   ).toBeVisible();
   await expect(
-    page.getByText("Check the first 1 row: Fortuna wasn’t sure"),
+    page.getByText("Fortuna wasn’t sure about 1 row. Please check it:"),
   ).toBeVisible();
   await expect(
     page.getByText(/Same bus and minute as your ride, so one is hers/),

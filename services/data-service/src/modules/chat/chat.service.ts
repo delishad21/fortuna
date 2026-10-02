@@ -1,3 +1,4 @@
+import { withLiveStagedRows, ReviewRow } from "./reviews.service";
 import { PrismaClient } from "@prisma/client";
 import { ChatRepository } from "./chat.repository";
 import { ChatError, submitMessageSchema } from "./contracts";
@@ -108,7 +109,10 @@ export class ChatService extends ChatRepository {
                     data: {
                       reviewId: review.id,
                       title: review.title,
-                      rows: review.rows,
+                      rows: await withLiveStagedRows(
+                        tx,
+                        review.rows as unknown as ReviewRow[],
+                      ),
                     },
                   },
                 ]

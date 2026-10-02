@@ -6,6 +6,7 @@ import path from "node:path";
 import { withChatDb } from "./test-harness";
 import { withDatabase } from "../../lib/database-context";
 import { TransactionService } from "../transactions/transactions.service";
+import { HermesWorkflowService } from "../imports/hermes-workflow.service";
 import { createToolRegistry } from "./tools/registry";
 import { findStagedDuplicates } from "../imports/staged-duplicates";
 import { ReviewService } from "./reviews.service";
@@ -504,4 +505,120 @@ test("memories are owned, capped, editable and given to every run", () =>
       ["forgotten"],
     );
     assert.equal(await db.chatMemory.count({ where: { userId: user.id } }), 0);
+  }));
+
+test("reviews of staged rows read and write the draft, shared with the staged import page", () =>
+  withChatDb(async (db) => {
+    const { user, context } = await setup(db, "staged-review");
+    const dining = await db.category.create({
+      data: { userId: user.id, name: "Dining", color: "#ff9800" },
+    });
+    const tools = createToolRegistry(db);
+    const staged = await tools.execute(context, "stage_rows", {
+      sourceName: "PayLah Sep 2026",
+      rows: [
+        { date: "2026-09-18", description: "PAYNOW TRANSFER", amountOut: 20 },
+        {
+          date: "2026-09-01",
+          description: "PAYNOW JS FNB GRO BM",
+          amountOut: 6.5,
+        },
+      ],
+    });
+    const draftId = (staged.model as any).id;
+    const draftRows = await db.importDraftRow.findMany({
+      where: { draftId },
+      orderBy: { rowIndex: "asc" },
+    });
+    const [transfer, food] = draftRows;
+    const service = new ReviewService(db);
+    const review = await service.create(context, {
+      title: "September PayLah labels",
+      stagedRowIds: [transfer.id, food.id],
+      suggestions: [
+        {
+          stagedRowId: food.id,
+          patch: { label: "Chicken rice", categoryId: dining.id },
+          reason: "Usual lunch stall",
+          confidence: 0.9,
+        },
+        {
+          stagedRowId: transfer.id,
+          patch: { label: "PayNow transfer" },
+          reason: "Recipient is unclear",
+          confidence: 0.4,
+        },
+      ],
+    });
+    // Chronological, not confidence order.
+    assert.deepEqual(
+      review.rows.map((r) => r.id),
+      [food.id, transfer.id],
+    );
+    const after = await db.importDraftRow.findMany({
+      where: { draftId },
+      orderBy: { rowIndex: "asc" },
+    });
+    const byId = new Map(after.map((r) => [r.id, r]));
+    const foodRow = byId.get(food.id)!,
+      transferRow = byId.get(transfer.id)!;
+    assert.equal((foodRow.currentPayload as any).label, "Chicken rice");
+    assert.equal((foodRow.currentPayload as any).categoryId, dining.id);
+    assert.equal(foodRow.reviewStatus, "edited");
+    assert.equal(transferRow.reviewStatus, "unresolved");
+    assert.equal(
+      (transferRow.currentPayload as any).metadata.assistantNote,
+      "Recipient is unclear",
+    );
+    const { reviewDraftRow } = await import("../imports/draft-review");
+    assert.ok(
+      reviewDraftRow({ ...transferRow, proposals: [] } as any).reasons.includes(
+        "Recipient is unclear",
+      ),
+    );
+    // The review shows live draft values and versions.
+    const live = await service.get(user.id, review.id);
+    const liveFood = live.rows.find((r) => r.id === food.id)!;
+    assert.equal(liveFood.value.label, "Chicken rice");
+    assert.equal(liveFood.version, foodRow.version);
+    assert.equal(liveFood.original.label ?? null, null);
+    // Edits in the chat review land in the draft...
+    await service.update(user.id, review.id, {
+      rowId: food.id,
+      version: liveFood.version,
+      patch: { label: "Ban mian" },
+    });
+    const edited = await db.importDraftRow.findUniqueOrThrow({
+      where: { id: food.id },
+    });
+    assert.equal((edited.currentPayload as any).label, "Ban mian");
+    // ...and edits made on the staged import page show in the review.
+    await withDatabase(db, () =>
+      HermesWorkflowService.updateRow(
+        user.id,
+        draftId,
+        food.id,
+        {
+          expectedVersion: edited.version,
+          currentPayload: {
+            ...(edited.currentPayload as any),
+            label: "Fishball noodles",
+          },
+        },
+        { actorType: "user", actorId: user.id },
+      ),
+    );
+    const refreshed = await service.get(user.id, review.id);
+    assert.equal(
+      refreshed.rows.find((r) => r.id === food.id)!.value.label,
+      "Fishball noodles",
+    );
+    await assert.rejects(
+      service.update(user.id, review.id, {
+        rowId: food.id,
+        version: edited.version,
+        patch: { label: "Old" },
+      }),
+      /changed/,
+    );
   }));

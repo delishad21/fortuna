@@ -196,7 +196,7 @@ test("submitting a review uses the saved version, queues once, and preserves str
     );
   }));
 
-test("staged rows remain unchanged and concurrent devices cannot overwrite each other", () =>
+test("staged rows sync with their draft and concurrent devices cannot overwrite each other", () =>
   withChatDb(async (db) => {
     const user = await db.user.create({ data: { username: "review-staged" } }),
       other = await db.user.create({
@@ -261,11 +261,12 @@ test("staged rows remain unchanged and concurrent devices cannot overwrite each 
         patch: { label: "Intruder" },
       }),
     );
-    assert.deepEqual(
-      (await db.importDraftRow.findUniqueOrThrow({ where: { id: row.id } }))
-        .currentPayload,
-      payload,
-    );
+    // The winning edit lands in the draft, the source shared with the staged import page.
+    const saved = (
+      await db.importDraftRow.findUniqueOrThrow({ where: { id: row.id } })
+    ).currentPayload as any;
+    assert.ok(["Web", "Phone"].includes(saved.label));
+    assert.equal(saved.description, payload.description);
     assert.equal(
       (await service.get(user.id, review.id)).rows[0].source.draftId,
       draft.id,

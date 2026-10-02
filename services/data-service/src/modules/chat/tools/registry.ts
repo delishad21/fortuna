@@ -167,7 +167,7 @@ export function createToolRegistry(db: PrismaClient) {
   definitions.push({
     name: "request_transaction_review",
     description:
-      "Open an editable review (spreadsheet on web, cards on phone) ONLY when the user must decide or supply values row by row. If the user's request already determines the edits (e.g. 'mark all of these internal'), call propose_transaction_edits instead; approval is the user's check. Always pre-fill every change you can infer in suggestions so the user only adjusts. The review already displays its transactions: never also show them with show_component. Draft edits sync across devices without changing records; wait for the submitted review before proposing. A new user task supersedes pending reviews.",
+      "Open an editable review (spreadsheet on web, cards on phone) ONLY when the user must decide or supply values row by row. If the user's request already determines the edits (e.g. 'mark all of these internal'), call propose_transaction_edits instead; approval is the user's check. Always pre-fill every change you can infer in suggestions so the user only adjusts. The review already displays its transactions: never also show them with show_component. For staged rows, suggestions and edits are saved to the staged import itself, the same rows its staged import page shows; saved transactions only change after approval; wait for the submitted review before proposing. A new user task supersedes pending reviews.",
     inputSchema: objectSchema(
       {
         title: {

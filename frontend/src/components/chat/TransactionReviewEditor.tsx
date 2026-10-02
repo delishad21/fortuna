@@ -165,8 +165,9 @@ export function TransactionReviewEditor({
       {unsure.length > 0 && !closed && (
         <div className="rounded-md border border-orange/40 bg-orange/5 px-3 py-2 text-sm">
           <p className="font-medium">
-            Check the first {unsure.length}{" "}
-            {unsure.length === 1 ? "row" : "rows"}: Fortuna wasn’t sure
+            Fortuna wasn’t sure about {unsure.length}{" "}
+            {unsure.length === 1 ? "row" : "rows"}. Please check{" "}
+            {unsure.length === 1 ? "it" : "them"}:
           </p>
           <ul className="mt-1 space-y-0.5 text-dark-5 dark:text-dark-6">
             {unsure.slice(0, 5).map((row) => (

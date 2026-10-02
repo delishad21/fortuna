@@ -1,4 +1,6 @@
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
+import { withDatabase } from "../../lib/database-context";
+import { HermesWorkflowService as workflow } from "../imports/hermes-workflow.service";
 import { z } from "zod";
 import { ChatContext, ChatError, idSchema } from "./contracts";
 import { json } from "./tools/transactions";
@@ -82,17 +84,41 @@ export const requestReviewSchema = z
       v.transactionIds.length + v.stagedRowIds.length <= 100,
   );
 const UNSURE_CONFIDENCE = 0.7;
-const unsureRank = (row: ReviewRow) => {
-  const confidence = row.suggestion?.confidence;
-  return confidence !== undefined && confidence < UNSURE_CONFIDENCE
-    ? confidence
-    : 1;
-};
+const actor = { actorType: "system" as const, actorId: "fortuna-chat" };
+/**
+ * Staged-import rows live in their draft, the single source of truth shared with the
+ * staged import page; read their current values and versions from it.
+ */
+export async function withLiveStagedRows(
+  db: PrismaClient | Prisma.TransactionClient,
+  rows: ReviewRow[],
+) {
+  const ids = rows.flatMap((r) => (r.source.rowId ? [r.source.rowId] : []));
+  if (!ids.length) return rows;
+  const staged = await db.importDraftRow.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, version: true, currentPayload: true },
+  });
+  const byId = new Map(staged.map((r) => [r.id, r]));
+  return rows.map((row) => {
+    const live = row.source.rowId ? byId.get(row.source.rowId) : undefined;
+    return live
+      ? { ...row, value: live.currentPayload as any, version: live.version }
+      : row;
+  });
+}
+const stale = (error: unknown) =>
+  (error as { status?: number }).status === 409
+    ? new ChatError(
+        409,
+        "This row changed elsewhere. Your edit was not saved. Reload the row and try again.",
+      )
+    : error;
 export class ReviewService {
   constructor(private db: PrismaClient) {}
   async create(context: ChatContext, raw: unknown) {
     const input = requestReviewSchema.parse(raw);
-    return this.db.$transaction(async (tx) => {
+    const created = await this.db.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM users WHERE id=${context.userId} FOR UPDATE`;
       const run = await tx.chatRun.findFirst({
         where: {
@@ -203,16 +229,15 @@ export class ReviewService {
         }),
         ...staged.map((r) => ({
           id: r.id,
-          version: 1,
+          version: r.version,
           source: { draftId: r.draftId, rowId: r.id },
           original: r.currentPayload,
           value: withSuggestion(r.id, r.currentPayload),
           ...(notes.has(r.id) ? { suggestion: notes.get(r.id) } : {}),
         })),
       ].sort(
-        // Rows the assistant is unsure about come first, least sure first; then by date.
+        // Chronological, like a statement; unsure rows are called out separately.
         (a, b) =>
-          unsureRank(a) - unsureRank(b) ||
           String((a.value as any)?.date).localeCompare(
             String((b.value as any)?.date),
           ),
@@ -227,6 +252,39 @@ export class ReviewService {
       });
       return { ...review, rows };
     });
+    // Suggestions for staged rows are written into the draft itself, so the staged import
+    // page and this review show the same values. Nothing reaches the ledger until commit.
+    const notes = new Map(
+      input.suggestions.map((s) => [(s.transactionId || s.stagedRowId)!, s]),
+    );
+    for (const row of created.rows) {
+      const suggestion = row.source.rowId ? notes.get(row.id) : undefined;
+      if (!suggestion || !row.source.draftId) continue;
+      const unsure = (suggestion.confidence ?? 1) < UNSURE_CONFIDENCE;
+      const metadata = {
+        ...((row.original as any)?.metadata || {}),
+        ...(suggestion.reason ? { assistantNote: suggestion.reason } : {}),
+      };
+      await withDatabase(this.db, () =>
+        workflow.updateRow(
+          context.userId,
+          row.source.draftId!,
+          row.source.rowId!,
+          {
+            expectedVersion: row.version,
+            currentPayload: { ...row.value, metadata },
+            reviewStatus: unsure ? "unresolved" : "edited",
+          },
+          actor,
+        ),
+      ).catch((error) => {
+        throw stale(error);
+      });
+    }
+    return {
+      ...created,
+      rows: await withLiveStagedRows(this.db, created.rows),
+    };
   }
   async get(userId: string, id: string) {
     const review = await this.db.chatTransactionReview.findFirst({
@@ -236,7 +294,10 @@ export class ReviewService {
     const choices = await new ReadTools(this.db).context(userId);
     return {
       ...review,
-      rows: review.rows as unknown as ReviewRow[],
+      rows: await withLiveStagedRows(
+        this.db,
+        review.rows as unknown as ReviewRow[],
+      ),
       categories: choices.categories,
       accounts: choices.accounts,
     };
@@ -250,7 +311,7 @@ export class ReviewService {
       })
       .strict()
       .parse(raw);
-    return this.db.$transaction(async (tx) => {
+    const result = await this.db.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM users WHERE id=${userId} FOR UPDATE`;
       const review = await tx.chatTransactionReview.findFirst({
         where: { id, userId, run: { conversation: { deletedAt: null } } },
@@ -262,8 +323,9 @@ export class ReviewService {
           "This review is closed. Ask Fortuna for a new review.",
         );
       const rows = review.rows as unknown as ReviewRow[];
-      const row = rows.find((r) => r.id === input.rowId);
-      if (!row) throw new ChatError(404, "Review row not found");
+      const stored = rows.find((r) => r.id === input.rowId);
+      if (!stored) throw new ChatError(404, "Review row not found");
+      const [row] = await withLiveStagedRows(tx, [stored]);
       if (row.version !== input.version)
         throw new ChatError(
           409,
@@ -283,13 +345,37 @@ export class ReviewService {
         }))
       )
         throw new ChatError(404, "Account not found");
-      row.value = { ...row.value, ...input.patch };
-      row.version++;
-      const updated = await tx.chatTransactionReview.update({
+      if (row.source.rowId) return { staged: row };
+      stored.value = { ...stored.value, ...input.patch };
+      stored.version++;
+      await tx.chatTransactionReview.update({
         where: { id },
         data: { rows: json(rows), version: { increment: 1 } },
       });
-      return { ...updated, rows };
+      return { staged: null };
     });
+    if (result.staged) {
+      const row = result.staged;
+      await withDatabase(this.db, () =>
+        workflow.updateRow(
+          userId,
+          row.source.draftId!,
+          row.source.rowId!,
+          {
+            expectedVersion: input.version,
+            currentPayload: { ...row.value, ...input.patch },
+            reviewStatus: "edited",
+          },
+          actor,
+        ),
+      ).catch((error) => {
+        throw stale(error);
+      });
+      await this.db.chatTransactionReview.update({
+        where: { id },
+        data: { version: { increment: 1 } },
+      });
+    }
+    return this.get(userId, id);
   }
 }
