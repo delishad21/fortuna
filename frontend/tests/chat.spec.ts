@@ -1529,10 +1529,13 @@ test("staged imports open beside the chat and return to it", async ({ page, requ
   await page.screenshot({ path: "/tmp/fortuna-staged-panel.png" });
   // The category picker opens in place inside the panel (fixed-position menus must not be offset).
   const cell = panel.getByText("Uncategorized").first();
+  const cellBox = (await cell.boundingBox())!; // measure before the menu adds its own "Uncategorized"
+  // Wait for the slide-in to finish; the panel then drops its transform.
+  await expect(panel).toHaveCSS("translate", "none");
   await cell.click();
   const search = page.getByLabel("Search categories");
   await expect(search).toBeVisible();
-  const cellBox = (await cell.boundingBox())!, menuBox = (await search.boundingBox())!;
+  const menuBox = (await search.boundingBox())!;
   expect(Math.abs(menuBox.x - cellBox.x)).toBeLessThan(80);
   expect(menuBox.y).toBeGreaterThan(cellBox.y);
   expect(menuBox.y - cellBox.y).toBeLessThan(120);

@@ -67,7 +67,15 @@ export function StagedImportPanel({
         role="dialog"
         aria-modal="true"
         aria-label="Staged import"
-        onTransitionEnd={() => shown && setSettled(true)}
+        onTransitionEnd={(e) => {
+          // Only the panel's own slide, not transitions bubbling up from controls inside it.
+          if (
+            shown &&
+            e.target === e.currentTarget &&
+            ["transform", "translate"].includes(e.propertyName)
+          )
+            setSettled(true);
+        }}
         className={`flex h-full w-full flex-col bg-white outline-none transition-transform duration-200 ease-out dark:bg-gray-dark ${settled ? "" : shown ? "translate-x-0" : "translate-x-full"}`}
       >
         <header className="flex shrink-0 items-center gap-3 border-b border-stroke px-4 py-3 dark:border-stroke-dark">

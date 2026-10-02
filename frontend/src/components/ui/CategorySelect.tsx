@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import type { HTMLAttributes, ReactNode } from "react";
 import { ChevronDown, Plus, Check, Lock } from "lucide-react";
 import { HoverTooltip } from "@/components/ui/HoverTooltip";
@@ -76,6 +77,11 @@ export function CategorySelect({
         category.name.toLowerCase().includes(searchQuery.trim().toLowerCase()),
       )
     : filteredCategories;
+
+  const renderMenu = (menu: React.ReactNode) =>
+    dropdownPlacement === "inline" || typeof document === "undefined"
+      ? menu
+      : createPortal(menu, document.body);
 
   const updateDropdownPosition = () => {
     if (!containerRef.current) return;
@@ -189,6 +195,8 @@ export function CategorySelect({
         onClick={() => {
           if (disabled) return;
           pointerFocusRef.current = false;
+          // Position before the first frame so the menu never flashes at 0,0.
+          if (!isOpen) updateDropdownPosition();
           setIsOpen((prev) => !prev);
         }}
         onFocus={(event) => {
@@ -211,6 +219,7 @@ export function CategorySelect({
           }
           if (event.key === "Enter" || event.key === "ArrowDown") {
             event.preventDefault();
+            updateDropdownPosition();
             setIsOpen(true);
             return;
           }
@@ -265,115 +274,118 @@ export function CategorySelect({
         )}
       </button>
 
-      {/* Dropdown Menu */}
-      {isOpen && (
-        <div
-          ref={dropdownRef}
-          className={`${
-            dropdownPlacement === "inline"
-              ? "absolute left-0 right-0 z-30"
-              : "fixed z-20"
-          } py-1 bg-white dark:bg-dark-2 border border-stroke dark:border-dark-3 rounded-lg shadow-dropdown max-h-60 overflow-auto`}
-          style={
-            dropdownPlacement === "inline"
-              ? showAbove
-                ? {
-                    bottom: "calc(100% + 4px)",
-                    transformOrigin: "bottom",
-                  }
+      {/* Dropdown Menu: portalled so transformed or clipped ancestors (panels, modals) cannot offset it */}
+      {isOpen &&
+        renderMenu(
+          <div
+            ref={dropdownRef}
+            className={`${
+              dropdownPlacement === "inline"
+                ? "absolute left-0 right-0 z-30"
+                : "fixed z-[90]"
+            } py-1 bg-white dark:bg-dark-2 border border-stroke dark:border-dark-3 rounded-lg shadow-dropdown max-h-60 overflow-auto`}
+            style={
+              dropdownPlacement === "inline"
+                ? showAbove
+                  ? {
+                      bottom: "calc(100% + 4px)",
+                      transformOrigin: "bottom",
+                    }
+                  : {
+                      top: "calc(100% + 4px)",
+                      transformOrigin: "top",
+                    }
                 : {
-                    top: "calc(100% + 4px)",
-                    transformOrigin: "top",
+                    top: showAbove ? "auto" : dropdownPosition.top,
+                    bottom: showAbove
+                      ? window.innerHeight - dropdownPosition.top
+                      : "auto",
+                    left: dropdownPosition.left,
+                    width: dropdownPosition.width,
+                    transformOrigin: showAbove ? "bottom" : "top",
                   }
-              : {
-                  top: showAbove ? "auto" : dropdownPosition.top,
-                  bottom: showAbove
-                    ? window.innerHeight - dropdownPosition.top
-                    : "auto",
-                  left: dropdownPosition.left,
-                  width: dropdownPosition.width,
-                  transformOrigin: showAbove ? "bottom" : "top",
-                }
-          }
-        >
-          <div className="sticky top-0 z-10 border-b border-stroke bg-white p-2 dark:border-dark-3 dark:bg-dark-2">
-            <input
-              ref={searchRef}
-              type="search"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  setIsOpen(false);
-                  requestAnimationFrame(() => triggerRef.current?.focus());
-                  return;
-                }
-                if (event.key === "Enter" && visibleCategories[0]) {
-                  event.preventDefault();
-                  handleSelect(visibleCategories[0].id);
-                }
-              }}
-              placeholder="Search categories..."
-              aria-label="Search categories"
-              className="w-full rounded-md border border-stroke bg-transparent px-3 py-2 text-sm text-dark outline-none focus:border-primary dark:border-dark-3 dark:text-white"
-            />
-          </div>
-
-          {/* Uncategorized Option */}
-          <button
-            type="button"
-            onClick={() => handleSelect("")}
-            className="w-full flex items-center px-4 py-2.5 text-sm text-left hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors"
+            }
           >
-            <div className="w-2.5 h-2.5 rounded-full mr-2 flex-shrink-0 bg-dark-5 dark:bg-dark-6" />
-            <span className="flex-1 text-dark dark:text-white">{emptyLabel}</span>
-            {!value && <Check className="h-4 w-4 text-primary ml-2" />}
-          </button>
+            <div className="sticky top-0 z-10 border-b border-stroke bg-white p-2 dark:border-dark-3 dark:bg-dark-2">
+              <input
+                ref={searchRef}
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setIsOpen(false);
+                    requestAnimationFrame(() => triggerRef.current?.focus());
+                    return;
+                  }
+                  if (event.key === "Enter" && visibleCategories[0]) {
+                    event.preventDefault();
+                    handleSelect(visibleCategories[0].id);
+                  }
+                }}
+                placeholder="Search categories..."
+                aria-label="Search categories"
+                className="w-full rounded-md border border-stroke bg-transparent px-3 py-2 text-sm text-dark outline-none focus:border-primary dark:border-dark-3 dark:text-white"
+              />
+            </div>
 
-          {/* Divider */}
-          <div className="h-px bg-stroke dark:bg-dark-3 my-1" />
-
-          {/* Category Options */}
-          {visibleCategories.map((cat) => (
+            {/* Uncategorized Option */}
             <button
-              key={cat.id}
               type="button"
-              onClick={() => handleSelect(cat.id)}
+              onClick={() => handleSelect("")}
               className="w-full flex items-center px-4 py-2.5 text-sm text-left hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors"
             >
-              <div
-                className="w-2.5 h-2.5 rounded-full mr-2 flex-shrink-0"
-                style={{ backgroundColor: cat.color }}
-              />
+              <div className="w-2.5 h-2.5 rounded-full mr-2 flex-shrink-0 bg-dark-5 dark:bg-dark-6" />
               <span className="flex-1 text-dark dark:text-white">
-                {cat.name}
+                {emptyLabel}
               </span>
-              {value === cat.id && (
-                <Check className="h-4 w-4 text-primary ml-2" />
-              )}
+              {!value && <Check className="h-4 w-4 text-primary ml-2" />}
             </button>
-          ))}
-          {visibleCategories.length === 0 && (
-            <p className="px-4 py-3 text-sm text-dark-5 dark:text-dark-6">
-              No categories found
-            </p>
-          )}
 
-          {/* Divider */}
-          <div className="h-px bg-stroke dark:bg-dark-3 my-1" />
+            {/* Divider */}
+            <div className="h-px bg-stroke dark:bg-dark-3 my-1" />
 
-          {/* Add New Category */}
-          <button
-            type="button"
-            onClick={handleAddNew}
-            className="w-full flex items-center px-4 py-2.5 text-sm text-left text-primary hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors font-medium"
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            <span>New Category</span>
-          </button>
-        </div>
-      )}
+            {/* Category Options */}
+            {visibleCategories.map((cat) => (
+              <button
+                key={cat.id}
+                type="button"
+                onClick={() => handleSelect(cat.id)}
+                className="w-full flex items-center px-4 py-2.5 text-sm text-left hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors"
+              >
+                <div
+                  className="w-2.5 h-2.5 rounded-full mr-2 flex-shrink-0"
+                  style={{ backgroundColor: cat.color }}
+                />
+                <span className="flex-1 text-dark dark:text-white">
+                  {cat.name}
+                </span>
+                {value === cat.id && (
+                  <Check className="h-4 w-4 text-primary ml-2" />
+                )}
+              </button>
+            ))}
+            {visibleCategories.length === 0 && (
+              <p className="px-4 py-3 text-sm text-dark-5 dark:text-dark-6">
+                No categories found
+              </p>
+            )}
+
+            {/* Divider */}
+            <div className="h-px bg-stroke dark:bg-dark-3 my-1" />
+
+            {/* Add New Category */}
+            <button
+              type="button"
+              onClick={handleAddNew}
+              className="w-full flex items-center px-4 py-2.5 text-sm text-left text-primary hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors font-medium"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              <span>New Category</span>
+            </button>
+          </div>,
+        )}
     </div>
   );
 }
