@@ -16,7 +16,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       Accept: "application/json",
       "X-Internal-Service-Token": serviceToken,
       "X-Authenticated-User-Id": session.user.id,
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(typeof init?.body === "string" ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
     },
   });
@@ -31,6 +31,32 @@ export async function getAgentDrafts() {
 
 export async function getAgentDraft(draftId: string) {
   return request<{ draft: Record<string, any> }>(`/api/agent/drafts/${encodeURIComponent(draftId)}`);
+}
+
+/**
+ * Stage an uploaded bank statement for review: store the file, open a draft and parse it.
+ * Re-uploading a statement that is still staged returns that draft without discarding its edits.
+ */
+export async function stageStatementImport(formData: FormData) {
+  const file = formData.get("file");
+  const parserId = String(formData.get("parserId") || "");
+  if (!(file instanceof File) || !parserId) throw new Error("A statement file and parser are required");
+  const upload = new FormData();
+  upload.append("file", file, file.name);
+  const { statement } = await request<{ statement: { id: string } }>("/api/agent/statements", {
+    method: "POST",
+    body: upload,
+  });
+  const { draft } = await request<{ draft: Record<string, any> & { duplicate?: boolean } }>("/api/agent/drafts", {
+    method: "POST",
+    body: JSON.stringify({ fileRef: statement.id, mode: "main", parserId }),
+  });
+  if (draft.duplicate && draft.rows?.length) return { draft, resumed: true };
+  const parsed = await request<{ draft: Record<string, any> }>(
+    `/api/agent/drafts/${encodeURIComponent(draft.id)}/parse`,
+    { method: "POST", body: JSON.stringify({ parserId }) },
+  );
+  return { draft: parsed.draft, resumed: false };
 }
 
 export async function getStagedReimbursementTargets() {

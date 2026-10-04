@@ -70,4 +70,13 @@ describe("Hermes import workflow helpers", () => {
     assert.ok(transaction.date instanceof Date);
     assert.equal(transaction.date.toISOString(), "2026-08-21T00:00:00.000Z");
   });
+
+  it("falls back to the description for a blank label and trims the account", () => {
+    const blank = materializeDraftTransaction({ date: "2026-08-21", description: "NTUC FAIRPRICE", label: "  ", accountIdentifier: " 123-4 " });
+    assert.equal(blank.label, "NTUC FAIRPRICE");
+    assert.equal(blank.accountIdentifier, "123-4");
+    const labelled = materializeDraftTransaction({ date: "2026-08-21", description: "NTUC FAIRPRICE", label: " Groceries " });
+    assert.equal(labelled.label, "Groceries");
+    assert.equal(labelled.accountIdentifier, undefined);
+  });
 });

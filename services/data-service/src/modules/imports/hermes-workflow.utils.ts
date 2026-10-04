@@ -97,9 +97,17 @@ export function validateDraftAccountAssignment(
   return [];
 }
 
+/** A staged row as a ledger transaction: a blank label falls back to the description. */
 export function materializeDraftTransaction(value: Record<string, unknown>) {
+  const label = typeof value.label === "string" ? value.label.trim() : "";
+  const accountIdentifier =
+    typeof value.accountIdentifier === "string"
+      ? value.accountIdentifier.trim()
+      : "";
   return {
     ...value,
     date: new Date(String(value.date || "")),
+    label: label || value.description,
+    accountIdentifier: accountIdentifier || undefined,
   };
 }

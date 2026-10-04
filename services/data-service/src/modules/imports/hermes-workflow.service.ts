@@ -18,6 +18,7 @@ import {
   validateDraftTransaction,
 } from "./hermes-workflow.utils";
 import { cleanupExpiredWorkflowData } from "./workflow-cleanup";
+import { enrichImportRows } from "./import-enrichment";
 import { findStagedDuplicates, type DuplicateFinding, type StagedRowSummary } from "./staged-duplicates";
 
 const STORAGE_ROOT = path.resolve(
@@ -216,11 +217,10 @@ export class HermesWorkflowService {
       include: { rows: { orderBy: { rowIndex: "asc" } } },
     });
     if (existing) return { ...existing, duplicate: true };
-    await TransactionService.bootstrapDefaultImportRules(userId);
-    const ruled = await TransactionService.applyImportRules(
+    const ruled = await enrichImportRows(
       userId,
-      undefined,
-      input.rows as never[],
+      { filename: input.sourceFilename },
+      input.rows,
     );
     return prisma.$transaction(async (tx) => {
       const draft = await tx.importDraft.create({
@@ -554,13 +554,10 @@ export class HermesWorkflowService {
 
       const parsedTransactions =
         draft.mode === "main"
-          ? await TransactionService.bootstrapDefaultImportRules(userId).then(
-              () =>
-                TransactionService.applyImportRules(
-                  userId,
-                  parserId,
-                  result.transactions as never[],
-                ),
+          ? await enrichImportRows(
+              userId,
+              { filename: draft.sourceFilename, parserId },
+              result.transactions,
             )
           : result.transactions;
 

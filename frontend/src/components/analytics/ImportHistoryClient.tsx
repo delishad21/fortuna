@@ -29,14 +29,12 @@ type ImportSummary = {
 export function ImportHistoryClient({
   imports,
   agentDrafts = [],
-  categories,
   accountNumbers,
   parserOptions,
   initialTab = "import",
 }: {
   imports: ImportSummary[];
   agentDrafts?: Array<Record<string, any>>;
-  categories: Array<{ id: string; name: string; color: string }>;
   accountNumbers: Array<{
     id: string;
     accountIdentifier: string;
@@ -106,9 +104,15 @@ export function ImportHistoryClient({
       {tab === "import" && (
         <div className="min-h-0 flex-1">
           <ImportClient
-            initialCategories={categories}
             initialAccountNumbers={accountNumbers}
             parserOptions={parserOptions}
+            onStaged={(drafts) => {
+              setDetailedDrafts(drafts);
+              setSelectedDraftIds(new Set(drafts.map((draft) => String(draft.id))));
+              setShowTogether(true);
+              setTab("staged");
+              router.refresh();
+            }}
           />
         </div>
       )}
@@ -167,7 +171,7 @@ export function ImportHistoryClient({
               <CardContent className="space-y-3">
                 {!staged.length && (
                   <p className="py-6 text-center text-dark-5 dark:text-dark-6">
-                    No staged imports. Transactions prepared through the MCP
+                    No staged imports. Statements you upload and imports prepared in chat
                     appear here.
                   </p>
                 )}
