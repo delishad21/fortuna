@@ -16,7 +16,17 @@ export type PreviewReferences = {
   stagedRows?: Record<string, LinkedSummary>;
   categories?: Record<string, CategoryChip>;
   accounts?: Record<string, string | null>;
+  /** Friendly account names by identifier. */
+  accountLabels?: Record<string, string>;
 };
+/** "Label · identifier" for an identifier mentioned in a preview, or the identifier alone. */
+export const previewAccountName = (
+  identifier: string,
+  references: PreviewReferences = {},
+) =>
+  references.accountLabels?.[identifier]
+    ? `${references.accountLabels[identifier]} · ${identifier}`
+    : identifier;
 /** One side (before or after) of a transaction edit. */
 export type TransactionSide = LinkedSummary & {
   balance?: string | number | null;
@@ -324,7 +334,9 @@ export function proposalSummary(proposal: {
   if (proposal.kind === "create_account")
     return {
       title,
-      detail: `${preview.after?.accountIdentifier || "New account"}`,
+      detail: preview.after?.label
+        ? `${preview.after.label} · ${preview.after.accountIdentifier}`
+        : `${preview.after?.accountIdentifier || "New account"}`,
       color: preview.after?.color,
       state,
     };

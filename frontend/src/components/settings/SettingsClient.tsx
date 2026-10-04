@@ -1,6 +1,7 @@
 "use client";
 import {ConnectionPanel} from "@/components/chat/ConnectionPanel";
 import { MemoryPanel } from "@/components/chat/MemoryPanel";
+import { accountDisplay } from "@/lib/accounts";
 
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -138,6 +139,7 @@ export function SettingsClient({
   });
   const [newAccount, setNewAccount] = useState({
     identifier: "",
+    label: "",
     color: "#6366f1",
   });
 
@@ -304,6 +306,7 @@ export function SettingsClient({
             account.id,
             account.accountIdentifier,
             account.color,
+            account.label ?? null,
           ),
         ),
       );
@@ -764,7 +767,7 @@ export function SettingsClient({
                     className="h-2.5 w-2.5 rounded-full"
                     style={{ backgroundColor: account.color }}
                   />
-                  <span className="truncate">{account.accountIdentifier}</span>
+                  <span className="truncate">{accountDisplay(account)}</span>
                 </span>
               ))}
               {accounts.length === 0 && <span>No accounts yet.</span>}
@@ -1107,6 +1110,7 @@ export function SettingsClient({
             const created = await upsertAccountNumber(
               newAccount.identifier.trim(),
               newAccount.color,
+              newAccount.label,
             );
             setAccounts((prev) => {
               const exists = prev.some((item) => item.id === created.id);
@@ -1117,7 +1121,7 @@ export function SettingsClient({
               }
               return [...prev, created];
             });
-            setNewAccount({ identifier: "", color: "#6366f1" });
+            setNewAccount({ identifier: "", label: "", color: "#6366f1" });
           } catch (error) {
             showModal(
               "error",
@@ -1133,6 +1137,11 @@ export function SettingsClient({
             prev.map((item) =>
               item.id === id ? { ...item, accountIdentifier: identifier } : item,
             ),
+          )
+        }
+        onAccountLabelChange={(id, label) =>
+          setAccounts((prev) =>
+            prev.map((item) => (item.id === id ? { ...item, label } : item)),
           )
         }
         onAccountColorChange={(id, color) =>

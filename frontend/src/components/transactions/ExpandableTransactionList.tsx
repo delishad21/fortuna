@@ -5,6 +5,8 @@ import { TransactionCard, type LinkedTransaction, type TransactionCardTransactio
 interface ExpandableTransactionListProps {
   transactions: TransactionCardTransaction[];
   accountColorMap?: Record<string, string>;
+  /** Account display names by identifier (label with identifier). */
+  accountNameMap?: Record<string, string>;
   accentColorById?: Record<string, string>;
   selectedIds?: Set<string>;
   onToggleSelect?: (id: string) => void;
@@ -30,6 +32,7 @@ const formatGroupDate = (date: string) =>
 export function ExpandableTransactionList({
   transactions,
   accountColorMap = {},
+  accountNameMap = {},
   accentColorById = {},
   selectedIds,
   onToggleSelect,
@@ -77,6 +80,11 @@ export function ExpandableTransactionList({
                       : undefined
                   }
                   accentColor={accentColorById[transaction.id]}
+                  accountName={
+                    transaction.accountIdentifier
+                      ? accountNameMap[transaction.accountIdentifier]
+                      : undefined
+                  }
                   onEdit={
                     onEdit &&
                     (canEdit ? canEdit(transaction) : true)

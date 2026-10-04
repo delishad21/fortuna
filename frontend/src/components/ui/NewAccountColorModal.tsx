@@ -8,7 +8,10 @@ import { ColorSelect } from "./ColorSelect";
 interface NewAccountColorModalProps {
   isOpen: boolean;
   accounts: Array<{ accountIdentifier: string; defaultColor: string }>;
-  onConfirm: (colorsByAccount: Record<string, string>) => void;
+  onConfirm: (
+    colorsByAccount: Record<string, string>,
+    labelsByAccount: Record<string, string>,
+  ) => void;
   onCancel: () => void;
 }
 
@@ -18,7 +21,10 @@ export function NewAccountColorModal({
   onConfirm,
   onCancel,
 }: NewAccountColorModalProps) {
-  const [selectedColors, setSelectedColors] = useState<Record<string, string>>({});
+  const [selectedColors, setSelectedColors] = useState<Record<string, string>>(
+    {},
+  );
+  const [labels, setLabels] = useState<Record<string, string>>({});
   const accountsKey = accounts
     .map((account) => `${account.accountIdentifier}:${account.defaultColor}`)
     .join("|");
@@ -27,7 +33,10 @@ export function NewAccountColorModal({
     if (!isOpen) return;
     setSelectedColors(
       Object.fromEntries(
-        accounts.map((account) => [account.accountIdentifier, account.defaultColor]),
+        accounts.map((account) => [
+          account.accountIdentifier,
+          account.defaultColor,
+        ]),
       ),
     );
   }, [accountsKey, isOpen]);
@@ -52,7 +61,7 @@ export function NewAccountColorModal({
                 New Accounts Detected
               </h2>
               <p className="text-sm text-dark-5 dark:text-dark-6 mt-0.5">
-                Choose colors for imported accounts
+                Name each new account and pick a colour
               </p>
             </div>
           </div>
@@ -80,6 +89,19 @@ export function NewAccountColorModal({
                   <p className="text-sm font-semibold text-dark dark:text-white truncate mt-0.5">
                     {account.accountIdentifier}
                   </p>
+                  <input
+                    aria-label={`Name for ${account.accountIdentifier}`}
+                    value={labels[account.accountIdentifier] || ""}
+                    maxLength={80}
+                    placeholder="Name, e.g. UOB One credit card"
+                    onChange={(e) =>
+                      setLabels((prev) => ({
+                        ...prev,
+                        [account.accountIdentifier]: e.target.value,
+                      }))
+                    }
+                    className="mt-2 w-full rounded-md border border-stroke bg-white px-2.5 py-1.5 text-sm outline-none focus:border-primary dark:border-dark-3 dark:bg-dark-2"
+                  />
                 </div>
                 <ColorSelect
                   value={selectedColor}
@@ -93,7 +115,7 @@ export function NewAccountColorModal({
 
           {/* Preview Text */}
           <p className="text-xs text-dark-5 dark:text-dark-6 text-center">
-            These colors will help you identify transactions from each account
+            Names and colours help you recognise each account across Fortuna
           </p>
         </div>
 
@@ -102,7 +124,10 @@ export function NewAccountColorModal({
           <Button variant="secondary" onClick={onCancel}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={() => onConfirm(selectedColors)}>
+          <Button
+            variant="primary"
+            onClick={() => onConfirm(selectedColors, labels)}
+          >
             Save Accounts
           </Button>
         </div>

@@ -15,6 +15,7 @@ export const settingsActionSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("create_account"),
       accountIdentifier: z.string().trim().min(1).max(120),
+      label: z.string().trim().max(80).optional(),
       color: color.default("#6366f1"),
     })
     .strict(),
@@ -113,6 +114,7 @@ export class SettingsActions implements ActionHandler {
           data: {
             userId,
             accountIdentifier: input.accountIdentifier,
+            label: input.label || null,
             color: input.color,
           },
         }),

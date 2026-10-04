@@ -8,10 +8,12 @@ export const accountsRouter = Router();
 
 const AccountIdentifierSchema = z.string().trim().min(1).max(120);
 const ColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, "color must be a six-digit hex value");
+const LabelSchema = z.string().trim().max(80).nullable().optional();
 
 function publicAccount(account: {
   id: string;
   accountIdentifier: string;
+  label?: string | null;
   color: string;
   createdAt: Date;
   updatedAt: Date;
@@ -19,6 +21,7 @@ function publicAccount(account: {
   return {
     id: account.id,
     accountIdentifier: account.accountIdentifier,
+    label: account.label ?? null,
     color: account.color,
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
@@ -53,7 +56,7 @@ accountsRouter.get("/", requireAccountAuth(["accounts:read"]), async (request, r
   try {
     const accounts = await prisma.accountIdentifier.findMany({
       where: { userId: authenticatedUserId(request) },
-      select: { id: true, accountIdentifier: true, color: true, createdAt: true, updatedAt: true },
+      select: { id: true, accountIdentifier: true, label: true, color: true, createdAt: true, updatedAt: true },
       orderBy: { accountIdentifier: "asc" },
     });
     return response.json({ accounts });
@@ -67,6 +70,7 @@ accountsRouter.post("/", requireAccountAuth(["accounts:write"]), async (request,
     const input = z.object({
       accountIdentifier: AccountIdentifierSchema,
       color: ColorSchema.default("#6366f1"),
+      label: LabelSchema,
       confirmed: z.literal(true),
     }).strict().parse(request.body);
     const userId = authenticatedUserId(request);
@@ -76,8 +80,8 @@ accountsRouter.post("/", requireAccountAuth(["accounts:write"]), async (request,
     const account = await prisma.$transaction(async (tx) => {
       const saved = await tx.accountIdentifier.upsert({
         where: { userId_accountIdentifier: { userId, accountIdentifier: input.accountIdentifier } },
-        update: { color: input.color },
-        create: { userId, accountIdentifier: input.accountIdentifier, color: input.color },
+        update: { color: input.color, ...(input.label !== undefined ? { label: input.label || null } : {}) },
+        create: { userId, accountIdentifier: input.accountIdentifier, color: input.color, label: input.label || null },
       });
       await audit(tx, userId, request, {
         toolName: existing ? "update_account" : "create_account",

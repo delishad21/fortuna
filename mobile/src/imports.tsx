@@ -29,6 +29,7 @@ import {
 } from "./ui";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Bars, Summary } from "./home";
+import { accountDisplay } from "../../frontend/shared/accounts";
 
 type Batch = {
   filename: string;
@@ -289,7 +290,7 @@ export function ImportReviewScreen({ navigation }: any) {
                     label="Apply account to selected rows"
                     value={account}
                     options={(accounts.data || []).map((a: any) => ({
-                      label: a.accountIdentifier,
+                      label: accountDisplay(a),
                       value: a.accountIdentifier,
                     }))}
                     onChange={setAccount}
@@ -1253,7 +1254,7 @@ export function ImportManagementScreen({ navigation, route }: any) {
                     key: "accountIdentifier",
                     label: "Account",
                     options: (accounts.data || []).map((a: any) => ({
-                      label: a.accountIdentifier,
+                      label: accountDisplay(a),
                       value: a.accountIdentifier,
                     })),
                   },
@@ -1676,7 +1677,7 @@ export function DraftScreen({ route, navigation }: any) {
                           key: "accountIdentifier",
                           label: "Account",
                           options: (accounts.data || []).map((a: any) => ({
-                            label: a.accountIdentifier,
+                            label: accountDisplay(a),
                             value: a.accountIdentifier,
                           })),
                         },
@@ -1806,7 +1807,7 @@ export function DraftRowScreen({ route, navigation }: any) {
                   key: "accountIdentifier",
                   label: "Account",
                   options: (accounts.data || []).map((a: any) => ({
-                    label: a.accountIdentifier,
+                    label: accountDisplay(a),
                     value: a.accountIdentifier,
                   })),
                 },

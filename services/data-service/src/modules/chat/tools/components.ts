@@ -179,6 +179,10 @@ export class ComponentTools {
         offset: 0,
         limit: TRANSACTION_PREVIEW_ROWS,
       });
+      const named = await this.db.accountIdentifier.findMany({
+        where: { userId, label: { not: null } },
+        select: { accountIdentifier: true, label: true },
+      });
       return {
         type: "component",
         component: "transaction_list",
@@ -186,6 +190,9 @@ export class ComponentTools {
         query: filters,
         total: page.total,
         rows: page.rows,
+        accountLabels: Object.fromEntries(
+          named.map((a) => [a.accountIdentifier, a.label!]),
+        ),
       };
     }
     if (input.component === "summary_tiles") {

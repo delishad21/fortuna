@@ -622,3 +622,68 @@ test("reviews of staged rows read and write the draft, shared with the staged im
       /changed/,
     );
   }));
+
+test("accounts carry a friendly label through chat context, components and proposals", () =>
+  withChatDb(async (db) => {
+    const { user, context } = await setup(db, "account-labels");
+    await db.accountIdentifier.create({
+      data: {
+        userId: user.id,
+        accountIdentifier: "4265-****-****-4591",
+        label: "UOB One credit card",
+        color: "#0B3D91",
+      },
+    });
+    await db.transaction.create({
+      data: {
+        userId: user.id,
+        date: new Date("2026-08-29"),
+        description: "BUS/MRT",
+        amountOut: 4.22,
+        accountIdentifier: "4265-****-****-4591",
+      },
+    });
+    const tools = createToolRegistry(db);
+    const ctx = await tools.execute(context, "get_context", {});
+    assert.deepEqual(
+      (ctx.model as any).accounts.map((a: any) => [
+        a.accountIdentifier,
+        a.label,
+      ]),
+      [["4265-****-****-4591", "UOB One credit card"]],
+    );
+    const list = await tools.execute(context, "show_component", {
+      component: "transaction_list",
+      title: "Card rides",
+      filters: {
+        dateFrom: "2026-08-01T00:00:00Z",
+        dateTo: "2026-09-01T00:00:00Z",
+      },
+    });
+    assert.deepEqual((list.blocks[0] as any).accountLabels, {
+      "4265-****-****-4591": "UOB One credit card",
+    });
+    const proposed = await tools.execute(context, "propose_action", {
+      action: {
+        kind: "create_account",
+        accountIdentifier: "SimplyGo 4591",
+        label: "SimplyGo journeys",
+        color: "#0B3D91",
+      },
+    });
+    const proposalId = (proposed.model as any).proposalId;
+    await tools.approvals.decideAction(user.id, proposalId, "approve");
+    const created = await db.accountIdentifier.findFirstOrThrow({
+      where: { userId: user.id, accountIdentifier: "SimplyGo 4591" },
+    });
+    assert.equal(created.label, "SimplyGo journeys");
+    await assert.rejects(
+      tools.execute(context, "propose_action", {
+        action: {
+          kind: "create_account",
+          accountIdentifier: "X",
+          label: "x".repeat(81),
+        },
+      }),
+    );
+  }));

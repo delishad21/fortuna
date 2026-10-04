@@ -6,8 +6,12 @@ import { prisma } from "@/lib/db/client";
 export interface AccountIdentifier {
   id: string;
   accountIdentifier: string;
+  /** Friendly name shown with the identifier; null when not set. */
+  label: string | null;
   color: string;
 }
+const cleanLabel = (label: string | null | undefined) =>
+  label === undefined ? undefined : label?.trim().slice(0, 80) || null;
 
 export async function getAccountNumbers(): Promise<AccountIdentifier[]> {
   const session = await auth();
@@ -23,6 +27,7 @@ export async function getAccountNumbers(): Promise<AccountIdentifier[]> {
     select: {
       id: true,
       accountIdentifier: true,
+      label: true,
       color: true,
     },
     orderBy: {
@@ -36,6 +41,7 @@ export async function getAccountNumbers(): Promise<AccountIdentifier[]> {
 export async function upsertAccountNumber(
   accountIdentifier: string,
   color: string,
+  label?: string | null,
 ): Promise<AccountIdentifier> {
   const session = await auth();
 
@@ -52,15 +58,18 @@ export async function upsertAccountNumber(
     },
     update: {
       color,
+      ...(label !== undefined ? { label: cleanLabel(label) } : {}),
     },
     create: {
       userId: session.user.id,
       accountIdentifier,
       color,
+      label: cleanLabel(label) ?? null,
     },
     select: {
       id: true,
       accountIdentifier: true,
+      label: true,
       color: true,
     },
   });
@@ -72,6 +81,7 @@ export async function updateAccountIdentifier(
   id: string,
   accountIdentifier: string,
   color: string,
+  label?: string | null,
 ): Promise<AccountIdentifier> {
   const session = await auth();
 
@@ -92,10 +102,12 @@ export async function updateAccountIdentifier(
     data: {
       accountIdentifier,
       color,
+      ...(label !== undefined ? { label: cleanLabel(label) } : {}),
     },
     select: {
       id: true,
       accountIdentifier: true,
+      label: true,
       color: true,
     },
   });

@@ -1,11 +1,14 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
+import { accountDisplay } from "@/lib/accounts";
 import { ChevronDown, Plus, Check, Sparkles } from "lucide-react";
 
 interface AccountIdentifier {
   id: string;
   accountIdentifier: string;
+  label?: string | null;
   color: string;
 }
 
@@ -111,7 +114,12 @@ export function AccountIdentifierSelect({
       {/* Trigger Button */}
       <button
         type="button"
-        onClick={() => !disabled && setIsOpen(!isOpen)}
+        onClick={() => {
+          if (disabled) return;
+          // Position before the first frame so the menu never flashes at 0,0.
+          if (!isOpen) updateDropdownPosition();
+          setIsOpen(!isOpen);
+        }}
         disabled={disabled}
         className={`w-full flex items-center px-4 py-3 text-sm text-left bg-white dark:bg-dark-2 border border-stroke dark:border-dark-3 rounded-lg outline-none cursor-pointer hover:border-primary dark:hover:border-primary transition-all disabled:cursor-not-allowed disabled:hover:border-stroke disabled:dark:hover:border-dark-3 ${
           isOpen ? "ring-2 ring-inset ring-primary border-primary" : ""
@@ -124,7 +132,7 @@ export function AccountIdentifierSelect({
               style={{ backgroundColor: selectedAccount.color }}
             />
             <span className="flex-1 truncate font-medium text-dark dark:text-white">
-              {selectedAccount.accountIdentifier}
+              {accountDisplay(selectedAccount)}
             </span>
             {newAccountBadge && (
               <span className="ml-2 px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary rounded-full flex items-center gap-1">
@@ -158,72 +166,85 @@ export function AccountIdentifierSelect({
         />
       </button>
 
-      {/* Dropdown Menu */}
-      {isOpen && (
-        <div
-          ref={dropdownRef}
-          className="fixed z-20 py-1 bg-white dark:bg-dark-2 border border-stroke dark:border-dark-3 rounded-lg shadow-dropdown max-h-60 overflow-auto"
-          style={{
-            top: showAbove ? "auto" : dropdownPosition.top,
-            bottom: showAbove
-              ? window.innerHeight - dropdownPosition.top
-              : "auto",
-            left: dropdownPosition.left,
-            width: dropdownPosition.width,
-            transformOrigin: showAbove ? "bottom" : "top",
-          }}
-        >
-          {/* No Account Option */}
-          <button
-            type="button"
-            onClick={() => handleSelect("")}
-            className="w-full flex items-center px-4 py-2.5 text-sm text-left hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors"
+      {/* Dropdown Menu: portalled so transformed or clipped ancestors cannot offset it */}
+      {isOpen &&
+        createPortal(
+          <div
+            ref={dropdownRef}
+            className="fixed z-[90] py-1 bg-white dark:bg-dark-2 border border-stroke dark:border-dark-3 rounded-lg shadow-dropdown max-h-60 overflow-auto"
+            style={{
+              top: showAbove ? "auto" : dropdownPosition.top,
+              bottom: showAbove
+                ? window.innerHeight - dropdownPosition.top
+                : "auto",
+              left: dropdownPosition.left,
+              width: dropdownPosition.width,
+              transformOrigin: showAbove ? "bottom" : "top",
+            }}
           >
-            <div className="w-2.5 h-2.5 rounded-full mr-2 shrink-0 bg-dark-5 dark:bg-dark-6" />
-            <span className="flex-1 text-dark dark:text-white">No Account</span>
-            {!value && <Check className="h-4 w-4 text-primary ml-2" />}
-          </button>
-
-          {/* Divider */}
-          {accountIdentifiers.length > 0 && (
-            <div className="h-px bg-stroke dark:bg-dark-3 my-1" />
-          )}
-
-          {/* Account Options */}
-          {accountIdentifiers.map((account) => (
+            {/* No Account Option */}
             <button
-              key={account.id}
               type="button"
-              onClick={() => handleSelect(account.accountIdentifier)}
+              onClick={() => handleSelect("")}
               className="w-full flex items-center px-4 py-2.5 text-sm text-left hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors"
             >
-              <div
-                className="w-2.5 h-2.5 rounded-full mr-2 shrink-0"
-                style={{ backgroundColor: account.color }}
-              />
+              <div className="w-2.5 h-2.5 rounded-full mr-2 shrink-0 bg-dark-5 dark:bg-dark-6" />
               <span className="flex-1 text-dark dark:text-white">
-                {account.accountIdentifier}
+                No Account
               </span>
-              {value === account.accountIdentifier && (
-                <Check className="h-4 w-4 text-primary ml-2" />
-              )}
+              {!value && <Check className="h-4 w-4 text-primary ml-2" />}
             </button>
-          ))}
 
-          {/* Divider */}
-          <div className="h-px bg-stroke dark:bg-dark-3 my-1" />
+            {/* Divider */}
+            {accountIdentifiers.length > 0 && (
+              <div className="h-px bg-stroke dark:bg-dark-3 my-1" />
+            )}
 
-          {/* Add New Account */}
-          <button
-            type="button"
-            onClick={handleAddNew}
-            className="w-full flex items-center px-4 py-2.5 text-sm text-left text-primary hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors font-medium"
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            <span>New Account</span>
-          </button>
-        </div>
-      )}
+            {/* Account Options */}
+            {accountIdentifiers.map((account) => (
+              <button
+                key={account.id}
+                type="button"
+                onClick={() => handleSelect(account.accountIdentifier)}
+                className="w-full flex items-center px-4 py-2.5 text-sm text-left hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors"
+              >
+                <div
+                  className="w-2.5 h-2.5 rounded-full mr-2 shrink-0"
+                  style={{ backgroundColor: account.color }}
+                />
+                <span className="flex-1 text-dark dark:text-white">
+                  {account.label?.trim() ? (
+                    <>
+                      {account.label}
+                      <span className="ml-1.5 text-xs text-dark-5 dark:text-dark-6">
+                        {account.accountIdentifier}
+                      </span>
+                    </>
+                  ) : (
+                    account.accountIdentifier
+                  )}
+                </span>
+                {value === account.accountIdentifier && (
+                  <Check className="h-4 w-4 text-primary ml-2" />
+                )}
+              </button>
+            ))}
+
+            {/* Divider */}
+            <div className="h-px bg-stroke dark:bg-dark-3 my-1" />
+
+            {/* Add New Account */}
+            <button
+              type="button"
+              onClick={handleAddNew}
+              className="w-full flex items-center px-4 py-2.5 text-sm text-left text-primary hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors font-medium"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              <span>New Account</span>
+            </button>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

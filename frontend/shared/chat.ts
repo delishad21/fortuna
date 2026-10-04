@@ -45,6 +45,8 @@ export type ComponentBlock =
       query: Record<string, unknown>;
       total: number;
       rows: ComponentRow[];
+      /** Friendly account names by identifier, for display. */
+      accountLabels?: Record<string, string>;
     }
   | {
       type: "component";
@@ -390,3 +392,5 @@ export const generatingRun = (run?: Run) =>
   !!run && ["queued", "running"].includes(run.status);
 
 export * from "./proposals";
+
+export * from "./accounts";

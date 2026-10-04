@@ -124,7 +124,7 @@ export const workflowDefinitions: ToolDefinition[] = [
       "retain_fixture: statementFileIds (string[]). " +
       "approve_parser: workspaceId, candidateId. " +
       "activate_parser | rollback_parser: definitionId, versionId. " +
-      "create_account: accountIdentifier (string), color (optional '#RRGGBB'). " +
+      "create_account: accountIdentifier (string, what statements show), label (optional friendly name, e.g. 'UOB One credit card'), color (optional '#RRGGBB'). " +
       "create_category: name, color (optional '#RRGGBB'), icon (optional string). " +
       "update_import_rule: ruleId (optional; omit to create), name (required, unique), " +
       "parserId (optional parser ID from list_parsers; null = any parser), " +

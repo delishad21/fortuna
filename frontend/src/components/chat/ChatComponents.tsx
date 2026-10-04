@@ -90,6 +90,7 @@ function TransactionList({
       title={block.title}
       transactions={asTransactions(rows) || []}
       total={total}
+      accountLabels={block.accountLabels}
       footer={
         <>
           {remaining > 0 && (

@@ -18,6 +18,7 @@ import {
   Txt,
   useTheme,
 } from "./ui";
+import { accountDisplay } from "../../frontend/shared/accounts";
 const scopes = [
   "statements:write",
   "drafts:read",
@@ -43,7 +44,11 @@ export function SettingsScreen({ navigation }: any) {
         title="Make it yours"
         subtitle="A little organization goes a long way."
       />
-      <Button title="AI connection" secondary onPress={()=>navigation.navigate("AIConnection")}/>
+      <Button
+        title="AI connection"
+        secondary
+        onPress={() => navigation.navigate("AIConnection")}
+      />
       <Card>
         <Txt bold size={22}>
           {user.data?.name || "Your profile"}
@@ -336,8 +341,14 @@ export function ManageScreen({ route, navigation }: any) {
       {result.data?.map((item: any) => (
         <Card key={item.id}>
           <Txt bold size={18}>
-            {item.name || item.accountIdentifier || item.patternValue}
+            {item.name ||
+              item.label ||
+              item.accountIdentifier ||
+              item.patternValue}
           </Txt>
+          {kind === "accounts" && !!item.label && (
+            <Txt muted>{item.accountIdentifier}</Txt>
+          )}
           {kind === "rules" && (
             <Txt muted>
               {item.enabled ? "Enabled" : "Disabled"} ·{" "}
@@ -390,6 +401,7 @@ export function ManageEditorScreen({ route, navigation }: any) {
       { key: "color", label: "Color (hex)", required: true },
     ],
     accounts: [
+      { key: "label", label: "Name, e.g. UOB One credit card" },
       { key: "accountIdentifier", label: "Account identifier", required: true },
       { key: "color", label: "Color (hex)", required: true },
     ],
@@ -412,7 +424,7 @@ export function ManageEditorScreen({ route, navigation }: any) {
         options: [
           { label: "All accounts", value: null },
           ...(accounts.data || []).map((a: any) => ({
-            label: a.accountIdentifier,
+            label: accountDisplay(a),
             value: a.accountIdentifier,
           })),
         ],
@@ -499,8 +511,8 @@ export function ManageEditorScreen({ route, navigation }: any) {
             await call(
               item ? "updateAccountIdentifier" : "upsertAccountNumber",
               ...(item
-                ? [item.id, v.accountIdentifier, v.color]
-                : [v.accountIdentifier, v.color]),
+                ? [item.id, v.accountIdentifier, v.color, v.label || null]
+                : [v.accountIdentifier, v.color, v.label || null]),
             );
           else if (kind === "rules")
             await call(

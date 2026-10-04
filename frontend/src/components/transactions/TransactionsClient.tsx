@@ -1,4 +1,5 @@
 "use client";
+import { accountDisplayMap } from "@/lib/accounts";
 
 import { useEffect, useRef, useState } from "react";
 import { TransactionFilters } from "@/components/transactions/TransactionFilters";
@@ -176,6 +177,7 @@ export function TransactionsClient({
   const [bulkCategoryId, setBulkCategoryId] = useState("");
   const [bulkDate, setBulkDate] = useState("");
 
+  const accountNameMap = accountDisplayMap(accountNumbers);
   const accountColorMap = accountNumbers.reduce<Record<string, string>>(
     (acc, account) => {
       acc[account.accountIdentifier] = account.color;
@@ -792,6 +794,7 @@ export function TransactionsClient({
               <ExpandableTransactionList
                 transactions={transactions}
                 accountColorMap={accountColorMap}
+                accountNameMap={accountNameMap}
                 selectedIds={
                   allFilteredSelected
                     ? new Set(

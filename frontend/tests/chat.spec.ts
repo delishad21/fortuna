@@ -1558,3 +1558,29 @@ test("staged imports open beside the chat and return to it", async ({ page, requ
   await page.goto(`/imports/drafts/${draftId}?returnTo=${encodeURIComponent("https://evil.example")}`);
   await expect(page.getByRole("link", { name: "← Imports" })).toBeVisible();
 });
+
+test("accounts can be named and show as name with identifier", async ({ page, request }) => {
+  const username = `acct_label_${Date.now()}`, password = "chat-test-temporary-password";
+  const registered = await request.post("/api/auth/register", {
+    data: { username, password, name: "Chat QA", baseCurrency: "SGD" },
+  });
+  expect(registered.ok(), await registered.text()).toBeTruthy();
+  await page.goto("/login");
+  await page.getByLabel("Username").fill(username);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign In", exact: true }).click();
+  await expect(page).toHaveURL(/dashboard/, { timeout: 30000 });
+  await page.goto("/settings");
+  const card = page.locator("div.rounded-lg").filter({ has: page.getByRole("heading", { name: "Account Identifiers" }) }).last();
+  await card.getByRole("button", { name: "Manage" }).click();
+  await page.getByRole("button", { name: "Add Account" }).click();
+  await page.getByLabel("New account name").fill("UOB One credit card");
+  await page.getByLabel("New account identifier").fill("4265-****-****-4591");
+  await page.getByRole("button", { name: "Add Account" }).click();
+  await expect(page.getByLabel("Name for 4265-****-****-4591")).toHaveValue("UOB One credit card");
+  await page.getByLabel("Name for 4265-****-****-4591").fill("UOB One card");
+  await page.getByRole("button", { name: "Save Changes" }).click();
+  await page.reload();
+  await expect(card.getByText("UOB One card · 4265-****-****-4591")).toBeVisible();
+  await page.screenshot({ path: "/tmp/fortuna-account-labels.png" });
+});

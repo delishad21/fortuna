@@ -1,4 +1,5 @@
 "use client";
+import { accountDisplay } from "@/lib/accounts";
 
 import { useEffect, useRef, useState } from "react";
 import { Filter, X, ChevronDown } from "lucide-react";
@@ -30,7 +31,11 @@ interface FilterValues {
 
 interface TransactionFiltersProps {
   categories: Category[];
-  accountNumbers: { accountIdentifier: string; color: string }[];
+  accountNumbers: {
+    accountIdentifier: string;
+    label?: string | null;
+    color: string;
+  }[];
   availableYears: number[];
   onFilterChange: (filters: FilterValues) => void;
   initialFilters?: Partial<FilterValues>;
@@ -379,7 +384,7 @@ export function TransactionFilters({
                       { value: "", label: "All Identifiers" },
                       ...accountNumbers.map((account) => ({
                         value: account.accountIdentifier,
-                        label: account.accountIdentifier,
+                        label: accountDisplay(account),
                       })),
                     ]}
                     className="mt-1 w-full"

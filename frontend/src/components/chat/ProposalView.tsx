@@ -26,6 +26,8 @@ import {
   summaryValue,
   transactionTitle,
   FIELD_LABELS,
+  previewAccountName,
+  accountDisplay,
 } from "@/lib/chat/client";
 import { TransactionCard } from "@/components/transactions/TransactionCard";
 
@@ -146,7 +148,7 @@ function FieldValue({
             backgroundColor: references.accounts?.[String(value)] || NEUTRAL,
           }}
         />
-        {String(value)}
+        {previewAccountName(String(value), references)}
       </span>
     );
   return (
@@ -466,7 +468,7 @@ function SettingsChange({ kind, preview }: { kind: string; preview: any }) {
           New account
         </p>
         <CategoryBadge
-          value={{ name: after.accountIdentifier, color: after.color }}
+          value={{ name: accountDisplay(after), color: after.color }}
         />
       </section>
     );

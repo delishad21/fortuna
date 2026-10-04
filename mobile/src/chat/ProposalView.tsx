@@ -18,6 +18,8 @@ import {
   summaryValue,
   transactionTitle,
   FIELD_LABELS,
+  previewAccountName,
+  accountDisplay,
 } from "./api";
 
 const NEUTRAL = "#9CA3AF";
@@ -137,7 +139,7 @@ function Value({
     return (
       <Chip
         value={{
-          name: String(value),
+          name: previewAccountName(String(value), references),
           color: references.accounts?.[String(value)] || null,
         }}
       />
@@ -374,7 +376,9 @@ export function ProposalView({ proposal }: { proposal: Proposal }) {
         </Label>
         <Chip
           value={{
-            name: preview.after?.accountIdentifier || preview.after?.name,
+            name: preview.after?.accountIdentifier
+              ? accountDisplay(preview.after)
+              : preview.after?.name,
             color: preview.after?.color,
           }}
         />

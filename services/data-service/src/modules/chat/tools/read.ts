@@ -200,7 +200,7 @@ export class ReadTools {
       }),
       this.db.accountIdentifier.findMany({
         where: { userId },
-        select: { id: true, accountIdentifier: true },
+        select: { id: true, accountIdentifier: true, label: true },
         take: 100,
       }),
     ]);

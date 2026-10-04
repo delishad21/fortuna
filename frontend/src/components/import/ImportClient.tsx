@@ -262,6 +262,7 @@ export function ImportClient({
 
   const handleConfirmAccountColors = async (
     colorsByAccount: Record<string, string>,
+    labelsByAccount: Record<string, string> = {},
   ) => {
     const accountsToSave = Array.from(pendingAccountColors.keys());
     try {
@@ -272,6 +273,7 @@ export function ImportClient({
             colorsByAccount[accountIdentifier] ||
               pendingAccountColors.get(accountIdentifier) ||
               PRESET_COLORS[0],
+            labelsByAccount[accountIdentifier] || null,
           ),
         ),
       );

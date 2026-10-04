@@ -18,6 +18,7 @@ import {
   isUnsure,
 } from "./api";
 import { Expandable } from "./Details";
+import { accountDisplay } from "../../../frontend/shared/accounts";
 export function ChatReviewCards({
   id,
   onSubmitted,
@@ -335,7 +336,7 @@ export function ChatReviewCards({
               options={[
                 { label: "Unassigned", value: "" },
                 ...review.accounts.map((a) => ({
-                  label: a.accountIdentifier,
+                  label: accountDisplay(a),
                   value: a.accountIdentifier,
                 })),
               ]}

@@ -10,11 +10,16 @@ import type { AccountIdentifier } from "@/app/actions/accountNumbers";
 interface ManageAccountsModalProps {
   isOpen: boolean;
   accounts: AccountIdentifier[];
-  newAccount: { identifier: string; color: string };
+  newAccount: { identifier: string; label: string; color: string };
   onClose: () => void;
-  onNewAccountChange: (next: { identifier: string; color: string }) => void;
+  onNewAccountChange: (next: {
+    identifier: string;
+    label: string;
+    color: string;
+  }) => void;
   onAddAccount: () => void | Promise<void>;
   onAccountIdentifierChange: (id: string, identifier: string) => void;
+  onAccountLabelChange: (id: string, label: string) => void;
   onAccountColorChange: (id: string, color: string) => void;
   onDeleteAccount: (id: string) => void;
   onSaveAll: () => void | Promise<void>;
@@ -28,6 +33,7 @@ export function ManageAccountsModal({
   onNewAccountChange,
   onAddAccount,
   onAccountIdentifierChange,
+  onAccountLabelChange,
   onAccountColorChange,
   onDeleteAccount,
   onSaveAll,
@@ -48,7 +54,8 @@ export function ManageAccountsModal({
                 Manage Accounts
               </h2>
               <p className="text-sm text-dark-5 dark:text-dark-6 mt-0.5">
-                Update identifiers and colors for each account.
+                Name each account so it&apos;s easy to recognise. The identifier
+                is what imports match on.
               </p>
             </div>
           </div>
@@ -70,6 +77,19 @@ export function ManageAccountsModal({
                       }
                     />
                     <TextInput
+                      aria-label="New account name"
+                      value={newAccount.label}
+                      onChange={(e) =>
+                        onNewAccountChange({
+                          ...newAccount,
+                          label: e.target.value,
+                        })
+                      }
+                      placeholder="Name, e.g. UOB One credit card"
+                      className="flex-1"
+                    />
+                    <TextInput
+                      aria-label="New account identifier"
                       value={newAccount.identifier}
                       onChange={(e) =>
                         onNewAccountChange({
@@ -77,7 +97,7 @@ export function ManageAccountsModal({
                           identifier: e.target.value,
                         })
                       }
-                      placeholder="e.g., 21431251342"
+                      placeholder="Identifier, e.g. 21431251342"
                       className="flex-1"
                     />
                   </div>
@@ -121,8 +141,21 @@ export function ManageAccountsModal({
                   value={account.color}
                   onChange={(color) => onAccountColorChange(account.id, color)}
                 />
-                <div className="flex-1 min-w-[200px]">
+                <div className="flex-1 min-w-[160px]">
                   <TextInput
+                    aria-label={`Name for ${account.accountIdentifier}`}
+                    value={account.label || ""}
+                    placeholder="Add a name"
+                    maxLength={80}
+                    onChange={(e) =>
+                      onAccountLabelChange(account.id, e.target.value)
+                    }
+                    className="w-full"
+                  />
+                </div>
+                <div className="flex-1 min-w-[160px]">
+                  <TextInput
+                    aria-label={`Identifier for ${account.label || account.accountIdentifier}`}
                     value={account.accountIdentifier}
                     onChange={(e) =>
                       onAccountIdentifierChange(account.id, e.target.value)

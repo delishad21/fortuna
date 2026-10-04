@@ -46,12 +46,20 @@ export function ChatTransactions({
   transactions,
   total = transactions.length,
   footer,
+  accountLabels = {},
 }: {
   title: string;
   transactions: TransactionCardTransaction[];
   total?: number;
   footer?: React.ReactNode;
+  accountLabels?: Record<string, string>;
 }) {
+  const accountNameMap = Object.fromEntries(
+    Object.entries(accountLabels).map(([id, label]) => [
+      id,
+      `${label} · ${id}`,
+    ]),
+  );
   const [shown, setShown] = useState(footer ? Infinity : PAGE);
   const remaining = transactions.length - shown;
   return (
@@ -63,7 +71,10 @@ export function ChatTransactions({
           {total === 1 ? "transaction" : "transactions"}
         </span>
       </div>
-      <ExpandableTransactionList transactions={transactions.slice(0, shown)} />
+      <ExpandableTransactionList
+        transactions={transactions.slice(0, shown)}
+        accountNameMap={accountNameMap}
+      />
       {remaining > 0 && (
         <button
           type="button"

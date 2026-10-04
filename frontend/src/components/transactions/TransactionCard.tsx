@@ -85,6 +85,8 @@ interface TransactionCardProps {
   showDate?: boolean;
   /** Dense, read-only row for lists inside other views, such as approval previews. */
   compact?: boolean;
+  /** How to show the account, e.g. "UOB One credit card · 4265-…"; defaults to the identifier. */
+  accountName?: string;
   linkedTransactions?: {
     reimburses: LinkedTransaction[];
     reimbursedBy: LinkedTransaction[];
@@ -115,8 +117,10 @@ export function TransactionCard({
   onToggleSelect,
   showDate = false,
   compact = false,
+  accountName,
   linkedTransactions,
 }: TransactionCardProps) {
+  const accountText = accountName || transaction.accountIdentifier;
   const [isExpanded, setIsExpanded] = useState(false);
   const primaryClickAction = getTransactionCardPrimaryClickAction({
     hasSelectionToggle: Boolean(onToggleSelect),
@@ -228,7 +232,7 @@ export function TransactionCard({
               {transaction.description}
               {compact &&
                 transaction.accountIdentifier &&
-                ` · ${transaction.accountIdentifier}`}
+                ` · ${accountText}`}
             </div>
             {transaction.tripFundings && transaction.tripFundings.length > 0 && (
               <div className="mt-1">
@@ -424,7 +428,7 @@ export function TransactionCard({
                       style={{ backgroundColor: accountColor }}
                     />
                   )}
-                  <span>{transaction.accountIdentifier}</span>
+                  <span>{accountText}</span>
                 </div>
               </div>
             )}

@@ -1,4 +1,5 @@
 "use client";
+import { accountDisplay } from "@/lib/accounts";
 
 import { Plus, Trash2, WandSparkles } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -15,7 +16,11 @@ interface ManageImportRulesModalProps {
   rules: ImportRule[];
   categories: Category[];
   parserOptions: ParserOption[];
-  accounts: Array<{ accountIdentifier: string; color?: string | null }>;
+  accounts: Array<{
+    accountIdentifier: string;
+    label?: string | null;
+    color?: string | null;
+  }>;
   onClose: () => void;
   onAddRule: () => void;
   onRuleChange: (id: string, updates: Partial<ImportRule>) => void;
@@ -115,7 +120,7 @@ export function ManageImportRulesModal({
                         { value: "__all__", label: "All Accounts" },
                         ...accounts.map((account) => ({
                           value: account.accountIdentifier,
-                          label: account.accountIdentifier,
+                          label: accountDisplay(account),
                         })),
                       ]}
                       onChange={(value) =>

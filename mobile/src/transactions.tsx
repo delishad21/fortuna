@@ -21,6 +21,7 @@ import {
   useTheme,
 } from "./ui";
 import { shareCsv } from "./sharing";
+import { accountDisplay } from "../../frontend/shared/accounts";
 export function TransactionsScreen({ navigation, route }: any) {
   const { call } = useApi();
   const { colors } = useTheme();
@@ -136,7 +137,7 @@ export function TransactionsScreen({ navigation, route }: any) {
                       options: [
                         { label: "All", value: "" },
                         ...(accounts.data || []).map((a: any) => ({
-                          label: a.accountIdentifier,
+                          label: accountDisplay(a),
                           value: a.accountIdentifier,
                         })),
                       ],
@@ -338,7 +339,7 @@ export function TransactionScreen({ navigation, route }: any) {
               key: "accountIdentifier",
               label: "Account",
               options: (accounts.data || []).map((a: any) => ({
-                label: a.accountIdentifier,
+                label: accountDisplay(a),
                 value: a.accountIdentifier,
               })),
             },

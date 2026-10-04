@@ -336,6 +336,11 @@ export class TransactionActions implements ActionHandler {
       accounts: Object.fromEntries(
         snapshot.accounts.map((a) => [a.accountIdentifier, a.color]),
       ),
+      accountLabels: Object.fromEntries(
+        snapshot.accounts.flatMap((a) =>
+          a.label ? [[a.accountIdentifier, a.label]] : [],
+        ),
+      ),
     });
   }
   async prepare(userId: string, raw: unknown): Promise<PreparedAction> {

@@ -98,6 +98,8 @@ export type ComponentBlock =
       query: ComponentQuery;
       total: number;
       rows: unknown[];
+      /** Friendly account names by identifier, for display. */
+      accountLabels?: Record<string, string>;
     }
   | {
       type: "component";
