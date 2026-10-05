@@ -335,9 +335,20 @@ async function auditUser(db: Db, userId: string, fix: boolean) {
   const savedLinks = allLinks.filter(
     (link) => link.reimbursementTransactionId && link.expenseTransactionId,
   );
+  // Include legacy JSON targets: they may have no links of their own yet.
+  const legacyTargets = transactions.flatMap((tx) => {
+    const allocations = ((tx.linkage || {}) as Record<string, any>).reimbursesAllocations;
+    return Array.isArray(allocations)
+      ? allocations
+          .map((item: any) => (typeof item?.transactionId === "string" ? item.transactionId : ""))
+          .filter(Boolean)
+          .map(transactionKey)
+      : [];
+  });
   const ends = await loadEnds(db, userId, [
     ...transactions.map((tx) => transactionKey(tx.id)),
     ...allLinks.flatMap((link) => [reimbursementKeyOf(link), expenseKeyOf(link)]),
+    ...legacyTargets,
   ]);
 
   // Legacy JSON allocations with no matching saved link (reported, not fixed).
