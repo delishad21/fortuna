@@ -5,6 +5,7 @@ import { z } from "zod";
 import { ChatContext, ChatError, idSchema } from "./contracts";
 import { json } from "./tools/transactions";
 import { ReadTools } from "./tools/read";
+import { decorateDraftRows } from "../reimbursements/links.service";
 const amount = z.number().finite().min(0).max(9999999999.99).nullable();
 export const reviewPatch = z
   .object({
@@ -95,10 +96,22 @@ export async function withLiveStagedRows(
 ) {
   const ids = rows.flatMap((r) => (r.source.rowId ? [r.source.rowId] : []));
   if (!ids.length) return rows;
-  const staged = await db.importDraftRow.findMany({
+  const rawStaged = await db.importDraftRow.findMany({
     where: { id: { in: ids } },
-    select: { id: true, version: true, currentPayload: true },
+    select: {
+      id: true,
+      draftId: true,
+      rowIndex: true,
+      version: true,
+      currentPayload: true,
+      draft: { select: { userId: true } },
+    },
   });
+  // Link data lives in the links table; attach it the way the import page shows it.
+  const userId = rawStaged[0]?.draft.userId;
+  const staged = userId
+    ? await decorateDraftRows(db as never, userId, rawStaged)
+    : rawStaged;
   const byId = new Map(staged.map((r) => [r.id, r]));
   return rows.map((row) => {
     const live = row.source.rowId ? byId.get(row.source.rowId) : undefined;

@@ -187,7 +187,7 @@ export function createToolRegistry(db: PrismaClient) {
           type: "array",
           maxItems: 100,
           description:
-            "Pre-filled edits per row. Fields: label, description, date, categoryId (from get_context), accountIdentifier, amountIn, amountOut, currency, linkage ({type:'internal'} | {type:'reimbursement', reimbursesAllocations:[{transactionId, amount}]} | null).",
+            "Pre-filled edits per row. Fields: label, description, date, categoryId (from get_context), accountIdentifier, amountIn, amountOut, currency, linkage ({type:'internal'} | {type:'reimbursement', reimbursesAllocations:[{transactionId | stagedDraftId+stagedRowId, amount}]} | null). A reimbursement row may pay back saved transactions or staged rows in any staged import; links are checked when saved (money in pays money out, no over-allocation), and imports linked to each other must be committed together with commit_drafts.",
           items: {
             type: "object",
             properties: {

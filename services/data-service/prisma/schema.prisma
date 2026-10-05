@@ -80,6 +80,7 @@ model User {
   chatConnections ChatConnection[]
   chatConversations ChatConversation[]
   chatMemories ChatMemory[]
+  reimbursementLinks ReimbursementLink[]
 
   @@map("users")
 }
@@ -175,6 +176,8 @@ model ImportDraftRow {
 
   draft     ImportDraft              @relation(fields: [draftId], references: [id], onDelete: Cascade)
   proposals ClassificationProposal[]
+  reimbursementLinksAsReimbursement ReimbursementLink[] @relation("ReimbursementLinkReimbursementDraftRow")
+  reimbursementLinksAsExpense       ReimbursementLink[] @relation("ReimbursementLinkExpenseDraftRow")
 
   @@unique([draftId, rowIndex])
   @@index([draftId, reviewStatus])
@@ -455,10 +458,42 @@ model Transaction {
   importBatch  ImportBatch?  @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
   tripFundings TripFunding[]
   tripEntries  TripEntry[]   @relation("TripEntrySourceTransaction")
+  reimbursementLinksAsReimbursement ReimbursementLink[] @relation("ReimbursementLinkReimbursementTransaction")
+  reimbursementLinksAsExpense       ReimbursementLink[] @relation("ReimbursementLinkExpenseTransaction")
 
   @@index([userId, date])
   @@index([userId, categoryId])
   @@map("transactions")
+}
+
+// One reimbursement link: how much of an expense a reimbursement pays back.
+// Each end is either a saved transaction or a staged import row, never both
+// (check constraints in the migration). Committing a draft swaps the row id for
+// the new transaction id on the same link. The `linkage` JSON on transactions
+// is a cache rebuilt from this table (see reimbursements/links.service.ts).
+model ReimbursementLink {
+  id                         String   @id @default(cuid())
+  userId                     String   @map("user_id")
+  amount                     Decimal  @db.Decimal(12, 2)
+  reimbursementTransactionId String?  @map("reimbursement_transaction_id")
+  reimbursementDraftRowId    String?  @map("reimbursement_draft_row_id")
+  expenseTransactionId       String?  @map("expense_transaction_id")
+  expenseDraftRowId          String?  @map("expense_draft_row_id")
+  createdAt                  DateTime @default(now()) @map("created_at")
+  updatedAt                  DateTime @updatedAt @map("updated_at")
+
+  user                     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reimbursementTransaction Transaction?    @relation("ReimbursementLinkReimbursementTransaction", fields: [reimbursementTransactionId], references: [id], onDelete: Cascade)
+  expenseTransaction       Transaction?    @relation("ReimbursementLinkExpenseTransaction", fields: [expenseTransactionId], references: [id], onDelete: Cascade)
+  reimbursementDraftRow    ImportDraftRow? @relation("ReimbursementLinkReimbursementDraftRow", fields: [reimbursementDraftRowId], references: [id], onDelete: Cascade)
+  expenseDraftRow          ImportDraftRow? @relation("ReimbursementLinkExpenseDraftRow", fields: [expenseDraftRowId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([reimbursementTransactionId])
+  @@index([expenseTransactionId])
+  @@index([reimbursementDraftRowId])
+  @@index([expenseDraftRowId])
+  @@map("reimbursement_links")
 }
 
 // Trips

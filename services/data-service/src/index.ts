@@ -3,6 +3,7 @@ import prisma from "./lib/prisma";
 import express from "express";
 import cors from "cors";
 import { transactionRouter } from "./modules/transactions/transactions.controller";
+import { reimbursementRouter } from "./modules/reimbursements/links.controller";
 import { analyticsRouter } from "./modules/analytics/analytics.controller";
 import { tripsRouter } from "./modules/trips/trips.controller";
 import { apiAuthRouter } from "./modules/auth/auth.controller";
@@ -28,6 +29,7 @@ app.get("/health", (req, res) => {
 // Routes
 app.use("/api/chat", createChatRouter(prisma));
 app.use("/api/transactions", transactionRouter);
+app.use("/api/reimbursements", reimbursementRouter);
 app.use("/api/analytics", analyticsRouter);
 app.use("/api/trips", tripsRouter);
 app.use("/api/auth", apiAuthRouter);

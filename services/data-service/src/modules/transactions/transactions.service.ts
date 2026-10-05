@@ -14,6 +14,21 @@ import {
 } from "./classification-patterns";
 import { inferImportSourceFilename } from "../imports/import-source";
 import { validatePendingReimbursementLinks } from "./transactions.import-validation";
+import { afterCommit } from "../../lib/database-context";
+import { EndRef, stripLinkFields } from "../reimbursements/links.core";
+import { transactionKey } from "../reimbursements/links.core";
+import {
+  assertSavedLinksFit,
+  counterpartsOf,
+  deleteRoleLinks,
+  isSameLinkSet,
+  lockEnds,
+  refreshAfterDelete,
+  replaceLinks,
+  runInTransaction,
+  syncTransactionCaches,
+} from "../reimbursements/links.service";
+import { auditLinks } from "../reimbursements/links.queries";
 
 // Reserved category names and colors
 const RESERVED_CATEGORIES = {
@@ -27,6 +42,8 @@ export interface ImportResult {
   importedCount?: number;
   duplicatesDetected?: Map<number, DuplicateMatch[]>;
   batchId?: string;
+  /** Created transaction ids, in ascending order of the selected indices. */
+  transactionIds?: string[];
   error?: string;
 }
 
@@ -36,32 +53,6 @@ export function compatibleImportRuleParserIds(parserId?: string) {
     return ["dbs_paylah_statement", "dbs_paylah_statement_new"];
   }
   return [parserId];
-}
-
-export function detachStagedReimbursementAllocations<
-  T extends {
-    stagedDraftId?: string;
-    stagedRowId?: string;
-    amount: number;
-  },
->(allocations: T[], leftoverAmount = 0) {
-  const stagedAmount = allocations
-    .filter(
-      (allocation) =>
-        typeof allocation.stagedDraftId === "string" &&
-        typeof allocation.stagedRowId === "string",
-    )
-    .reduce((sum, allocation) => sum + Number(allocation.amount || 0), 0);
-  return {
-    linkedAllocations: allocations.filter(
-      (allocation) =>
-        !(
-          typeof allocation.stagedDraftId === "string" &&
-          typeof allocation.stagedRowId === "string"
-        ),
-    ),
-    leftoverAmount: Number((leftoverAmount + stagedAmount).toFixed(2)),
-  };
 }
 
 const IMPORT_ORIGINAL_INDEX_KEY = "__importOriginalIndex";
@@ -721,359 +712,6 @@ export class TransactionService {
     );
   }
 
-  private static sanitizeLinkageForTransaction(
-    transactionId: string,
-    linkage: TransactionLinkage | null,
-    context?: {
-      linkageByTransactionId: Map<string, TransactionLinkage | null>;
-      targetId?: string;
-    },
-  ): TransactionLinkage | null {
-    if (!linkage) return null;
-
-    if (linkage.type === "reimbursed") {
-      const linkageByTransactionId = context?.linkageByTransactionId;
-      const targetId = context?.targetId || transactionId;
-      const isValidReimburser = (reimburserId: string) => {
-        if (!linkageByTransactionId) return true;
-        const reimburserLinkage = linkageByTransactionId.get(reimburserId);
-        if (!reimburserLinkage || reimburserLinkage.type !== "reimbursement") {
-          return false;
-        }
-        const reimbursesSet = new Set<string>();
-        (reimburserLinkage.reimbursesAllocations || []).forEach((item) => {
-          if (typeof item.transactionId === "string") {
-            reimbursesSet.add(item.transactionId);
-          }
-        });
-        return reimbursesSet.has(targetId);
-      };
-
-      const reimbursedByAllocations = (linkage.reimbursedByAllocations || [])
-        .filter(
-          (item) =>
-            item &&
-            typeof item.transactionId === "string" &&
-            item.transactionId.length > 0 &&
-            item.transactionId !== transactionId &&
-            Number(item.amount || 0) > 0 &&
-            isValidReimburser(item.transactionId),
-        )
-        .map((item) => ({
-          transactionId: item.transactionId,
-          amount: Number(item.amount),
-        }));
-
-      if (reimbursedByAllocations.length === 0) {
-        return null;
-      }
-
-      return {
-        type: "reimbursed",
-        reimbursedByAllocations,
-        autoDetected: linkage.autoDetected,
-        detectionReason: linkage.detectionReason,
-      };
-    }
-
-    if (linkage.type === "reimbursement") {
-      const linkageByTransactionId = context?.linkageByTransactionId;
-      const sourceId = transactionId;
-      const isValidTarget = (targetId: string) => {
-        if (!linkageByTransactionId) return true;
-        const targetLinkage = linkageByTransactionId.get(targetId);
-        if (!targetLinkage || targetLinkage.type !== "reimbursed") {
-          return false;
-        }
-        const reimbursedBySet = new Set<string>();
-        (targetLinkage.reimbursedByAllocations || []).forEach((item) => {
-          if (typeof item.transactionId === "string") {
-            reimbursedBySet.add(item.transactionId);
-          }
-        });
-        return reimbursedBySet.has(sourceId);
-      };
-
-      const reimbursesAllocations = (linkage.reimbursesAllocations || [])
-        .filter(
-          (item) =>
-            item &&
-            ((typeof item.transactionId === "string" &&
-              item.transactionId.length > 0 &&
-              item.transactionId !== transactionId &&
-              isValidTarget(item.transactionId)) ||
-              typeof item.pendingBatchIndex === "number") &&
-            Number(item.amount || 0) >= 0,
-        )
-        .map((item) => ({
-          transactionId: item.transactionId,
-          pendingBatchIndex: item.pendingBatchIndex,
-          amount: Number(item.amount),
-        }));
-
-      return {
-        type: "reimbursement",
-        reimbursesAllocations,
-        leftoverAmount:
-          linkage.leftoverAmount !== undefined
-            ? Number(linkage.leftoverAmount)
-            : undefined,
-        leftoverCategoryId: linkage.leftoverCategoryId ?? null,
-        autoDetected: linkage.autoDetected,
-        detectionReason: linkage.detectionReason,
-      };
-    }
-
-    return linkage;
-  }
-
-  private static getAbsoluteTransactionAmount(input: {
-    amountIn?: number | null;
-    amountOut?: number | null;
-  }) {
-    const amountIn = input.amountIn ?? null;
-    const amountOut = input.amountOut ?? null;
-    if (amountOut !== null && amountOut !== undefined && amountOut > 0)
-      return amountOut;
-    if (amountIn !== null && amountIn !== undefined && amountIn > 0)
-      return amountIn;
-    return 0;
-  }
-
-  private static normalizeReimbursementAllocations(
-    linkage: TransactionLinkage | null | undefined,
-  ) {
-    if (!linkage || linkage.type !== "reimbursement") return [];
-
-    return (linkage.reimbursesAllocations || [])
-      .map((item) => ({
-        transactionId: item.transactionId,
-        pendingBatchIndex: item.pendingBatchIndex,
-        stagedDraftId: item.stagedDraftId,
-        stagedRowId: item.stagedRowId,
-        targetDescription: item.targetDescription,
-        targetDate: item.targetDate,
-        amount: Number(item.amount || 0),
-      }))
-      .filter(
-        (item) =>
-          item.amount > 0 &&
-          (typeof item.transactionId === "string" ||
-            typeof item.pendingBatchIndex === "number" ||
-            (typeof item.stagedDraftId === "string" &&
-              typeof item.stagedRowId === "string")),
-      );
-  }
-
-  private static async removeReimbursementBacklinks(
-    userId: string,
-    reimbursementId: string,
-    reimbursedIds: string[],
-  ) {
-    for (const reimbursedId of reimbursedIds) {
-      const reimbursed = await prisma.transaction.findUnique({
-        where: { id: reimbursedId },
-        select: { linkage: true },
-      });
-
-      const reimbursedLinkage =
-        reimbursed?.linkage as TransactionLinkage | null;
-      if (!reimbursedLinkage) continue;
-
-      const updatedReimbursedByAllocations = (
-        reimbursedLinkage.reimbursedByAllocations || []
-      ).filter((allocation) => allocation.transactionId !== reimbursementId);
-
-      if (updatedReimbursedByAllocations.length > 0) {
-        await TransactionRepository.updateLinkage(reimbursedId, userId, {
-          ...reimbursedLinkage,
-          type: "reimbursed",
-          reimbursedByAllocations: updatedReimbursedByAllocations,
-        });
-      } else {
-        await TransactionRepository.updateLinkage(reimbursedId, userId, null);
-      }
-    }
-  }
-
-  private static async applyReimbursementBacklinks(
-    userId: string,
-    reimbursementId: string,
-    allocations: Array<{ transactionId: string; amount: number }>,
-  ) {
-    for (const allocation of allocations) {
-      const capacity = await this.getTargetReimbursementCapacity(
-        userId,
-        allocation.transactionId,
-        reimbursementId,
-      );
-      if (allocation.amount - capacity.remaining > 0.01) {
-        throw new Error(
-          `Allocation exceeds remaining reimbursable amount for transaction ${allocation.transactionId}`,
-        );
-      }
-
-      const reimbursed = await prisma.transaction.findUnique({
-        where: { id: allocation.transactionId },
-        select: { linkage: true },
-      });
-
-      const existingLinkage = reimbursed?.linkage as TransactionLinkage | null;
-      const existingReimbursedByAllocations =
-        existingLinkage?.reimbursedByAllocations || [];
-
-      const withoutCurrent = existingReimbursedByAllocations.filter(
-        (item) => item.transactionId !== reimbursementId,
-      );
-
-      await TransactionRepository.updateLinkage(
-        allocation.transactionId,
-        userId,
-        {
-          ...existingLinkage,
-          type: "reimbursed",
-          reimbursedByAllocations: [
-            ...withoutCurrent,
-            { transactionId: reimbursementId, amount: allocation.amount },
-          ],
-        },
-      );
-    }
-  }
-
-  private static async getTargetReimbursementCapacity(
-    userId: string,
-    targetTransactionId: string,
-    currentReimbursementId?: string,
-  ) {
-    const target = await prisma.transaction.findFirst({
-      where: { id: targetTransactionId, userId },
-      select: {
-        amountIn: true,
-        amountOut: true,
-        linkage: true,
-      },
-    });
-
-    if (!target) {
-      throw new Error("Reimbursed transaction not found");
-    }
-
-    const targetAmount = this.getAbsoluteTransactionAmount({
-      amountIn: target.amountIn !== null ? Number(target.amountIn) : undefined,
-      amountOut:
-        target.amountOut !== null ? Number(target.amountOut) : undefined,
-    });
-
-    const targetLinkage = target.linkage as TransactionLinkage | null;
-    const alreadyAllocated = (targetLinkage?.reimbursedByAllocations || [])
-      .filter((item) => item.transactionId !== currentReimbursementId)
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-
-    return {
-      targetAmount,
-      alreadyAllocated,
-      remaining: Number(
-        Math.max(targetAmount - alreadyAllocated, 0).toFixed(2),
-      ),
-    };
-  }
-
-  private static async rebalanceReimbursementTransaction(
-    userId: string,
-    reimbursementId: string,
-  ) {
-    const reimbursementTx = await prisma.transaction.findFirst({
-      where: { id: reimbursementId, userId },
-      select: {
-        amountIn: true,
-        linkage: true,
-      },
-    });
-    if (!reimbursementTx) return;
-
-    const linkage = reimbursementTx.linkage as TransactionLinkage | null;
-    if (!linkage || linkage.type !== "reimbursement") return;
-
-    const amountIn =
-      reimbursementTx.amountIn !== null ? Number(reimbursementTx.amountIn) : 0;
-    if (!(amountIn > 0)) {
-      throw new Error(
-        "Only positive inflow transactions can be marked as reimbursement",
-      );
-    }
-
-    const normalized = this.normalizeReimbursementAllocations(linkage)
-      .map((allocation) =>
-        typeof allocation.transactionId === "string"
-          ? {
-              transactionId: allocation.transactionId,
-              amount: Number(allocation.amount || 0),
-            }
-          : null,
-      )
-      .filter(
-        (allocation): allocation is { transactionId: string; amount: number } =>
-          !!allocation,
-      );
-
-    const previousReimbursedIds = Array.from(
-      new Set(normalized.map((allocation) => allocation.transactionId)),
-    );
-
-    if (previousReimbursedIds.length > 0) {
-      await this.removeReimbursementBacklinks(
-        userId,
-        reimbursementId,
-        previousReimbursedIds,
-      );
-    }
-
-    let remainingBudget = Number(amountIn.toFixed(2));
-    const nextAllocations: Array<{ transactionId: string; amount: number }> =
-      [];
-    for (const allocation of normalized) {
-      if (!(remainingBudget > 0)) break;
-      const capacity = await this.getTargetReimbursementCapacity(
-        userId,
-        allocation.transactionId,
-        reimbursementId,
-      );
-      const allowed = Number(
-        Math.min(
-          Math.max(allocation.amount, 0),
-          capacity.remaining,
-          remainingBudget,
-        ).toFixed(2),
-      );
-      if (!(allowed > 0)) continue;
-      nextAllocations.push({
-        transactionId: allocation.transactionId,
-        amount: allowed,
-      });
-      remainingBudget = Number(
-        Math.max(remainingBudget - allowed, 0).toFixed(2),
-      );
-    }
-
-    await TransactionRepository.updateLinkage(reimbursementId, userId, {
-      type: "reimbursement",
-      reimbursesAllocations: nextAllocations,
-      leftoverAmount: Number(remainingBudget.toFixed(2)),
-      leftoverCategoryId: linkage.leftoverCategoryId ?? null,
-      autoDetected: linkage.autoDetected,
-      detectionReason: linkage.detectionReason,
-    });
-
-    if (nextAllocations.length > 0) {
-      await this.applyReimbursementBacklinks(
-        userId,
-        reimbursementId,
-        nextAllocations,
-      );
-    }
-  }
-
   /**
    * Import transactions with duplicate detection
    * Returns duplicates for user review without committing
@@ -1443,280 +1081,253 @@ export class TransactionService {
       fileType: string;
       parserId: string;
     },
+    options: {
+      /** Staged drafts keep links in the links table; direct imports send them in the payload. */
+      linksFromPayload?: boolean;
+    } = {},
   ): Promise<ImportResult> {
     try {
-      const userSettings = await prisma.userSettings.findUnique({
-        where: { userId },
-        select: { currency: true },
-      });
-      const userBaseCurrency = (userSettings?.currency || "SGD").toUpperCase();
-
-      // Ensure reserved categories exist
-      const { uncategorized, internal, reimbursement } =
-        await this.ensureReservedCategories(userId);
-
-      validatePendingReimbursementLinks(transactions, selectedIndices);
-
-      let importBatchId: string | undefined;
-
-      // Create import batch if info provided
-      if (batchInfo) {
-        const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + 7); // 7 days from now
-
-        const batch = await prisma.importBatch.create({
-          data: {
-            userId,
-            filename: batchInfo.filename,
-            fileType: batchInfo.fileType,
-            parserId: batchInfo.parserId,
-            status: "COMMITTED",
-            committedAt: new Date(),
-            expiresAt,
-          },
-        });
-
-        importBatchId = batch.id;
-      }
-
-      // Build index mapping for resolving batch indices later
-      const indexToNewIndex = new Map<number, number>();
-      let newIndex = 0;
-      for (const originalIndex of selectedIndices.sort((a, b) => a - b)) {
-        indexToNewIndex.set(originalIndex, newIndex++);
-      }
-
-      const rawSelectedTransactions = transactions.filter((_, index) =>
-        selectedIndices.includes(index),
-      );
-      const ruleAppliedTransactions = await this.applyImportRules(
-        userId,
-        batchInfo?.parserId,
-        rawSelectedTransactions,
-      );
-
-      // Filter transactions by selected indices and assign categories based on linkage
-      const selectedTransactions = ruleAppliedTransactions.map(
-        (transaction, index) => {
-          let linkage = transaction.linkage as TransactionLinkage | null;
-          let categoryId = transaction.categoryId;
-          const amountIn =
-            transaction.amountIn !== undefined
-              ? Number(transaction.amountIn)
-              : null;
-
-          // Safety: treat reserved categories as reserved linkage semantics.
-          if (!linkage && categoryId === internal.id) {
-            linkage = {
-              type: "internal",
-              autoDetected: true,
-              detectionReason: "Reserved category mapped to internal linkage",
-            };
-          } else if (!linkage && categoryId === reimbursement.id) {
-            if (!amountIn || amountIn <= 0) {
-              throw new Error(
-                "Only positive inflow transactions can be marked as reimbursement",
-              );
-            }
-            linkage = {
-              type: "reimbursement",
-              reimbursesAllocations: [],
-              leftoverAmount: Number(amountIn.toFixed(2)),
-              leftoverCategoryId: null,
-              autoDetected: true,
-              detectionReason:
-                "Reserved category mapped to reimbursement linkage",
-            };
-          }
-
-          // Auto-assign category based on linkage type
-          if (linkage?.type === "internal") {
-            categoryId = internal.id;
-          } else if (linkage?.type === "reimbursement") {
-            if (!amountIn || amountIn <= 0) {
-              throw new Error(
-                "Only positive inflow transactions can be marked as reimbursement",
-              );
-            }
-            categoryId = reimbursement.id;
-          } else if (!categoryId || categoryId.trim().length === 0) {
-            categoryId = uncategorized.id;
-          }
-
-          const cleanLinkage = linkage
-            ? {
-                ...linkage,
-                ...(linkage.type === "reimbursement"
-                  ? {
-                      reimbursesAllocations: Array.isArray(
-                        linkage.reimbursesAllocations,
-                      )
-                        ? linkage.reimbursesAllocations
-                        : [],
-                      leftoverAmount:
-                        linkage.leftoverAmount !== undefined
-                          ? Number(linkage.leftoverAmount)
-                          : Number(amountIn || 0),
-                      leftoverCategoryId:
-                        linkage.leftoverCategoryId !== undefined
-                          ? linkage.leftoverCategoryId
-                          : null,
-                    }
-                  : {}),
-              }
-            : null;
-
-          const resolvedCurrency = (
-            transaction.currency ||
-            transaction.metadata?.currency ||
-            userBaseCurrency ||
-            "SGD"
-          )
-            .toString()
-            .trim()
-            .toUpperCase();
-          const metadata = stripImportOrderMetadata(transaction.metadata);
-          const importSource = batchInfo
-            ? inferImportSourceFilename({
-                batchFilename: batchInfo.filename,
-                transactionDate: transaction.date,
-                metadata,
-              })
-            : null;
-
-          return {
-            ...transaction,
-            categoryId,
-            currency: resolvedCurrency || "SGD",
-            metadata: {
-              ...metadata,
-              ...(importSource
-                ? { sourceFilename: importSource.filename }
-                : {}),
-              [IMPORT_ORIGINAL_INDEX_KEY]: selectedIndices[index],
-            },
-            linkage: cleanLinkage,
-          };
-        },
-      );
-
-      // Import selected transactions
-      const result = await TransactionRepository.createMany(
-        userId,
-        selectedTransactions,
-        importBatchId,
-      );
-
-      // Get the created transactions to resolve batch indices
-      if (importBatchId) {
-        const createdTransactionsRaw = await prisma.transaction.findMany({
-          where: { importBatchId },
-          orderBy: { createdAt: "asc" },
-        });
-        const createdTransactions = orderCreatedTransactionsForImport(
-          createdTransactionsRaw,
+      // One database transaction: rows and links are saved together or not at all.
+      return await runInTransaction((db) =>
+        this.commitImportInTransaction(
+          db,
+          userId,
+          transactions,
           selectedIndices,
-        );
+          batchInfo,
+          options.linksFromPayload !== false,
+        ),
+      );
+    } catch (error: unknown) {
+      console.error("Error committing import:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+    }
+  }
 
-        await Promise.all(
-          createdTransactions.map((transaction) =>
-            prisma.transaction.update({
-              where: { id: transaction.id },
-              data: {
-                metadata: stripImportOrderMetadata(
-                  transaction.metadata,
-                ) as Prisma.InputJsonValue,
-              },
-            }),
-          ),
-        );
+  private static async commitImportInTransaction(
+    db: Prisma.TransactionClient,
+    userId: string,
+    transactions: ImportTransactionInput[],
+    selectedIndices: number[],
+    batchInfo:
+      | {
+          filename: string;
+          fileType: string;
+          parserId: string;
+        }
+      | undefined,
+    linksFromPayload: boolean,
+  ): Promise<ImportResult> {
+    const userSettings = await prisma.userSettings.findUnique({
+      where: { userId },
+      select: { currency: true },
+    });
+    const userBaseCurrency = (userSettings?.currency || "SGD").toUpperCase();
 
-        // Resolve pending batch indices to actual IDs
-        for (let i = 0; i < selectedTransactions.length; i++) {
-          const transaction = selectedTransactions[i];
-          const linkage = transaction.linkage as TransactionLinkage | null;
-          const originalLinkage = transactions[selectedIndices[i]]
-            .linkage as TransactionLinkage | null;
+    // Ensure reserved categories exist
+    const { uncategorized, internal, reimbursement } =
+      await this.ensureReservedCategories(userId);
 
-          if (
-            originalLinkage?.type === "reimbursement" &&
-            originalLinkage.reimbursesAllocations?.length
-          ) {
-            const baseLinkage = (linkage || {
-              type: "reimbursement",
-            }) as TransactionLinkage;
-            const normalizedAllocations =
-              this.normalizeReimbursementAllocations(originalLinkage);
-            const detached = detachStagedReimbursementAllocations(
-              normalizedAllocations,
-              Number(baseLinkage.leftoverAmount || 0),
-            );
+    const sortedSelected = [...new Set(selectedIndices)].sort((a, b) => a - b);
+    if (linksFromPayload)
+      validatePendingReimbursementLinks(transactions, sortedSelected);
 
-            const resolvedAllocations = detached.linkedAllocations
-              .map((allocation) => {
-                if (allocation.transactionId) return allocation;
-                if (
-                  !("pendingBatchIndex" in allocation) ||
-                  typeof allocation.pendingBatchIndex !== "number"
-                ) {
-                  return null;
-                }
-                const targetNewIndex = indexToNewIndex.get(
-                  allocation.pendingBatchIndex,
-                );
-                if (
-                  targetNewIndex === undefined ||
-                  !createdTransactions[targetNewIndex]
-                ) {
-                  return null;
-                }
-                return {
-                  transactionId: createdTransactions[targetNewIndex].id,
-                  amount: allocation.amount,
-                };
-              })
-              .filter(
-                (
-                  allocation,
-                ): allocation is { transactionId: string; amount: number } =>
-                  !!allocation?.transactionId,
-              );
+    let importBatchId: string | undefined;
 
-            await prisma.transaction.update({
-              where: { id: createdTransactions[i].id },
-              data: {
-                linkage: {
-                  type: "reimbursement",
-                  reimbursesAllocations: resolvedAllocations,
-                  leftoverAmount:
-                    baseLinkage.leftoverAmount !== undefined ||
-                    detached.leftoverAmount > 0
-                      ? detached.leftoverAmount
-                      : undefined,
-                  leftoverCategoryId: baseLinkage.leftoverCategoryId ?? null,
-                  autoDetected: baseLinkage.autoDetected,
-                  detectionReason: baseLinkage.detectionReason,
-                },
-              },
-            });
+    // Create import batch if info provided
+    if (batchInfo) {
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7); // 7 days from now
 
-            await this.applyReimbursementBacklinks(
-              userId,
-              createdTransactions[i].id,
-              resolvedAllocations.filter((item) => item.amount > 0),
+      const batch = await prisma.importBatch.create({
+        data: {
+          userId,
+          filename: batchInfo.filename,
+          fileType: batchInfo.fileType,
+          parserId: batchInfo.parserId,
+          status: "COMMITTED",
+          committedAt: new Date(),
+          expiresAt,
+        },
+      });
+
+      importBatchId = batch.id;
+    }
+
+    const rawSelectedTransactions = sortedSelected.map(
+      (index) => transactions[index],
+    );
+    const ruleAppliedTransactions = await this.applyImportRules(
+      userId,
+      batchInfo?.parserId,
+      rawSelectedTransactions,
+    );
+
+    // Assign categories based on linkage; link data itself goes to the links table.
+    const selectedTransactions = ruleAppliedTransactions.map(
+      (transaction, index) => {
+        let linkage = stripLinkFields(transaction.linkage) as TransactionLinkage | null;
+        let categoryId = transaction.categoryId;
+        const amountIn =
+          transaction.amountIn !== undefined && transaction.amountIn !== null
+            ? Number(transaction.amountIn)
+            : null;
+
+        // Safety: treat reserved categories as reserved linkage semantics.
+        if (!linkage && categoryId === internal.id) {
+          linkage = {
+            type: "internal",
+            autoDetected: true,
+            detectionReason: "Reserved category mapped to internal linkage",
+          };
+        } else if (!linkage && categoryId === reimbursement.id) {
+          if (!amountIn || amountIn <= 0) {
+            throw new Error(
+              "Only positive inflow transactions can be marked as reimbursement",
             );
           }
+          linkage = {
+            type: "reimbursement",
+            leftoverCategoryId: null,
+            autoDetected: true,
+            detectionReason:
+              "Reserved category mapped to reimbursement linkage",
+          };
         }
-      }
 
+        // Auto-assign category based on linkage type
+        if (linkage?.type === "internal") {
+          categoryId = internal.id;
+        } else if (linkage?.type === "reimbursement") {
+          if (!amountIn || amountIn <= 0) {
+            throw new Error(
+              "Only positive inflow transactions can be marked as reimbursement",
+            );
+          }
+          categoryId = reimbursement.id;
+          linkage = {
+            ...linkage,
+            leftoverCategoryId: linkage.leftoverCategoryId ?? null,
+          };
+        } else if (!categoryId || categoryId.trim().length === 0) {
+          categoryId = uncategorized.id;
+        }
+
+        const resolvedCurrency = (
+          transaction.currency ||
+          transaction.metadata?.currency ||
+          userBaseCurrency ||
+          "SGD"
+        )
+          .toString()
+          .trim()
+          .toUpperCase();
+        const metadata = stripImportOrderMetadata(transaction.metadata);
+        const importSource = batchInfo
+          ? inferImportSourceFilename({
+              batchFilename: batchInfo.filename,
+              transactionDate: transaction.date,
+              metadata,
+            })
+          : null;
+
+        return {
+          ...transaction,
+          categoryId,
+          currency: resolvedCurrency || "SGD",
+          metadata: {
+            ...metadata,
+            ...(importSource ? { sourceFilename: importSource.filename } : {}),
+            [IMPORT_ORIGINAL_INDEX_KEY]: sortedSelected[index],
+          },
+          linkage,
+        };
+      },
+    );
+
+    const createdRaw = await TransactionRepository.createMany(
+      userId,
+      selectedTransactions,
+      importBatchId,
+    );
+    const createdTransactions = orderCreatedTransactionsForImport(
+      createdRaw,
+      sortedSelected,
+    );
+    for (const transaction of createdTransactions) {
+      await prisma.transaction.update({
+        where: { id: transaction.id },
+        data: {
+          metadata: stripImportOrderMetadata(
+            transaction.metadata,
+          ) as Prisma.InputJsonValue,
+        },
+      });
+    }
+    const createdIdByIndex = new Map(
+      sortedSelected.map((index, position) => [
+        index,
+        createdTransactions[position].id,
+      ]),
+    );
+
+    // Direct imports carry links in the payload: other rows by position,
+    // saved transactions and staged rows by id.
+    if (linksFromPayload) {
+      for (const index of sortedSelected) {
+        const linkage = transactions[index].linkage as TransactionLinkage | null;
+        if (
+          linkage?.type !== "reimbursement" ||
+          !Array.isArray(linkage.reimbursesAllocations) ||
+          linkage.reimbursesAllocations.length === 0
+        )
+          continue;
+        const targets = linkage.reimbursesAllocations.flatMap((allocation): Array<{ other: EndRef; amount: number }> => {
+          const amount = Number(allocation.amount || 0);
+          if (!(amount > 0)) return [];
+          if (allocation.stagedRowId)
+            return [{ other: { draftRowId: allocation.stagedRowId }, amount }];
+          if (allocation.transactionId)
+            return [{ other: { transactionId: allocation.transactionId }, amount }];
+          if (typeof allocation.pendingBatchIndex === "number") {
+            const targetId = createdIdByIndex.get(allocation.pendingBatchIndex);
+            if (!targetId)
+              throw new Error(
+                `Row ${index + 1} reimburses row ${allocation.pendingBatchIndex + 1}; the target transaction must also be selected`,
+              );
+            return [{ other: { transactionId: targetId }, amount }];
+          }
+          return [];
+        });
+        await replaceLinks(db, userId, {
+          subject: { transactionId: createdIdByIndex.get(index) as string },
+          role: "reimbursement",
+          links: targets,
+        });
+      }
+    }
+    await syncTransactionCaches(
+      db,
+      userId,
+      createdTransactions
+        .filter((transaction, position) =>
+          (selectedTransactions[position].linkage as TransactionLinkage | null)?.type === "reimbursement",
+        )
+        .map((transaction) => transaction.id),
+    );
+
+    const appliedPatternIds = selectedTransactions
+      .map((transaction) => {
+        const metadata = transaction.metadata as Record<string, any> | undefined;
+        return String(metadata?.classificationPatternId || "");
+      })
+      .filter(Boolean);
+    // Pattern learning is best effort and must not abort the import's transaction.
+    await afterCommit(async () => {
       try {
-        const appliedPatternIds = selectedTransactions
-          .map((transaction) => {
-            const metadata = transaction.metadata as
-              Record<string, any> | undefined;
-            return String(metadata?.classificationPatternId || "");
-          })
-          .filter(Boolean);
         await this.incrementClassificationPatternAppliedCounts(
           userId,
           appliedPatternIds,
@@ -1728,19 +1339,14 @@ export class TransactionService {
           classificationError,
         );
       }
+    });
 
-      return {
-        success: true,
-        importedCount: result.count,
-        batchId: importBatchId,
-      };
-    } catch (error: unknown) {
-      console.error("Error committing import:", error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
-      };
-    }
+    return {
+      success: true,
+      importedCount: createdTransactions.length,
+      batchId: importBatchId,
+      transactionIds: createdTransactions.map((transaction) => transaction.id),
+    };
   }
 
   /**
@@ -1784,163 +1390,109 @@ export class TransactionService {
     userId: string,
     data: Partial<ImportTransactionInput>,
   ) {
-    const existing = await TransactionRepository.findById(id, userId);
-    if (!existing) {
-      throw new Error("Transaction not found");
-    }
+    return runInTransaction(async (db) => {
+      await lockEnds(db, userId, [transactionKey(id)]);
+      const existing = await TransactionRepository.findById(id, userId);
+      if (!existing) {
+        throw new Error("Transaction not found");
+      }
 
-    const next: Partial<ImportTransactionInput> = { ...data };
-    const linkage = data.linkage as TransactionLinkage | null | undefined;
-    const existingLinkage = existing.linkage as TransactionLinkage | null;
-    const amountFieldsUpdated =
-      data.amountIn !== undefined || data.amountOut !== undefined;
-    let normalizedAllocations: Array<{
-      transactionId: string;
-      amount: number;
-    }> = [];
-    const previousReimburserIdsFromTarget =
-      existingLinkage?.type === "reimbursed" && amountFieldsUpdated
-        ? Array.from(
-            new Set(
-              (existingLinkage.reimbursedByAllocations || [])
-                .map((item) => item.transactionId || "")
-                .filter(Boolean),
-            ),
-          )
-        : [];
-    const shouldRebalanceCurrentReimbursementAfterUpdate =
-      linkage === undefined &&
-      existingLinkage?.type === "reimbursement" &&
-      amountFieldsUpdated;
+      const next: Partial<ImportTransactionInput> = { ...data };
+      const linkageInput = data.linkage as TransactionLinkage | null | undefined;
+      const existingLinkage = stripLinkFields(existing.linkage);
+      const existingType = (existingLinkage?.type as string | undefined) ?? null;
+      const nextAmountIn =
+        data.amountIn !== undefined
+          ? data.amountIn
+          : existing.amountIn !== null
+            ? Number(existing.amountIn)
+            : null;
+      let nextType = existingType;
 
-    if (linkage !== undefined) {
-      if (linkage?.type === "internal") {
-        const { internal } = await this.ensureReservedCategories(userId);
-        next.categoryId = internal.id;
-      } else if (linkage?.type === "reimbursement") {
-        const amountIn =
-          next.amountIn ??
-          (existing.amountIn !== null ? Number(existing.amountIn) : null);
-        if (!amountIn || amountIn <= 0) {
-          throw new Error(
-            "Only positive inflow transactions can be marked as reimbursement",
-          );
-        }
-        const allAllocations = this.normalizeReimbursementAllocations(linkage);
-        const totalAllocatedIncludingStaged = allAllocations.reduce(
-          (sum, allocation) => sum + allocation.amount,
-          0,
-        );
-        normalizedAllocations = allAllocations
-          .map((allocation) =>
-            typeof allocation.transactionId === "string"
-              ? {
-                  transactionId: allocation.transactionId,
-                  amount: Number(allocation.amount || 0),
-                }
-              : null,
-          )
-          .filter(
-            (
-              allocation,
-            ): allocation is { transactionId: string; amount: number } =>
-              !!allocation,
-          );
-        const totalAllocated = normalizedAllocations.reduce(
-          (sum, allocation) => sum + allocation.amount,
-          0,
-        );
-        if (totalAllocatedIncludingStaged - amountIn > 0.01) {
-          throw new Error(
-            "Total reimbursed amount cannot exceed reimbursement amount",
-          );
-        }
-        for (const allocation of normalizedAllocations) {
-          if (allocation.transactionId === id) {
-            throw new Error("A transaction cannot reimburse itself");
-          }
-          const target = await TransactionRepository.findById(
-            allocation.transactionId,
-            userId,
-          );
-          if (!target) {
+      if (linkageInput === undefined) {
+        delete next.linkage;
+      } else {
+        const stripped = stripLinkFields(linkageInput);
+        nextType = (stripped?.type as string | undefined) ?? null;
+        if (nextType === "internal") {
+          const { internal } = await this.ensureReservedCategories(userId);
+          next.categoryId = internal.id;
+          next.linkage = stripped as unknown as TransactionLinkage;
+        } else if (nextType === "reimbursement") {
+          if (!nextAmountIn || nextAmountIn <= 0) {
             throw new Error(
-              "One or more reimbursed transactions were not found",
+              "Only positive inflow transactions can be marked as reimbursement",
             );
           }
-          const capacity = await this.getTargetReimbursementCapacity(
-            userId,
-            allocation.transactionId,
-            id,
-          );
-          if (allocation.amount - capacity.remaining > 0.01) {
-            throw new Error(
-              "Reimbursed amount cannot exceed target transaction amount",
-            );
+          const { reimbursement } = await this.ensureReservedCategories(userId);
+          next.categoryId = reimbursement.id;
+          next.linkage = {
+            ...(existingType === "reimbursement" ? existingLinkage : {}),
+            ...stripped,
+            type: "reimbursement",
+            leftoverCategoryId:
+              linkageInput?.leftoverCategoryId !== undefined
+                ? linkageInput.leftoverCategoryId
+                : ((existingLinkage?.leftoverCategoryId as string | null | undefined) ?? null),
+          } as TransactionLinkage;
+        } else {
+          next.linkage = null;
+          const currentCategoryName = existing.category?.name ?? "";
+          const reservedCategory =
+            currentCategoryName === RESERVED_CATEGORIES.INTERNAL.name ||
+            currentCategoryName === RESERVED_CATEGORIES.REIMBURSEMENT.name;
+          if (
+            reservedCategory &&
+            (data.categoryId === undefined || data.categoryId === existing.categoryId)
+          ) {
+            next.categoryId = null;
           }
         }
-        const { reimbursement } = await this.ensureReservedCategories(userId);
-        next.categoryId = reimbursement.id;
-        next.linkage = {
-          type: "reimbursement",
-          reimbursesAllocations: normalizedAllocations,
-          leftoverAmount: Number((amountIn - totalAllocated).toFixed(2)),
-          leftoverCategoryId: linkage.leftoverCategoryId ?? null,
-          autoDetected: linkage.autoDetected,
-          detectionReason: linkage.detectionReason,
-        };
-      } else if (linkage === null) {
-        if (existingLinkage?.type === "reimbursed") {
-          // Preserve reimbursed state by default when editing transaction fields.
-          // Use clearLinkage API for explicit unlinking.
-          next.linkage = existingLinkage;
-        }
-        const currentCategoryName = existing.category?.name ?? "";
-        if (
-          currentCategoryName === RESERVED_CATEGORIES.INTERNAL.name ||
-          currentCategoryName === RESERVED_CATEGORIES.REIMBURSEMENT.name
-        ) {
-          next.categoryId = null;
-        }
       }
-    }
 
-    const updated = await TransactionRepository.update(id, userId, next);
+      await TransactionRepository.update(id, userId, next);
 
-    const previousReimbursedIds =
-      existingLinkage?.type === "reimbursement"
-        ? Array.from(
-            new Set(
-              this.normalizeReimbursementAllocations(existingLinkage)
-                .map((allocation) => allocation.transactionId || "")
-                .filter(Boolean),
-            ),
-          )
-        : [];
-    if (previousReimbursedIds.length > 0) {
-      await this.removeReimbursementBacklinks(
-        userId,
-        id,
-        previousReimbursedIds,
-      );
-    }
-    if (linkage?.type === "reimbursement" && normalizedAllocations.length > 0) {
-      await this.applyReimbursementBacklinks(
-        userId,
-        id,
-        normalizedAllocations.filter((allocation) => allocation.amount > 0),
-      );
-    }
-    if (shouldRebalanceCurrentReimbursementAfterUpdate) {
-      await this.rebalanceReimbursementTransaction(userId, id);
-    }
-    if (previousReimburserIdsFromTarget.length > 0) {
-      for (const reimburserId of previousReimburserIdsFromTarget) {
-        await this.rebalanceReimbursementTransaction(userId, reimburserId);
+      const ref = { transactionId: id };
+      if (existingType === "reimbursement" && nextType !== "reimbursement")
+        await deleteRoleLinks(db, userId, ref, "reimbursement");
+      if (
+        (nextType === "internal" || nextType === "reimbursement") &&
+        existingType !== nextType
+      )
+        await deleteRoleLinks(db, userId, ref, "expense");
+
+      let warnings: string[] = [];
+      if (
+        nextType === "reimbursement" &&
+        linkageInput &&
+        Array.isArray(linkageInput.reimbursesAllocations)
+      ) {
+        const targets = linkageInput.reimbursesAllocations.flatMap(
+          (allocation): Array<{ other: EndRef; amount: number }> => {
+            const amount = Number(allocation.amount || 0);
+            if (!(amount > 0)) return [];
+            if (allocation.stagedRowId)
+              return [{ other: { draftRowId: allocation.stagedRowId }, amount }];
+            if (allocation.transactionId)
+              return [{ other: { transactionId: allocation.transactionId }, amount }];
+            throw new Error("A reimbursement link has no target transaction");
+          },
+        );
+        if (!(await isSameLinkSet(db, userId, ref, "reimbursement", targets)))
+          warnings = (
+            await replaceLinks(db, userId, {
+              subject: ref,
+              role: "reimbursement",
+              links: targets,
+            })
+          ).warnings;
       }
-    }
 
-    return updated;
+      await assertSavedLinksFit(db, userId, id);
+      await syncTransactionCaches(db, userId, [id]);
+      const updated = await prisma.transaction.findFirst({ where: { id, userId } });
+      return { ...updated, ...(warnings.length ? { warnings } : {}) };
+    });
   }
 
   static async splitTransaction(
@@ -1960,10 +1512,13 @@ export class TransactionService {
     }
 
     const existingLinkage = existing.linkage as TransactionLinkage | null;
-    if (
-      existingLinkage?.type === "reimbursement" ||
-      existingLinkage?.type === "reimbursed"
-    ) {
+    const linkCount = await prisma.reimbursementLink.count({
+      where: {
+        userId,
+        OR: [{ reimbursementTransactionId: id }, { expenseTransactionId: id }],
+      },
+    });
+    if (existingLinkage?.type === "reimbursement" || linkCount > 0) {
       throw new Error(
         "Reimbursement transactions cannot be split. To split this transaction, first remove the reimbursements, then redo the reimbursements on the split transactions.",
       );
@@ -2080,17 +1635,58 @@ export class TransactionService {
   }
 
   /**
-   * Delete transaction
+   * Delete transaction. Its links cascade away; the other ends' caches are rebuilt.
    */
   static async deleteTransaction(id: string, userId: string) {
-    return TransactionRepository.delete(id, userId);
+    return runInTransaction(async (db) => {
+      const counterparts = await counterpartsOf(db, userId, [id]);
+      const result = await TransactionRepository.delete(id, userId);
+      await refreshAfterDelete(db, userId, counterparts);
+      return result;
+    });
   }
 
   /**
    * Delete multiple transactions
    */
   static async deleteTransactions(ids: string[], userId: string) {
-    return TransactionRepository.deleteMany(ids, userId);
+    return runInTransaction(async (db) => {
+      const counterparts = await counterpartsOf(db, userId, ids);
+      const result = await TransactionRepository.deleteMany(ids, userId);
+      await refreshAfterDelete(db, userId, counterparts);
+      return result;
+    });
+  }
+
+  /** Amount edits must keep saved links within the new amounts. */
+  private static async checkLinksAfterBulkUpdate(
+    db: Prisma.TransactionClient,
+    userId: string,
+    ids: string[],
+    updates: Partial<ImportTransactionInput>,
+  ) {
+    if (updates.amountIn === undefined && updates.amountOut === undefined) return;
+    if (!ids.length) return;
+    const idSet = new Set(ids);
+    const links = await db.reimbursementLink.findMany({
+      where: {
+        userId,
+        OR: [
+          { reimbursementTransactionId: { in: ids } },
+          { expenseTransactionId: { in: ids } },
+        ],
+      },
+      select: { reimbursementTransactionId: true, expenseTransactionId: true },
+    });
+    const affected = [
+      ...new Set(
+        links
+          .flatMap((link) => [link.reimbursementTransactionId, link.expenseTransactionId])
+          .filter((value): value is string => !!value && idSet.has(value)),
+      ),
+    ];
+    for (const id of affected) await assertSavedLinksFit(db, userId, id);
+    await syncTransactionCaches(db, userId, affected);
   }
 
   static async bulkUpdateByIds(
@@ -2098,7 +1694,11 @@ export class TransactionService {
     ids: string[],
     updates: Partial<ImportTransactionInput>,
   ) {
-    return TransactionRepository.updateManyByIds(userId, ids, updates);
+    return runInTransaction(async (db) => {
+      const result = await TransactionRepository.updateManyByIds(userId, ids, updates);
+      await this.checkLinksAfterBulkUpdate(db, userId, ids, updates);
+      return result;
+    });
   }
 
   static async bulkUpdateByFilter(
@@ -2116,12 +1716,20 @@ export class TransactionService {
     excludeIds: string[] | undefined,
     updates: Partial<ImportTransactionInput>,
   ) {
-    return TransactionRepository.updateManyByFilter(
-      userId,
-      filters,
-      excludeIds,
-      updates,
-    );
+    return runInTransaction(async (db) => {
+      const ids =
+        updates.amountIn !== undefined || updates.amountOut !== undefined
+          ? await TransactionRepository.findIdsByFilter(userId, filters, excludeIds)
+          : [];
+      const result = await TransactionRepository.updateManyByFilter(
+        userId,
+        filters,
+        excludeIds,
+        updates,
+      );
+      await this.checkLinksAfterBulkUpdate(db, userId, ids, updates);
+      return result;
+    });
   }
 
   static async bulkDeleteByFilter(
@@ -2138,11 +1746,17 @@ export class TransactionService {
     },
     excludeIds?: string[],
   ) {
-    return TransactionRepository.deleteManyByFilter(
-      userId,
-      filters,
-      excludeIds,
-    );
+    return runInTransaction(async (db) => {
+      const ids = await TransactionRepository.findIdsByFilter(userId, filters, excludeIds);
+      const counterparts = await counterpartsOf(db, userId, ids);
+      const result = await TransactionRepository.deleteManyByFilter(
+        userId,
+        filters,
+        excludeIds,
+      );
+      await refreshAfterDelete(db, userId, counterparts);
+      return result;
+    });
   }
 
   static async exportByIds(userId: string, ids: string[]) {
@@ -2168,7 +1782,7 @@ export class TransactionService {
   }
 
   /**
-   * Mark a transaction as internal
+   * Mark a transaction as internal. Internal transfers hold no reimbursement links.
    */
   static async markAsInternal(
     id: string,
@@ -2176,24 +1790,27 @@ export class TransactionService {
     autoDetected: boolean = false,
     detectionReason?: string,
   ) {
-    const { internal } = await this.ensureReservedCategories(userId);
-
-    const linkage: TransactionLinkage = {
-      type: "internal",
-      autoDetected,
-      detectionReason,
-    };
-
-    return TransactionRepository.updateLinkageAndCategory(
-      id,
-      userId,
-      linkage,
-      internal.id,
-    );
+    return runInTransaction(async (db) => {
+      const { internal } = await this.ensureReservedCategories(userId);
+      const ref = { transactionId: id };
+      await deleteRoleLinks(db, userId, ref, "reimbursement");
+      await deleteRoleLinks(db, userId, ref, "expense");
+      const linkage: TransactionLinkage = {
+        type: "internal",
+        autoDetected,
+        detectionReason,
+      };
+      return TransactionRepository.updateLinkageAndCategory(
+        id,
+        userId,
+        linkage,
+        internal.id,
+      );
+    });
   }
 
   /**
-   * Create reimbursement link between transactions
+   * Mark a transaction as a reimbursement and set the expenses it pays back.
    */
   static async createReimbursementLink(
     reimbursementId: string,
@@ -2201,250 +1818,167 @@ export class TransactionService {
     userId: string,
     leftoverCategoryId?: string | null,
   ) {
-    const { reimbursement } = await this.ensureReservedCategories(userId);
-
-    const reimbursingTransaction = await TransactionRepository.findById(
-      reimbursementId,
-      userId,
-    );
-    if (!reimbursingTransaction) {
-      throw new Error("Transaction not found");
-    }
-    const amountIn = reimbursingTransaction.amountIn
-      ? Number(reimbursingTransaction.amountIn)
-      : null;
-    if (!amountIn || amountIn <= 0) {
-      throw new Error(
-        "Only positive inflow transactions can be marked as reimbursement",
-      );
-    }
-
-    const existing = await prisma.transaction.findUnique({
-      where: { id: reimbursementId },
-      select: { linkage: true },
-    });
-
-    const existingLinkage = existing?.linkage as TransactionLinkage | null;
-    if (existingLinkage?.type === "internal") {
-      throw new Error(
-        "Internal transactions cannot be marked as reimbursements",
-      );
-    }
-    const previousReimbursedIds =
-      existingLinkage?.type === "reimbursement"
-        ? Array.from(
-            new Set(
-              this.normalizeReimbursementAllocations(existingLinkage)
-                .map((allocation) => allocation.transactionId || "")
-                .filter(Boolean),
-            ),
-          )
-        : [];
-
-    const totalAllocated = reimbursedAllocations.reduce(
-      (sum, allocation) => sum + Number(allocation.amount || 0),
-      0,
-    );
-    if (totalAllocated - amountIn > 0.01) {
-      throw new Error(
-        "Total reimbursed amount cannot exceed reimbursement amount",
-      );
-    }
-
-    for (const allocation of reimbursedAllocations) {
-      if (allocation.transactionId === reimbursementId) {
-        throw new Error("A transaction cannot reimburse itself");
-      }
-      const capacity = await this.getTargetReimbursementCapacity(
-        userId,
-        allocation.transactionId,
+    return runInTransaction(async (db) => {
+      await lockEnds(db, userId, [transactionKey(reimbursementId)]);
+      const reimbursingTransaction = await TransactionRepository.findById(
         reimbursementId,
+        userId,
       );
-      if (allocation.amount - capacity.remaining > 0.01) {
+      if (!reimbursingTransaction) {
+        throw new Error("Transaction not found");
+      }
+      const amountIn = reimbursingTransaction.amountIn
+        ? Number(reimbursingTransaction.amountIn)
+        : null;
+      if (!amountIn || amountIn <= 0) {
         throw new Error(
-          `Reimbursed amount exceeds remaining amount for transaction ${allocation.transactionId}`,
+          "Only positive inflow transactions can be marked as reimbursement",
         );
       }
-    }
-
-    // Update the reimbursing transaction
-    const linkage: TransactionLinkage = {
-      type: "reimbursement",
-      reimbursesAllocations: reimbursedAllocations,
-      leftoverAmount: Number((amountIn - totalAllocated).toFixed(2)),
-      leftoverCategoryId: leftoverCategoryId ?? null,
-    };
-
-    await TransactionRepository.updateLinkageAndCategory(
-      reimbursementId,
-      userId,
-      linkage,
-      reimbursement.id,
-    );
-
-    if (previousReimbursedIds.length > 0) {
-      await this.removeReimbursementBacklinks(
-        userId,
+      const current = stripLinkFields(reimbursingTransaction.linkage);
+      if (current?.type === "internal") {
+        throw new Error(
+          "Internal transactions cannot be marked as reimbursements",
+        );
+      }
+      const { reimbursement } = await this.ensureReservedCategories(userId);
+      await TransactionRepository.updateLinkageAndCategory(
         reimbursementId,
-        previousReimbursedIds,
+        userId,
+        {
+          ...(current?.type === "reimbursement" ? current : {}),
+          type: "reimbursement",
+          leftoverCategoryId: leftoverCategoryId ?? null,
+        } as TransactionLinkage,
+        reimbursement.id,
       );
-    }
-
-    await this.applyReimbursementBacklinks(
-      userId,
-      reimbursementId,
-      reimbursedAllocations.filter((allocation) => allocation.amount > 0),
-    );
-
-    return { success: true };
+      if (current?.type !== "reimbursement")
+        await deleteRoleLinks(db, userId, { transactionId: reimbursementId }, "expense");
+      const { warnings } = await replaceLinks(db, userId, {
+        subject: { transactionId: reimbursementId },
+        role: "reimbursement",
+        links: reimbursedAllocations.map((allocation) => ({
+          other: { transactionId: allocation.transactionId },
+          amount: allocation.amount,
+        })),
+      });
+      await syncTransactionCaches(db, userId, [reimbursementId]);
+      return { success: true, warnings };
+    });
   }
 
   /**
-   * Clear linkage from a transaction
+   * Clear linkage from a transaction: unmark it and remove all its reimbursement links.
    */
   static async clearLinkage(id: string, userId: string) {
-    const transaction = await prisma.transaction.findUnique({
-      where: { id },
-      select: { linkage: true },
-    });
-
-    const linkage = transaction?.linkage as TransactionLinkage | null;
-
-    // If this was a reimbursement, clean up backlinks from reimbursed targets
-    if (linkage?.type === "reimbursement") {
-      const reimbursedIds = Array.from(
-        new Set(
-          this.normalizeReimbursementAllocations(linkage)
-            .map((allocation) => allocation.transactionId || "")
-            .filter(Boolean),
-        ),
-      );
-      if (reimbursedIds.length > 0) {
-        await this.removeReimbursementBacklinks(userId, id, reimbursedIds);
-      }
-    }
-    // If this was a reimbursed transaction, clean up forward links from reimbursers
-    if (linkage?.type === "reimbursed") {
-      const reimburserIds = Array.from(
-        new Set(
-          (linkage.reimbursedByAllocations || [])
-            .map((item) => item.transactionId || "")
-            .filter(Boolean),
-        ),
-      );
-      const reimbursersToRebalance: string[] = [];
-
-      for (const reimburserId of reimburserIds) {
-        const reimburser = await prisma.transaction.findUnique({
-          where: { id: reimburserId },
-          select: { linkage: true },
-        });
-        const reimburserLinkage =
-          reimburser?.linkage as TransactionLinkage | null;
-        if (!reimburserLinkage || reimburserLinkage.type !== "reimbursement") {
-          continue;
-        }
-
-        const nextAllocations = (
-          reimburserLinkage.reimbursesAllocations || []
-        ).filter((allocation) => allocation.transactionId !== id);
-
-        if (nextAllocations.length === 0) {
-          await TransactionRepository.updateLinkage(reimburserId, userId, {
-            ...reimburserLinkage,
-            type: "reimbursement",
-            reimbursesAllocations: [],
-          });
-          reimbursersToRebalance.push(reimburserId);
-          continue;
-        }
-
-        await TransactionRepository.updateLinkage(reimburserId, userId, {
-          ...reimburserLinkage,
-          type: "reimbursement",
-          reimbursesAllocations: nextAllocations,
-        });
-        reimbursersToRebalance.push(reimburserId);
-      }
-
-      for (const reimburserId of reimbursersToRebalance) {
-        await this.rebalanceReimbursementTransaction(userId, reimburserId);
-      }
-    }
-
-    // Clear the transaction's linkage and category
-    return prisma.transaction.update({
-      where: { id, userId },
-      data: { linkage: Prisma.DbNull, categoryId: null },
-      include: { category: true },
+    return runInTransaction(async (db) => {
+      const existing = await prisma.transaction.findFirst({
+        where: { id, userId },
+        include: { category: true },
+      });
+      if (!existing) throw new Error("Transaction not found");
+      const ref = { transactionId: id };
+      await deleteRoleLinks(db, userId, ref, "reimbursement");
+      await deleteRoleLinks(db, userId, ref, "expense");
+      const categoryName = existing.category?.name ?? "";
+      const reservedCategory =
+        categoryName === RESERVED_CATEGORIES.INTERNAL.name ||
+        categoryName === RESERVED_CATEGORIES.REIMBURSEMENT.name;
+      return prisma.transaction.update({
+        where: { id, userId },
+        data: {
+          linkage: Prisma.DbNull,
+          ...(reservedCategory ? { categoryId: null } : {}),
+        },
+        include: { category: true },
+      });
     });
   }
 
   /**
-   * Get linked transactions for display
+   * Get linked transactions for display, plus claims from staged imports.
    */
   static async getLinkedTransactions(id: string, userId: string) {
-    const transaction = await prisma.transaction.findUnique({
-      where: { id },
-      select: { linkage: true },
+    const transaction = await prisma.transaction.findFirst({
+      where: { id, userId },
+      select: { linkage: true, amountIn: true },
     });
+    if (!transaction) return { reimburses: [], reimbursedBy: [], pending: [] };
 
-    const linkage = transaction?.linkage as TransactionLinkage | null;
-    if (!linkage) return { reimburses: [], reimbursedBy: [] };
-
-    const reimbursesIds = Array.from(
-      new Set(
-        this.normalizeReimbursementAllocations(linkage)
-          .map((item) => item.transactionId || "")
-          .filter(Boolean),
-      ),
-    ).filter((transactionId) => transactionId !== id);
-    const reimbursedByIds = Array.from(
-      new Set(
-        (linkage.reimbursedByAllocations || []).map(
-          (item) => item.transactionId,
-        ),
-      ),
-    ).filter((transactionId) => transactionId !== id);
+    const links = await prisma.reimbursementLink.findMany({
+      where: {
+        userId,
+        OR: [{ reimbursementTransactionId: id }, { expenseTransactionId: id }],
+      },
+      include: {
+        reimbursementDraftRow: {
+          select: { currentPayload: true, draft: { select: { sourceFilename: true, status: true } } },
+        },
+        expenseDraftRow: {
+          select: { currentPayload: true, draft: { select: { sourceFilename: true, status: true } } },
+        },
+      },
+    });
+    const saved = links.filter(
+      (link) => link.reimbursementTransactionId && link.expenseTransactionId,
+    );
+    const reimbursesAmounts = new Map(
+      saved
+        .filter((link) => link.reimbursementTransactionId === id)
+        .map((link) => [link.expenseTransactionId as string, Number(link.amount)]),
+    );
+    const reimbursedByAmounts = new Map(
+      saved
+        .filter((link) => link.expenseTransactionId === id)
+        .map((link) => [link.reimbursementTransactionId as string, Number(link.amount)]),
+    );
 
     const [reimbursesRaw, reimbursedByRaw] = await Promise.all([
-      reimbursesIds.length
-        ? TransactionRepository.getLinkedTransactions(userId, reimbursesIds)
+      reimbursesAmounts.size
+        ? TransactionRepository.getLinkedTransactions(userId, [...reimbursesAmounts.keys()])
         : [],
-      reimbursedByIds.length
-        ? TransactionRepository.getLinkedTransactions(userId, reimbursedByIds)
+      reimbursedByAmounts.size
+        ? TransactionRepository.getLinkedTransactions(userId, [...reimbursedByAmounts.keys()])
         : [],
     ]);
-
-    const reimbursesAmountMap = new Map(
-      (linkage.reimbursesAllocations || [])
-        .filter((item) => typeof item.transactionId === "string")
-        .map((item) => [
-          item.transactionId as string,
-          Number(item.amount || 0),
-        ]),
-    );
-    const reimbursedByAmountMap = new Map(
-      (linkage.reimbursedByAllocations || []).map((item) => [
-        item.transactionId,
-        Number(item.amount || 0),
-      ]),
-    );
-
     const reimburses = reimbursesRaw.map((row: any) => ({
       ...row,
-      reimbursementAmount: reimbursesAmountMap.get(row.id) ?? null,
+      reimbursementAmount: reimbursesAmounts.get(row.id) ?? null,
     }));
     const reimbursedBy = reimbursedByRaw.map((row: any) => ({
       ...row,
-      reimbursementAmount: reimbursedByAmountMap.get(row.id) ?? null,
+      reimbursementAmount: reimbursedByAmounts.get(row.id) ?? null,
     }));
 
+    const pending = links
+      .filter((link) => !(link.reimbursementTransactionId && link.expenseTransactionId))
+      .flatMap((link) => {
+        const row =
+          link.reimbursementTransactionId === id ? link.expenseDraftRow : link.reimbursementDraftRow;
+        if (!row || ["committed", "discarded", "expired"].includes(row.draft.status)) return [];
+        const payload = (row.currentPayload || {}) as Record<string, unknown>;
+        return [
+          {
+            direction: link.reimbursementTransactionId === id ? "reimburses" : "reimbursedBy",
+            amount: Number(link.amount),
+            description: String(payload.label || payload.description || ""),
+            date: payload.date ? String(payload.date) : null,
+            filename: row.draft.sourceFilename,
+          },
+        ];
+      });
+
+    const linkage = stripLinkFields(transaction.linkage);
+    const allocated = [...reimbursesAmounts.values()].reduce((sum, amount) => sum + amount, 0);
     return {
       reimburses,
       reimbursedBy,
-      leftoverAmount: linkage.leftoverAmount ?? null,
-      leftoverCategoryId: linkage.leftoverCategoryId ?? null,
+      pending,
+      leftoverAmount:
+        linkage?.type === "reimbursement"
+          ? Number(Math.max(Number(transaction.amountIn || 0) - allocated, 0).toFixed(2))
+          : null,
+      leftoverCategoryId: (linkage?.leftoverCategoryId as string | null | undefined) ?? null,
     };
   }
 
@@ -2473,46 +2007,13 @@ export class TransactionService {
     );
   }
 
+  /** Repair link drift for one user (invalid links, over-allocations, stale caches). */
   static async repairInvalidLinkages(userId: string) {
-    const transactions = await prisma.transaction.findMany({
-      where: { userId },
-      select: {
-        id: true,
-        linkage: true,
-      },
-    });
-    const linkageByTransactionId = new Map<string, TransactionLinkage | null>();
-    transactions.forEach((transaction) => {
-      linkageByTransactionId.set(
-        transaction.id,
-        (transaction.linkage as TransactionLinkage | null) || null,
-      );
-    });
-
-    let fixedCount = 0;
-
-    for (const transaction of transactions) {
-      const linkage = transaction.linkage as TransactionLinkage | null;
-      const sanitized = this.sanitizeLinkageForTransaction(
-        transaction.id,
-        linkage,
-        { linkageByTransactionId, targetId: transaction.id },
-      );
-
-      const before = JSON.stringify(linkage ?? null);
-      const after = JSON.stringify(sanitized ?? null);
-
-      if (before !== after) {
-        await TransactionRepository.updateLinkage(
-          transaction.id,
-          userId,
-          sanitized,
-        );
-        linkageByTransactionId.set(transaction.id, sanitized);
-        fixedCount += 1;
-      }
-    }
-
-    return { fixedCount };
+    const result = await auditLinks({ userId, fix: true });
+    return {
+      fixedCount: result.findings.filter((finding) => finding.fixed).length,
+      counts: result.counts,
+      findings: result.findings,
+    };
   }
 }

@@ -278,7 +278,8 @@ export class TransactionRepository {
     transactions: ImportTransactionInput[],
     importBatchId?: string,
   ) {
-    return prisma.transaction.createMany({
+    return prisma.transaction.createManyAndReturn({
+      select: { id: true, metadata: true },
       data: transactions.map((t) => ({
         userId,
         date: t.date,
@@ -464,6 +465,25 @@ export class TransactionRepository {
         ...(updates.accountIdentifier !== undefined && { accountIdentifier: updates.accountIdentifier }),
       },
     });
+  }
+
+  static async findIdsByFilter(
+    userId: string,
+    filters: {
+      dateFrom?: Date;
+      dateTo?: Date;
+      categoryIds?: string[];
+      search?: string;
+      transactionType?: "income" | "expense";
+      minAmount?: number;
+      maxAmount?: number;
+      accountIdentifier?: string;
+    },
+    excludeIds?: string[],
+  ) {
+    const where = TransactionRepository.buildWhere(userId, filters, excludeIds);
+    const rows = await prisma.transaction.findMany({ where, select: { id: true } });
+    return rows.map((row) => row.id);
   }
 
   static async deleteManyByFilter(

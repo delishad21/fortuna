@@ -210,6 +210,19 @@ hermesWorkflowRouter.post("/drafts/:draftId/commit", requireAccountAuth(["import
   }
 });
 
+hermesWorkflowRouter.post("/drafts/commit-selection", requireAccountAuth(["imports:commit"]), async (request, response) => {
+  try {
+    const input = z.object({
+      items: z.array(z.object({ draftId: z.string().min(1), confirmationToken: z.string().min(1) }).strict()).min(1).max(20),
+      confirmed: z.literal(true),
+    }).strict().parse(request.body);
+    const results = await HermesWorkflowService.commitDrafts(authenticatedUserId(request), input.items, input.confirmed, actor(request));
+    return response.json({ success: true, results });
+  } catch (error) {
+    return sendError(response, error);
+  }
+});
+
 hermesWorkflowRouter.delete("/drafts/:draftId", requireAccountAuth(["drafts:write"]), async (request, response) => {
   try {
     return response.json({ draft: await HermesWorkflowService.discardDraft(authenticatedUserId(request), request.params.draftId, actor(request)) });

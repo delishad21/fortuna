@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "find src -name '*.test.ts' -print0 | xargs -0 tsx --test",
     "backfill:import-sources": "tsx src/scripts/backfill-import-source-filenames.ts",
-    "chat:worker": "node dist/modules/chat/worker.js"
+    "chat:worker": "node dist/modules/chat/worker.js",
+    "reimbursements:audit": "tsx src/scripts/reimbursement-links-audit.ts"
   },
   "dependencies": {
     "@prisma/client": "5.15.0",

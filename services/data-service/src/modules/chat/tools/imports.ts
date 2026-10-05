@@ -134,20 +134,17 @@ export class ImportActions implements ActionHandler {
         409,
         "Review the duplicate matches and explicitly choose to commit them anyway.",
       );
-    const results = [];
-    for (const item of review.validations) {
+    const items = review.validations.map((item) => {
       const validation = item.validation;
       if (!("confirmationToken" in validation) || !validation.confirmationToken)
         throw new ChatError(409, "Draft validation requires review");
-      const result = await workflow.commitDraft(
-        userId,
-        item.draftId,
-        validation.confirmationToken,
-        true,
-        { actorType: "user", actorId: userId },
-      );
-      results.push(result);
-    }
+      return { draftId: item.draftId, confirmationToken: validation.confirmationToken };
+    });
+    // One commit for every selected import, so links between them are kept.
+    const results = await workflow.commitDrafts(userId, items, true, {
+      actorType: "user",
+      actorId: userId,
+    });
     return json({ draftResults: results });
   }
 }

@@ -20,6 +20,16 @@ import {
 import { cleanupExpiredWorkflowData } from "./workflow-cleanup";
 import { enrichImportRows } from "./import-enrichment";
 import { findStagedDuplicates, type DuplicateFinding, type StagedRowSummary } from "./staged-duplicates";
+import {
+  applyDraftRowLinkage,
+  decorateDraftRows,
+  removeDraftLinks,
+  runInTransaction,
+  storedDraftPayload,
+  swapCommittedRows,
+  validateDraftLinks,
+} from "../reimbursements/links.service";
+import { LinkError } from "../reimbursements/links.core";
 
 const STORAGE_ROOT = path.resolve(
   process.env.STATEMENT_STORAGE_DIR || "/data/statements",
@@ -387,9 +397,24 @@ export class HermesWorkflowService {
       orderBy: { updatedAt: "desc" },
       take: 100,
     });
+    // Drafts joined by reimbursement links must be committed together.
+    const pairs = await prisma.$queryRaw<Array<{ a: string; b: string }>>`
+      SELECT DISTINCT ra.draft_id AS a, rb.draft_id AS b
+      FROM reimbursement_links l
+      JOIN import_draft_rows ra ON ra.id = l.reimbursement_draft_row_id
+      JOIN import_draft_rows rb ON rb.id = l.expense_draft_row_id
+      WHERE l.user_id = ${userId} AND ra.draft_id <> rb.draft_id`;
+    const linked = new Map<string, Set<string>>();
+    for (const { a, b } of pairs) {
+      if (!linked.has(a)) linked.set(a, new Set());
+      if (!linked.has(b)) linked.set(b, new Set());
+      linked.get(a)!.add(b);
+      linked.get(b)!.add(a);
+    }
     return drafts.map(({ rows, ...draft }) => ({
       ...draft,
       reviewSummary: summarizeDraftReview(rows),
+      linkedDraftIds: [...(linked.get(draft.id) || [])],
     }));
   }
 
@@ -491,10 +516,11 @@ export class HermesWorkflowService {
           });
       }
     }
+    const rows = await decorateDraftRows(prisma, userId, draft.rows);
     return {
       ...draft,
-      reviewSummary: summarizeDraftReview(draft.rows),
-      rows: draft.rows.map((row) => ({ ...row, review: reviewDraftRow(row) })),
+      reviewSummary: summarizeDraftReview(rows),
+      rows: rows.map((row) => ({ ...row, review: reviewDraftRow(row) })),
     };
   }
 
@@ -561,7 +587,8 @@ export class HermesWorkflowService {
             )
           : result.transactions;
 
-      return await prisma.$transaction(async (tx) => {
+      return await runInTransaction(async (tx) => {
+        await removeDraftLinks(tx, userId, draft.id);
         await tx.classificationProposal.deleteMany({
           where: { draftId: draft.id },
         });
@@ -636,7 +663,9 @@ export class HermesWorkflowService {
     },
     actor: Actor,
   ) {
-    return prisma.$transaction(async (tx) => {
+    return runInTransaction(async (tx) => {
+      // Lock first so two devices saving the same version cannot both pass the check.
+      await tx.$queryRaw`SELECT r.id FROM import_draft_rows r JOIN import_drafts d ON d.id = r.draft_id WHERE r.id = ${rowId} AND r.draft_id = ${draftId} AND d.user_id = ${userId} FOR UPDATE OF r`;
       const row = await tx.importDraftRow.findFirst({
         where: { id: rowId, draftId, draft: { userId } },
       });
@@ -659,13 +688,26 @@ export class HermesWorkflowService {
         where: { id: row.id },
         data: {
           ...(input.currentPayload !== undefined
-            ? { currentPayload: input.currentPayload as Prisma.InputJsonValue }
+            ? {
+                currentPayload: storedDraftPayload(
+                  input.currentPayload,
+                ) as Prisma.InputJsonValue,
+              }
             : {}),
           ...(input.selected !== undefined ? { selected: input.selected } : {}),
           ...(input.reviewStatus ? { reviewStatus: input.reviewStatus } : {}),
           version: { increment: 1 },
         },
       });
+      const linkWarnings =
+        input.currentPayload !== undefined
+          ? await applyDraftRowLinkage(
+              tx,
+              userId,
+              { id: row.id, draftId, previousPayload: row.currentPayload },
+              input.currentPayload,
+            )
+          : [];
       const draft = await tx.importDraft.update({
         where: { id: draftId },
         data: {
@@ -697,7 +739,7 @@ export class HermesWorkflowService {
         afterValue: updated.currentPayload as Prisma.InputJsonValue,
         metadata: { draftVersion: draft.version },
       });
-      return updated;
+      return { ...updated, linkWarnings };
     });
   }
 
@@ -978,7 +1020,9 @@ export class HermesWorkflowService {
           await tx.importDraftRow.update({
             where: { id: row.id },
             data: {
-              currentPayload: updatedPayload as Prisma.InputJsonValue,
+              currentPayload: storedDraftPayload(
+                updatedPayload,
+              ) as Prisma.InputJsonValue,
               reviewStatus: "auto_applied",
               version: { increment: 1 },
               provenance: {
@@ -989,6 +1033,12 @@ export class HermesWorkflowService {
               },
             },
           });
+          await applyDraftRowLinkage(
+            tx,
+            userId,
+            { id: row.id, draftId, previousPayload: current },
+            updatedPayload,
+          );
         } else {
           await tx.importDraftRow.update({
             where: { id: row.id },
@@ -1029,7 +1079,7 @@ export class HermesWorkflowService {
     decision: "accept" | "reject",
     actor: Actor,
   ) {
-    return prisma.$transaction(async (tx) => {
+    return runInTransaction(async (tx) => {
       const proposal = await tx.classificationProposal.findFirst({
         where: { id: proposalId, draft: { userId } },
         include: { draft: true, draftRow: true },
@@ -1063,12 +1113,22 @@ export class HermesWorkflowService {
         await tx.importDraftRow.update({
           where: { id: proposal.draftRowId },
           data: {
-            currentPayload: payload as Prisma.InputJsonValue,
+            currentPayload: storedDraftPayload(payload) as Prisma.InputJsonValue,
             version: { increment: 1 },
             reviewStatus: "accepted",
             provenance: { source: "hermes", proposalId },
           },
         });
+        await applyDraftRowLinkage(
+          tx,
+          userId,
+          {
+            id: proposal.draftRowId,
+            draftId: proposal.draftId,
+            previousPayload: proposal.draftRow.currentPayload,
+          },
+          payload,
+        );
       } else {
         await tx.importDraftRow.update({
           where: { id: proposal.draftRowId },
@@ -1210,7 +1270,11 @@ export class HermesWorkflowService {
     });
   }
 
-  static async validateDraft(userId: string, draftId: string) {
+  static async validateDraft(
+    userId: string,
+    draftId: string,
+    selection: string[] = [draftId],
+  ) {
     const draft = await this.getDraft(userId, draftId);
     const selectedRows = draft.rows.filter((row) => row.selected);
     const errors = selectedRows.flatMap((row) =>
@@ -1248,6 +1312,13 @@ export class HermesWorkflowService {
         errors.push({ rowId: row.id, rowIndex: row.rowIndex, message }),
       );
     });
+    const linkCheck =
+      draft.mode === "main"
+        ? await validateDraftLinks(prisma, userId, [draftId], selection)
+        : { errors: [], warnings: [], partnerDraftIds: [] as string[] };
+    linkCheck.errors.forEach((issue) =>
+      errors.push({ rowId: issue.rowId, rowIndex: issue.rowIndex, message: issue.message }),
+    );
     const selectedRowIds = new Set(selectedRows.map((row) => row.id));
     const highImpact = draft.proposals.filter(
       (proposal) =>
@@ -1265,13 +1336,21 @@ export class HermesWorkflowService {
         selectedRows.length > 0,
       draftVersion: draft.version,
       errors,
-      warnings: highImpact.map((proposal) => ({
-        proposalId: proposal.id,
-        rowId: proposal.draftRowId,
-        rowIndex: draft.rows.find(row => row.id === proposal.draftRowId)?.rowIndex,
-        transaction: draft.rows.find(row => row.id === proposal.draftRowId)?.currentPayload,
-        message: "High-impact proposal requires review",
-      })),
+      warnings: [
+        ...highImpact.map((proposal) => ({
+          proposalId: proposal.id,
+          rowId: proposal.draftRowId,
+          rowIndex: draft.rows.find(row => row.id === proposal.draftRowId)?.rowIndex,
+          transaction: draft.rows.find(row => row.id === proposal.draftRowId)?.currentPayload,
+          message: "High-impact proposal requires review",
+        })),
+        ...linkCheck.warnings.map((issue) => ({
+          rowId: issue.rowId,
+          rowIndex: issue.rowIndex,
+          message: issue.message,
+        })),
+      ],
+      linkedDraftIds: linkCheck.partnerDraftIds,
       summary: {
         rows: draft.rows.length,
         selected: selectedRows.length,
@@ -1290,8 +1369,13 @@ export class HermesWorkflowService {
     };
   }
 
-  static async prepareCommit(userId: string, draftId: string, actor: Actor) {
-    const validation = await this.validateDraft(userId, draftId);
+  static async prepareCommit(
+    userId: string,
+    draftId: string,
+    actor: Actor,
+    selection: string[] = [draftId],
+  ) {
+    const validation = await this.validateDraft(userId, draftId, selection);
     if (!validation.valid) return validation;
     const draft = await this.getDraft(userId, draftId);
     const selected = draft.rows
@@ -1392,7 +1476,7 @@ export class HermesWorkflowService {
     const validations = await Promise.all(drafts.map(async (draft) => ({
       draftId: draft.id,
       filename: draft.sourceFilename,
-      validation: await this.prepareCommit(userId, draft.id, actor),
+      validation: await this.prepareCommit(userId, draft.id, actor, draftIds),
     })));
     const savedDuplicates: DuplicateFinding[] = validations.flatMap(({ draftId, validation }) => {
       const draft = drafts.find((item) => item.id === draftId)!;
@@ -1434,138 +1518,206 @@ export class HermesWorkflowService {
     confirmed: boolean,
     actor: Actor,
   ) {
+    const [result] = await this.commitDrafts(
+      userId,
+      [{ draftId, confirmationToken }],
+      confirmed,
+      actor,
+    );
+    return result;
+  }
+
+  /**
+   * Commit several staged imports in one database transaction. Reimbursement
+   * links between their rows become links between the new transactions, and
+   * a failure anywhere commits nothing.
+   */
+  static async commitDrafts(
+    userId: string,
+    items: Array<{ draftId: string; confirmationToken: string }>,
+    confirmed: boolean,
+    actor: Actor,
+  ) {
     if (!confirmed)
       throw Object.assign(new Error("Explicit user confirmation is required"), {
         status: 400,
       });
-    const payload = verifyCommitToken(confirmationToken, commitSecret());
-    if (!payload || payload.userId !== userId || payload.draftId !== draftId) {
-      throw Object.assign(
-        new Error("Commit confirmation token is invalid or expired"),
-        { status: 401 },
-      );
-    }
-    const draft = await this.getDraft(userId, draftId);
-    const tokenHash = createHash("sha256")
-      .update(confirmationToken)
-      .digest("hex");
-    if (
-      draft.version !== payload.draftVersion ||
-      draft.validationHash !== payload.validationHash ||
-      draft.commitTokenHash !== tokenHash ||
-      !draft.commitTokenExpiresAt ||
-      draft.commitTokenExpiresAt <= new Date() ||
-      draft.commitTokenUsedAt
-    ) {
-      throw Object.assign(
-        new Error("Commit confirmation is stale or already used"),
-        { status: 409 },
-      );
-    }
-    const freshValidation = await this.validateDraft(userId, draftId);
-    if (!freshValidation.valid)
-      throw Object.assign(new Error("Draft is no longer valid"), {
-        status: 409,
-        validation: freshValidation,
+    const draftIds = items.map((item) => item.draftId);
+    if (!draftIds.length || new Set(draftIds).size !== draftIds.length)
+      throw Object.assign(new Error("Select each staged import once"), {
+        status: 400,
       });
-    const claimed = await prisma.importDraft.updateMany({
-      where: {
-        id: draftId,
-        userId,
-        version: payload.draftVersion,
-        commitTokenHash: tokenHash,
-        commitTokenUsedAt: null,
-      },
-      data: { commitTokenUsedAt: new Date() },
-    });
-    if (claimed.count !== 1)
-      throw Object.assign(new Error("Commit confirmation is already in use"), {
-        status: 409,
-      });
-
-    const rows = draft.rows.map(
-      (row) => row.currentPayload as Record<string, any>,
-    );
-    const selectedIndices = draft.rows.flatMap((row, index) =>
-      row.selected ? [index] : [],
-    );
-    const sourceFile = draft.sourceFileId
-      ? await prisma.statementFile.findFirst({
-          where: { id: draft.sourceFileId, userId },
-        })
-      : null;
     try {
-      let result: Record<string, unknown>;
-      if (draft.mode === "main") {
-        const committed = await TransactionService.commitImport(
-          userId,
-          rows.map(materializeDraftTransaction) as never[],
-          selectedIndices,
-          {
-            filename: draft.sourceFilename,
-            fileType:
-              path.extname(draft.sourceFilename).replace(".", "") || "unknown",
-            parserId: draft.parserId || "unknown",
-          },
-        );
-        if (!committed.success)
-          throw new Error(committed.error || "Import commit failed");
-        result = committed as unknown as Record<string, unknown>;
-      } else {
-        if (!draft.targetTripId)
-          throw new Error("Trip draft has no target trip");
-        const selectedRows = rows.filter((_row, index) =>
-          selectedIndices.includes(index),
-        );
-        const walletIds = [
-          ...new Set(selectedRows.map((row) => row.walletId).filter(Boolean)),
-        ] as string[];
-        if (walletIds.length > 1)
-          throw new Error("A trip draft commit currently requires one wallet");
-        result = (await TripService.importTripSpendings(
-          userId,
-          draft.targetTripId,
-          walletIds[0] || null,
-          draft.parserId,
-          selectedRows as never[],
-        )) as unknown as Record<string, unknown>;
-      }
-      const batchId =
-        typeof result.batchId === "string" ? result.batchId : null;
-      await prisma.$transaction(async (tx) => {
-        await tx.importDraft.update({
-          where: { id: draftId },
-          data: {
-            status: "committed",
-            committedAt: new Date(),
-            committedImportBatchId: batchId,
-          },
-        });
-        if (sourceFile && !sourceFile.retained) {
-          await tx.statementFile.update({
-            where: { id: sourceFile.id },
-            data: { status: "deleted", deletedAt: new Date() },
+      return await runInTransaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM import_drafts WHERE user_id=${userId} AND id IN (${Prisma.join([...draftIds].sort())}) ORDER BY id FOR UPDATE`;
+        const verified: Array<{
+          draftId: string;
+          draftVersion: number;
+          validationHash: string;
+          tokenHash: string;
+        }> = [];
+        for (const item of items) {
+          const payload = verifyCommitToken(item.confirmationToken, commitSecret());
+          if (!payload || payload.userId !== userId || payload.draftId !== item.draftId) {
+            throw Object.assign(
+              new Error("Commit confirmation token is invalid or expired"),
+              { status: 401 },
+            );
+          }
+          const draft = await this.getDraft(userId, item.draftId);
+          const tokenHash = createHash("sha256")
+            .update(item.confirmationToken)
+            .digest("hex");
+          if (
+            draft.version !== payload.draftVersion ||
+            draft.validationHash !== payload.validationHash ||
+            draft.commitTokenHash !== tokenHash ||
+            !draft.commitTokenExpiresAt ||
+            draft.commitTokenExpiresAt <= new Date() ||
+            draft.commitTokenUsedAt
+          ) {
+            throw Object.assign(
+              new Error(`${draft.sourceFilename}: commit confirmation is stale or already used`),
+              { status: 409 },
+            );
+          }
+          verified.push({
+            draftId: item.draftId,
+            draftVersion: payload.draftVersion,
+            validationHash: payload.validationHash,
+            tokenHash,
           });
         }
-        await audit(tx, userId, actor, {
-          toolName: "commit_import_draft",
-          targetType: "import_draft",
-          targetId: draftId,
-          metadata: {
-            validationHash: payload.validationHash,
-            result: result as Prisma.InputJsonValue,
-          },
-        });
+        for (const item of verified) {
+          const fresh = await this.validateDraft(userId, item.draftId, draftIds);
+          if (!fresh.valid) {
+            const draft = await tx.importDraft.findFirst({
+              where: { id: item.draftId, userId },
+              select: { sourceFilename: true },
+            });
+            const first = fresh.errors[0]?.message;
+            throw Object.assign(
+              new Error(
+                `${draft?.sourceFilename || "Draft"} is no longer valid${first ? `: ${first}` : ""}`,
+              ),
+              { status: 409, validation: fresh },
+            );
+          }
+        }
+        for (const item of verified) {
+          const claimed = await tx.importDraft.updateMany({
+            where: {
+              id: item.draftId,
+              userId,
+              version: item.draftVersion,
+              commitTokenHash: item.tokenHash,
+              commitTokenUsedAt: null,
+            },
+            data: { commitTokenUsedAt: new Date() },
+          });
+          if (claimed.count !== 1)
+            throw Object.assign(new Error("Commit confirmation is already in use"), {
+              status: 409,
+            });
+        }
+
+        const rowToTransaction = new Map<string, string>();
+        const results: Array<Record<string, unknown>> = [];
+        for (const item of verified) {
+          const draft = await tx.importDraft.findFirstOrThrow({
+            where: { id: item.draftId, userId },
+            include: { rows: { orderBy: { rowIndex: "asc" } } },
+          });
+          const rows = draft.rows.map(
+            (row) => storedDraftPayload(row.currentPayload as Record<string, any>) as Record<string, any>,
+          );
+          const selectedIndices = draft.rows.flatMap((row, index) =>
+            row.selected ? [index] : [],
+          );
+          const sourceFile = draft.sourceFileId
+            ? await tx.statementFile.findFirst({
+                where: { id: draft.sourceFileId, userId },
+              })
+            : null;
+          let result: Record<string, unknown>;
+          if (draft.mode === "main") {
+            const committed = await TransactionService.commitImport(
+              userId,
+              rows.map(materializeDraftTransaction) as never[],
+              selectedIndices,
+              {
+                filename: draft.sourceFilename,
+                fileType:
+                  path.extname(draft.sourceFilename).replace(".", "") || "unknown",
+                parserId: draft.parserId || "unknown",
+              },
+              { linksFromPayload: false },
+            );
+            if (!committed.success)
+              throw new Error(
+                `${draft.sourceFilename}: ${committed.error || "Import commit failed"}`,
+              );
+            (committed.transactionIds || []).forEach((transactionId, position) =>
+              rowToTransaction.set(draft.rows[selectedIndices[position]].id, transactionId),
+            );
+            result = committed as unknown as Record<string, unknown>;
+          } else {
+            if (!draft.targetTripId)
+              throw new Error("Trip draft has no target trip");
+            const selectedRows = rows.filter((_row, index) =>
+              selectedIndices.includes(index),
+            );
+            const walletIds = [
+              ...new Set(selectedRows.map((row) => row.walletId).filter(Boolean)),
+            ] as string[];
+            if (walletIds.length > 1)
+              throw new Error("A trip draft commit currently requires one wallet");
+            result = (await TripService.importTripSpendings(
+              userId,
+              draft.targetTripId,
+              walletIds[0] || null,
+              draft.parserId,
+              selectedRows as never[],
+            )) as unknown as Record<string, unknown>;
+          }
+          const batchId =
+            typeof result.batchId === "string" ? result.batchId : null;
+          await tx.importDraft.update({
+            where: { id: draft.id },
+            data: {
+              status: "committed",
+              committedAt: new Date(),
+              committedImportBatchId: batchId,
+            },
+          });
+          if (sourceFile && !sourceFile.retained) {
+            await tx.statementFile.update({
+              where: { id: sourceFile.id },
+              data: { status: "deleted", deletedAt: new Date() },
+            });
+            const storagePath = sourceFile.storagePath;
+            await afterCommit(() => unlink(storagePath).catch(() => undefined));
+          }
+          await audit(tx, userId, actor, {
+            toolName: "commit_import_draft",
+            targetType: "import_draft",
+            targetId: draft.id,
+            metadata: {
+              validationHash: item.validationHash,
+              committedTogetherWith: draftIds.filter((id) => id !== draft.id),
+              result: JSON.parse(JSON.stringify(result)) as Prisma.InputJsonValue,
+            },
+          });
+          results.push({ success: true, draftId: draft.id, ...result });
+        }
+        // Links between the committed rows (and to saved transactions) now point
+        // at the new transactions; limits are re-checked under lock.
+        await swapCommittedRows(tx, userId, rowToTransaction);
+        return results;
       });
-      if (sourceFile && !sourceFile.retained) {
-        await afterCommit(() => unlink(sourceFile.storagePath).catch(() => undefined));
-      }
-      return { success: true, draftId, ...result };
     } catch (error) {
-      await prisma.importDraft.updateMany({
-        where: { id: draftId, status: { not: "committed" } },
-        data: { commitTokenUsedAt: null },
-      });
+      if (error instanceof LinkError)
+        throw Object.assign(new Error(error.message), { status: error.status });
       throw error;
     }
   }
@@ -1581,7 +1733,8 @@ export class HermesWorkflowService {
       throw Object.assign(new Error("Committed drafts cannot be discarded"), {
         status: 409,
       });
-    const updated = await prisma.$transaction(async (tx) => {
+    const updated = await runInTransaction(async (tx) => {
+      await removeDraftLinks(tx, userId, draft.id);
       const next = await tx.importDraft.update({
         where: { id: draft.id },
         data: {
