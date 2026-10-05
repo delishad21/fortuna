@@ -3,16 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Bot, Check, RefreshCw, X } from "lucide-react";
+import { AlertTriangle, Bot, Check, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { TransactionTable } from "@/components/transaction-table/TransactionTable";
-import { ReimbursementSelectorModal } from "./ReimbursementSelectorModal";
-import type {
-  Transaction,
-  TransactionLinkage,
-} from "@/components/transaction-table/types";
+import { ReimbursementLinkPicker } from "@/components/reimbursement/ReimbursementLinkPicker";
+import type { Transaction } from "@/components/transaction-table/types";
 import {
-  commitAgentDraft,
+  commitAgentDraftSelection,
   decideAgentProposal,
   getAgentDraft,
   updateAgentDraftRow,
@@ -100,10 +97,12 @@ export function AgentDraftReviewClient({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [pendingCommit, setPendingCommit] = useState<Record<string, any> | null>(null);
-  const [reimbursement, setReimbursement] = useState<null | {
-    globalIndex: number;
-    transactions: Transaction[];
-    currentIndex: number;
+  const [linkPicker, setLinkPicker] = useState<null | {
+    draftId: string;
+    rowId: string;
+    title: string;
+    leftoverCategoryId: string | null;
+    mode: "expenses" | "reimbursements";
   }>(null);
 
   useEffect(() => {
@@ -275,9 +274,16 @@ export function AgentDraftReviewClient({
     setBusy(true);
     setMessage("");
     try {
-      for (const { draftId, validation } of selection.validations) {
-        await commitAgentDraft(draftId, validation.confirmationToken);
-      }
+      // One commit for every selected file: links between them are kept, and
+      // nothing is saved if any file fails.
+      await commitAgentDraftSelection(
+        selection.validations.map(
+          ({ draftId, validation }: Record<string, any>) => ({
+            draftId,
+            confirmationToken: validation.confirmationToken,
+          }),
+        ),
+      );
       setPendingCommit(null);
       if (onCommitted) onCommitted();
       else {
@@ -342,20 +348,103 @@ export function AgentDraftReviewClient({
     }
   };
 
-  const openReimbursement = (globalIndex: number) => {
-    const source = flatRows[globalIndex];
-    if (!source) return;
-    const sourceRows = flatRows.filter(
-      (item) => item.draft.id === source.draft.id,
-    );
-    setReimbursement({
-      globalIndex,
-      transactions: sourceRows.map((item) => item.transaction),
-      currentIndex: sourceRows.findIndex(
-        (item) => item.row.id === source.row.id,
-      ),
+  /** Mark the row as a reimbursement if needed, then choose what it pays back. */
+  const openReimbursement = async (globalIndex: number) => {
+    const item = flatRows[globalIndex];
+    if (!item) return;
+    const draftId = String(item.draft.id);
+    const rowId = String(item.row.id);
+    const payload = item.row.currentPayload || {};
+    if (!(Number(payload.amountIn || 0) > 0)) {
+      setMessage("Only money-in rows can be reimbursements.");
+      return;
+    }
+    if (payload.linkage?.type !== "reimbursement") {
+      setBusy(true);
+      try {
+        await rowUpdateQueuesRef.current.get(`${draftId}:${rowId}`)?.catch(() => undefined);
+        const latest = (await getAgentDraft(draftId)).draft as Draft;
+        const latestRow = latest.rows.find((row) => String(row.id) === rowId);
+        if (!latestRow) return;
+        await updateAgentDraftRow(draftId, rowId, {
+          expectedVersion: latestRow.version,
+          currentPayload: {
+            ...latestRow.currentPayload,
+            linkage: { type: "reimbursement", leftoverCategoryId: null },
+          },
+          reviewStatus: "edited",
+        });
+        replaceDraft(draftId, (await getAgentDraft(draftId)).draft as Draft);
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "Could not mark the row");
+        return;
+      } finally {
+        setBusy(false);
+      }
+    }
+    setLinkPicker({
+      draftId,
+      rowId,
+      title: String(payload.label || payload.description || "Reimbursement"),
+      leftoverCategoryId: payload.linkage?.leftoverCategoryId ?? null,
+      mode: "expenses",
     });
   };
+
+  const openReimbursedBy = (globalIndex: number) => {
+    const item = flatRows[globalIndex];
+    if (!item) return;
+    const payload = item.row.currentPayload || {};
+    setLinkPicker({
+      draftId: String(item.draft.id),
+      rowId: String(item.row.id),
+      title: String(payload.label || payload.description || "Expense"),
+      leftoverCategoryId: null,
+      mode: "reimbursements",
+    });
+  };
+
+  // Linked rows must be committed together: flag pairs where only one side is selected.
+  const linkProblems = useMemo(() => {
+    const rowsById = new Map<string, { draft: Draft; row: DraftRow; index: number }>();
+    flatRows.forEach((item, index) =>
+      rowsById.set(String(item.row.id), { draft: item.draft, row: item.row, index }),
+    );
+    const seen = new Set<string>();
+    const problems: Array<{ key: string; message: string; selectIndex?: number }> = [];
+    for (const item of flatRows) {
+      const views = [
+        ...(item.row.links?.asReimbursement || []),
+        ...(item.row.links?.asExpense || []),
+      ] as Array<Record<string, any>>;
+      for (const view of views) {
+        if (!view.stagedRowId) continue;
+        const pairKey = [String(item.row.id), String(view.stagedRowId)].sort().join(":");
+        if (seen.has(pairKey)) continue;
+        seen.add(pairKey);
+        const partner = rowsById.get(String(view.stagedRowId));
+        const name = (row: DraftRow) =>
+          String(row.currentPayload?.label || row.currentPayload?.description || "row");
+        if (!partner) {
+          if (item.row.selected)
+            problems.push({
+              key: pairKey,
+              message: `${item.draft.sourceFilename} row ${item.row.rowIndex + 1} (${name(item.row)}) is linked to row ${(view.rowIndex ?? 0) + 1} of ${view.filename || "another staged import"}, which isn't in this review. Open both imports together to commit them, or remove the link.`,
+            });
+          continue;
+        }
+        if (!!item.row.selected === !!partner.row.selected) continue;
+        const unselected = item.row.selected ? partner : { draft: item.draft, row: item.row, index: flatRows.indexOf(item) };
+        const selected = item.row.selected ? item : partner;
+        problems.push({
+          key: pairKey,
+          message: `${selected.draft.sourceFilename} row ${selected.row.rowIndex + 1} (${name(selected.row)}) is linked to ${unselected.draft.sourceFilename} row ${unselected.row.rowIndex + 1} (${name(unselected.row)}), which isn't selected.`,
+          selectIndex: unselected.index,
+        });
+      }
+    }
+    return problems;
+  }, [flatRows]);
 
   return (
     <div
@@ -393,6 +482,38 @@ export function AgentDraftReviewClient({
         <div className="whitespace-pre-wrap rounded-lg border border-stroke p-3 text-sm text-dark dark:border-dark-3 dark:text-white">
           {message}
         </div>
+      )}
+      {linkProblems.length > 0 && (
+        <section
+          className="rounded-lg border border-yellow-dark/40 bg-yellow-light-4 p-3 text-sm text-dark dark:bg-dark-3 dark:text-white"
+          aria-label="Linked rows that will not be committed together"
+        >
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-yellow-dark" />
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <p className="font-medium">
+                Linked rows must be committed together
+              </p>
+              {linkProblems.map((problem) => (
+                <div key={problem.key} className="flex flex-wrap items-center gap-2">
+                  <span className="text-dark-5 dark:text-dark-6">{problem.message}</span>
+                  {problem.selectIndex !== undefined && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={busy}
+                      onClick={() =>
+                        updateRow(problem.selectIndex as number, () => ({ selected: true }))
+                      }
+                    >
+                      Select it
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
       )}
       {pendingCommit && (
         <section className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-dark dark:text-white" aria-label="Possible duplicate transactions">
@@ -448,7 +569,8 @@ export function AgentDraftReviewClient({
         onLinkageChange={(index, linkage) =>
           updateField(index, "linkage", linkage)
         }
-        onOpenReimbursementSelector={openReimbursement}
+        onOpenReimbursementSelector={(index) => void openReimbursement(index)}
+        onOpenReimbursedBySelector={openReimbursedBy}
         deferCellCommit
         lockLinkedReimbursements={false}
         allowReservedCategorySelection
@@ -527,20 +649,21 @@ export function AgentDraftReviewClient({
           );
         }}
       />
-      {reimbursement && (
-        <ReimbursementSelectorModal
+      {linkPicker && (
+        <ReimbursementLinkPicker
           isOpen
-          onClose={() => setReimbursement(null)}
-          currentIndex={reimbursement.currentIndex}
-          transactions={reimbursement.transactions}
-          currentLinkage={
-            reimbursement.transactions[reimbursement.currentIndex]?.linkage
-          }
-          categories={categories}
-          excludeStagedDraftId={flatRows[reimbursement.globalIndex]?.draft.id}
-          onConfirm={(linkage: TransactionLinkage) => {
-            updateField(reimbursement.globalIndex, "linkage", linkage);
-            setReimbursement(null);
+          subject={{ draftRowId: linkPicker.rowId }}
+          mode={linkPicker.mode}
+          subjectTitle={linkPicker.title}
+          currentDraftId={linkPicker.draftId}
+          contextDraftIds={drafts.map((draft) => String(draft.id))}
+          categories={linkPicker.mode === "expenses" ? categories : undefined}
+          initialLeftoverCategoryId={linkPicker.leftoverCategoryId}
+          onClose={() => setLinkPicker(null)}
+          onSaved={async ({ warnings }) => {
+            setLinkPicker(null);
+            await refresh();
+            if (warnings.length) setMessage(warnings.join("\n"));
           }}
         />
       )}

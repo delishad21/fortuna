@@ -346,7 +346,8 @@ export function TransactionsClient({
         amountOut: updatedTransaction.amountOut ?? undefined,
         balance: updatedTransaction.balance ?? undefined,
         accountIdentifier: updatedTransaction.accountIdentifier ?? undefined,
-        linkage: updatedTransaction.linkage ?? null,
+        // undefined keeps the current linkage and links; null clears them.
+        linkage: updatedTransaction.linkage,
       });
 
       // Refresh transactions
@@ -834,6 +835,16 @@ export function TransactionsClient({
             setEditingTransaction(null);
           }}
           onSave={handleSaveEdit}
+          onLinksChanged={async (warnings) => {
+            await fetchTransactions(currentPage, filters);
+            if (warnings.length)
+              setModalState({
+                isOpen: true,
+                type: "warning",
+                title: "Links saved",
+                message: warnings.join("\n"),
+              });
+          }}
           onSplit={handleSplitTransaction}
           onAddCategory={() => setIsAddCategoryModalOpen(true)}
           onAddAccountIdentifier={handleAddAccountIdentifier}

@@ -8,6 +8,28 @@ import {
   reviewSuggestionSummary,
   isUnsure,
 } from "@/lib/chat/client";
+type ReviewAllocation = {
+  transactionId?: string;
+  stagedDraftId?: string;
+  stagedRowId?: string;
+  amount: number;
+};
+
+/** The allocation fields the review API accepts. */
+const toAllocation = ({
+  transactionId,
+  stagedDraftId,
+  stagedRowId,
+  amount,
+}: ReviewAllocation): ReviewAllocation => ({
+  ...(transactionId ? { transactionId } : {}),
+  ...(stagedRowId ? { stagedDraftId, stagedRowId } : {}),
+  amount: Number(Number(amount || 0).toFixed(2)),
+});
+
+const allocationTarget = (allocation: ReviewAllocation) =>
+  allocation.transactionId || allocation.stagedRowId || "";
+
 export function TransactionReviewEditor({
   id,
   onSubmitted,
@@ -251,12 +273,18 @@ export function TransactionReviewEditor({
           }
           onAccountIdentifierChange={() => {}}
           onLinkageChange={(i, v) => update(i, "linkage", v)}
-          onOpenReimbursementSelector={(i) =>
-            update(i, "linkage", {
-              type: "reimbursement",
-              reimbursesAllocations: [],
-            })
-          }
+          onOpenReimbursementSelector={(i) => {
+            if (!(Number(review.rows[i]?.value.amountIn) > 0)) {
+              setError("Only money-in rows can be reimbursements.");
+              return;
+            }
+            if (review.rows[i]?.value.linkage?.type !== "reimbursement")
+              update(i, "linkage", {
+                type: "reimbursement",
+                reimbursesAllocations: [],
+                leftoverCategoryId: null,
+              });
+          }}
           onAddCategoryClick={() =>
             window.open("/categories", "_blank", "noopener,noreferrer")
           }
@@ -310,151 +338,123 @@ export function TransactionReviewEditor({
                   className="ml-2 w-32 rounded border border-stroke bg-transparent p-2"
                 />
               </label>
-              {review.rows[i].value.linkage?.type === "reimbursement" && (
-                <div className="w-full space-y-2">
-                  <p className="text-sm font-medium">
-                    Reimbursement allocations
-                  </p>
-                  {(
-                    review.rows[i].value.linkage.reimbursesAllocations || []
-                  ).map((allocation: any, j: number) => (
-                    <div key={j} className="flex items-center gap-2 text-sm">
-                      <span>
-                        {allocation.targetDescription ||
-                          review.rows.find(
-                            (r) =>
-                              r.id ===
-                              (allocation.transactionId ||
-                                allocation.stagedRowId),
-                          )?.value.description ||
-                          "Linked transaction"}
-                      </span>
-                      <input
-                        key={`allocation-${review.rows[i].version}`}
-                        aria-label={`Allocation ${j + 1} amount for row ${i + 1}`}
-                        defaultValue={allocation.amount}
-                        inputMode="decimal"
-                        className="w-28 rounded border bg-transparent p-2"
-                        onBlur={(e) => {
-                          const items = [
-                            ...review.rows[i].value.linkage
-                              .reimbursesAllocations,
-                          ];
-                          items[j] = {
-                            ...allocation,
-                            amount: Number(e.target.value),
-                          };
-                          update(i, "linkage", {
-                            type: "reimbursement",
-                            reimbursesAllocations: items.map(
-                              ({
-                                transactionId,
-                                stagedDraftId,
-                                stagedRowId,
-                                amount,
-                              }: any) => ({
-                                transactionId,
-                                stagedDraftId,
-                                stagedRowId,
-                                amount,
-                              }),
-                            ),
-                          });
-                        }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() =>
-                          update(i, "linkage", {
-                            type: "reimbursement",
-                            reimbursesAllocations: review.rows[
-                              i
-                            ].value.linkage.reimbursesAllocations
-                              .filter((_: any, k: number) => k !== j)
-                              .map(
-                                ({
-                                  transactionId,
-                                  stagedDraftId,
-                                  stagedRowId,
-                                  amount,
-                                }: any) => ({
-                                  transactionId,
-                                  stagedDraftId,
-                                  stagedRowId,
-                                  amount,
-                                }),
-                              ),
-                          })
-                        }
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                  <label className="text-sm">
-                    Add target from this review
-                    <select
-                      aria-label={`Add reimbursement target for row ${i + 1}`}
-                      value=""
-                      className="ml-2 max-w-80 rounded border bg-transparent p-2"
-                      onChange={(e) => {
-                        const target = review.rows.find(
-                          (r) => r.id === e.target.value,
-                        );
-                        if (target)
-                          update(i, "linkage", {
-                            type: "reimbursement",
-                            reimbursesAllocations: [
-                              ...(
-                                review.rows[i].value.linkage
-                                  .reimbursesAllocations || []
-                              ).map(
-                                ({
-                                  transactionId,
-                                  stagedDraftId,
-                                  stagedRowId,
-                                  amount,
-                                }: any) => ({
-                                  transactionId,
-                                  stagedDraftId,
-                                  stagedRowId,
-                                  amount,
-                                }),
-                              ),
+              {review.rows[i].value.linkage?.type === "reimbursement" &&
+                (() => {
+                  const row = review.rows[i];
+                  const allocations: ReviewAllocation[] =
+                    row.value.linkage.reimbursesAllocations || [];
+                  const allocated = allocations.reduce(
+                    (sum, item) => sum + Number(item.amount || 0),
+                    0,
+                  );
+                  const unallocated = Math.max(
+                    Number(row.value.amountIn || 0) - allocated,
+                    0,
+                  );
+                  const save = (items: ReviewAllocation[]) =>
+                    update(i, "linkage", {
+                      type: "reimbursement",
+                      reimbursesAllocations: items
+                        .filter((item) => Number(item.amount) > 0)
+                        .map(toAllocation),
+                      leftoverCategoryId:
+                        row.value.linkage.leftoverCategoryId ?? null,
+                    });
+                  const linkedIds = new Set(allocations.map(allocationTarget));
+                  const targets = review.rows.filter(
+                    (r) =>
+                      r.id !== row.id &&
+                      Number(r.value.amountOut) > 0 &&
+                      !linkedIds.has(r.source.transactionId || r.source.rowId || ""),
+                  );
+                  return (
+                    <div className="w-full space-y-2">
+                      <p className="text-sm font-medium">
+                        Pays back · ${allocated.toFixed(2)} of $
+                        {Number(row.value.amountIn || 0).toFixed(2)}
+                      </p>
+                      {allocations.map((allocation, j) => (
+                        <div key={allocationTarget(allocation) || j} className="flex items-center gap-2 text-sm">
+                          <span className="min-w-0 truncate">
+                            {(allocation as any).targetDescription ||
+                              review.rows.find(
+                                (r) =>
+                                  (r.source.transactionId || r.source.rowId) ===
+                                  allocationTarget(allocation),
+                              )?.value.description ||
+                              "Linked transaction"}
+                          </span>
+                          <input
+                            key={`allocation-${row.version}-${j}`}
+                            aria-label={`Allocation ${j + 1} amount for row ${i + 1}`}
+                            defaultValue={allocation.amount}
+                            inputMode="decimal"
+                            className="w-28 rounded border bg-transparent p-2"
+                            onBlur={(e) => {
+                              const amount = Number(e.target.value);
+                              if (!Number.isFinite(amount) || amount < 0) {
+                                e.target.value = String(allocation.amount);
+                                return;
+                              }
+                              if (amount === Number(allocation.amount)) return;
+                              const items = [...allocations];
+                              items[j] = { ...allocation, amount };
+                              save(items);
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              save(allocations.filter((_, k) => k !== j))
+                            }
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                      <label className="text-sm">
+                        Add target from this review
+                        <select
+                          aria-label={`Add reimbursement target for row ${i + 1}`}
+                          value=""
+                          disabled={unallocated <= 0 || targets.length === 0}
+                          className="ml-2 max-w-80 rounded border bg-transparent p-2"
+                          onChange={(e) => {
+                            const target = targets.find(
+                              (r) => r.id === e.target.value,
+                            );
+                            if (!target) return;
+                            save([
+                              ...allocations,
                               {
                                 transactionId: target.source.transactionId,
                                 stagedDraftId: target.source.draftId,
                                 stagedRowId: target.source.rowId,
                                 amount: Math.min(
                                   Number(target.value.amountOut),
-                                  Number(review.rows[i].value.amountIn),
+                                  unallocated,
                                 ),
                               },
-                            ],
-                          });
-                      }}
-                    >
-                      <option value="">Choose transaction…</option>
-                      {review.rows
-                        .filter(
-                          (r) =>
-                            r.id !== review.rows[i].id &&
-                            Number(r.value.amountOut) > 0,
-                        )
-                        .map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {String(r.value.date).slice(0, 10)} ·{" "}
-                            {r.value.description}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                  <p className="text-xs text-dark-5">
-                    Unallocated portions remain untargeted. Ask Fortuna to
-                    include other targets in this review.
-                  </p>
-                </div>
-              )}
+                            ]);
+                          }}
+                        >
+                          <option value="">Choose transaction…</option>
+                          {targets.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {String(r.value.date).slice(0, 10)} ·{" "}
+                              {r.value.description}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <p className="text-xs text-dark-5">
+                        What isn&apos;t linked stays as leftover. Links are
+                        checked when saved: an expense can&apos;t be paid back
+                        more than its amount.
+                      </p>
+                    </div>
+                  );
+                })()}
             </div>
           )}
         />

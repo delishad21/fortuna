@@ -64,6 +64,17 @@ export function ImportHistoryClient({
   const allSelected =
     staged.length > 0 &&
     staged.every((draft) => selectedDraftIds.has(draft.id));
+  // Staged imports joined by reimbursement links must be committed together.
+  const missingPartners = staged.flatMap((draft) =>
+    selectedDraftIds.has(draft.id)
+      ? ((draft.linkedDraftIds || []) as string[])
+          .filter((id) => !selectedDraftIds.has(id))
+          .flatMap((id) => {
+            const partner = staged.find((item) => item.id === id);
+            return partner ? [{ draft, partner }] : [];
+          })
+      : [],
+  );
   const toggleDraft = (draftId: string) => {
     setSelectedDraftIds((current) => {
       const next = new Set(current);
@@ -169,6 +180,36 @@ export function ImportHistoryClient({
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
+                {missingPartners.length > 0 && (
+                  <div
+                    role="status"
+                    className="space-y-2 rounded-lg border border-yellow-dark/40 bg-yellow-light-4 p-3 text-sm text-dark dark:bg-dark-3 dark:text-white"
+                  >
+                    {missingPartners.map(({ draft, partner }) => (
+                      <div
+                        key={`${draft.id}:${partner.id}`}
+                        className="flex flex-wrap items-center justify-between gap-2"
+                      >
+                        <span>
+                          {draft.sourceFilename} has reimbursement links to{" "}
+                          {partner.sourceFilename}. Linked imports must be
+                          committed together.
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() =>
+                            setSelectedDraftIds(
+                              (current) => new Set([...current, partner.id]),
+                            )
+                          }
+                        >
+                          Select {partner.sourceFilename} too
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {!staged.length && (
                   <p className="py-6 text-center text-dark-5 dark:text-dark-6">
                     No staged imports. Statements you upload and imports prepared in chat

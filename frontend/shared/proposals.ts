@@ -132,8 +132,13 @@ export function linkageView(
             ? "Reimbursed"
             : "Regular transaction",
     links: allocations.map((a: any) => {
-      const staged = !a.transactionId && !!a.stagedRowId;
-      const id = String(a.transactionId || a.stagedRowId || "");
+      // Older proposals may address a row of the same import only by position.
+      const staged = !a.transactionId;
+      const id = String(
+        a.transactionId ||
+          a.stagedRowId ||
+          (typeof a.pendingBatchIndex === "number" ? `row:${a.pendingBatchIndex}` : ""),
+      );
       return {
         id,
         amount: a.amount == null ? null : Number(a.amount),

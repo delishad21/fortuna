@@ -7,13 +7,13 @@ import { DatePicker } from "@/components/ui/DatePicker";
 import { Button } from "@/components/ui/Button";
 import { CategorySelect } from "@/components/ui/CategorySelect";
 import { AccountIdentifierSelect } from "@/components/ui/AccountIdentifierSelect";
-import { ReimbursementSelectorModal } from "@/components/import/ReimbursementSelectorModal";
+import { ReimbursementLinkPicker } from "@/components/reimbursement/ReimbursementLinkPicker";
+import { getLinkedTransactions } from "@/app/actions/transactions";
 import { Modal } from "@/components/ui/Modal";
 import {
   SplitTransactionModal,
   type SplitTransactionChildInput,
 } from "@/components/transactions/SplitTransactionModal";
-import type { TransactionLinkage } from "@/components/transaction-table/types";
 
 interface Transaction {
   id: string;
@@ -87,6 +87,8 @@ interface EditTransactionModalProps {
   accountIdentifiers: AccountIdentifier[];
   onClose: () => void;
   onSave: (transaction: Transaction) => Promise<void>;
+  /** Links are saved straight away by the picker; the parent refreshes. */
+  onLinksChanged?: (warnings: string[]) => void | Promise<void>;
   onSplit: (
     transactionId: string,
     children: [SplitTransactionChildInput, SplitTransactionChildInput],
@@ -102,6 +104,7 @@ export function EditTransactionModal({
   accountIdentifiers,
   onClose,
   onSave,
+  onLinksChanged,
   onSplit,
   onAddCategory,
   onAddAccountIdentifier,
@@ -129,25 +132,8 @@ export function EditTransactionModal({
         ? "reimbursement"
         : "none",
   );
-  const [selectedReimbursedIds, setSelectedReimbursedIds] = useState<string[]>(
-    (transaction.linkage?.reimbursesAllocations || [])
-      .map((item) => item.transactionId)
-      .filter((id): id is string => typeof id === "string"),
-  );
-  const [reimbursementLinkage, setReimbursementLinkage] =
-    useState<TransactionLinkage | null>(
-      transaction.linkage?.type === "reimbursement"
-        ? ({
-            type: "reimbursement",
-            reimbursesAllocations:
-              transaction.linkage?.reimbursesAllocations || [],
-            leftoverAmount: transaction.linkage?.leftoverAmount,
-            leftoverCategoryId: transaction.linkage?.leftoverCategoryId ?? null,
-          } as TransactionLinkage)
-        : null,
-    );
-  const [isReimbursementSelectorOpen, setIsReimbursementSelectorOpen] =
-    useState(false);
+  const [pickerMode, setPickerMode] = useState<"expenses" | "reimbursements" | null>(null);
+  const [linked, setLinked] = useState(transaction.linkedTransactions);
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
   const [showSplitWarning, setShowSplitWarning] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -164,38 +150,22 @@ export function EditTransactionModal({
           ? "reimbursement"
           : "none",
     );
-    setSelectedReimbursedIds(
-      (transaction.linkage?.reimbursesAllocations || [])
-        .map((item) => item.transactionId)
-        .filter((id): id is string => typeof id === "string"),
-    );
-    setReimbursementLinkage(
-      transaction.linkage?.type === "reimbursement"
-        ? ({
-            type: "reimbursement",
-            reimbursesAllocations:
-              transaction.linkage?.reimbursesAllocations || [],
-            leftoverAmount: transaction.linkage?.leftoverAmount,
-            leftoverCategoryId: transaction.linkage?.leftoverCategoryId ?? null,
-          } as TransactionLinkage)
-        : null,
-    );
-    setIsReimbursementSelectorOpen(false);
+    setPickerMode(null);
+    setLinked(transaction.linkedTransactions);
     setIsSplitModalOpen(false);
     setShowSplitWarning(false);
   }, [transaction]);
 
-  const initialSelectedDbTransactions = useMemo(
+  const savedType = transaction.linkage?.type ?? null;
+  const reimbursedBy = linked?.reimbursedBy || [];
+  const reimburses = linked?.reimburses || [];
+  const reimbursedTotal = useMemo(
     () =>
-      transaction.linkedTransactions?.reimburses.map((linked) => ({
-        id: linked.id,
-        date: linked.date,
-        description: linked.description,
-        label: linked.label,
-        amountIn: linked.amountIn,
-        amountOut: linked.amountOut,
-      })) || [],
-    [transaction.linkedTransactions?.reimburses],
+      reimbursedBy.reduce(
+        (sum, item) => sum + Number(item.reimbursementAmount || 0),
+        0,
+      ),
+    [reimbursedBy],
   );
 
   if (!isOpen) return null;
@@ -214,20 +184,17 @@ export function EditTransactionModal({
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      let linkage: Transaction["linkage"] | undefined = null;
-      if (linkageType === "internal") {
-        linkage = { type: "internal", autoDetected: false };
-      } else if (linkageType === "reimbursement") {
-        linkage = {
-          type: "reimbursement",
-          reimbursesAllocations:
-            reimbursementLinkage?.reimbursesAllocations || [],
-          leftoverAmount: reimbursementLinkage?.leftoverAmount,
-          leftoverCategoryId: reimbursementLinkage?.leftoverCategoryId ?? null,
-        };
-      } else if (transaction.linkage?.type === "reimbursed") {
-        // Preserve existing reimbursed linkage unless explicitly cleared via linkage actions.
-        linkage = undefined;
+      // Only a changed type is sent; links themselves are edited in the picker.
+      const previousType =
+        savedType === "internal" || savedType === "reimbursement" ? savedType : "none";
+      let linkage: Transaction["linkage"] | undefined = undefined;
+      if (linkageType !== previousType) {
+        linkage =
+          linkageType === "internal"
+            ? { type: "internal", autoDetected: false }
+            : linkageType === "reimbursement"
+              ? { type: "reimbursement", leftoverCategoryId: null }
+              : null;
       }
       const payload = {
         ...formData,
@@ -266,25 +233,18 @@ export function EditTransactionModal({
       });
       if (linkageType === "reimbursement") {
         setLinkageType("none");
-        setSelectedReimbursedIds([]);
       }
     }
   };
 
-  const handleOpenReimbursementSelector = () => {
+  const handleReimbursementClick = () => {
     if (!parseAmount(formData.amountIn)) return;
-    setIsReimbursementSelectorOpen(true);
-  };
-
-  const handleConfirmReimbursement = (linkage: TransactionLinkage) => {
-    setReimbursementLinkage(linkage);
-    setSelectedReimbursedIds(
-      (linkage.reimbursesAllocations || [])
-        .map((item) => item.transactionId)
-        .filter((id): id is string => typeof id === "string"),
-    );
+    if (savedType === "reimbursement") {
+      setLinkageType("reimbursement");
+      setPickerMode("expenses");
+      return;
+    }
     setLinkageType("reimbursement");
-    setIsReimbursementSelectorOpen(false);
   };
 
   const handleOpenSplitModal = () => {
@@ -431,7 +391,7 @@ export function EditTransactionModal({
               <Button
                 type="button"
                 variant={linkageType === "reimbursement" ? "success" : "secondary"}
-                onClick={handleOpenReimbursementSelector}
+                onClick={handleReimbursementClick}
                 leftIcon={<Receipt className="h-4 w-4" />}
                 disabled={!parseAmount(formData.amountIn)}
               >
@@ -451,12 +411,37 @@ export function EditTransactionModal({
                 Reimbursement is available only for positive inflow transactions.
               </p>
             )}
-            {linkageType === "reimbursement" && (
+            {linkageType === "reimbursement" && savedType === "reimbursement" && (
               <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
-                Linked reimbursements: {selectedReimbursedIds.length}. Click
-                "Reimbursement" to edit selections.
+                Pays back {reimburses.length}{" "}
+                {reimburses.length === 1 ? "expense" : "expenses"}. Click
+                &quot;Reimbursement&quot; to change them.
               </p>
             )}
+            {linkageType === "reimbursement" && savedType !== "reimbursement" && (
+              <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
+                Save to mark this as a reimbursement, then open it again to
+                choose what it pays back.
+              </p>
+            )}
+            {parseAmount(formData.amountOut) && linkageType === "none" ? (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-stroke px-3 py-2 dark:border-dark-3">
+                <p className="text-xs text-dark-5 dark:text-dark-6">
+                  {reimbursedBy.length
+                    ? `Reimbursed $${reimbursedTotal.toFixed(2)} by ${reimbursedBy.length} ${reimbursedBy.length === 1 ? "transaction" : "transactions"}`
+                    : "Not reimbursed"}
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  leftIcon={<Receipt className="h-4 w-4" />}
+                  onClick={() => setPickerMode("reimbursements")}
+                >
+                  Reimbursed by…
+                </Button>
+              </div>
+            ) : null}
           </div>
 
           {/* Account Identifier */}
@@ -589,44 +574,21 @@ export function EditTransactionModal({
         </div>
       </div>
 
-      <ReimbursementSelectorModal
-        isOpen={isReimbursementSelectorOpen}
-        onClose={() => setIsReimbursementSelectorOpen(false)}
-        onConfirm={handleConfirmReimbursement}
-        currentIndex={0}
-        transactions={[
-          {
-            date: formData.date,
-            description: formData.description,
-            label: formData.label,
-            categoryId: formData.category?.id,
-            amountIn: parseAmount(formData.amountIn) ?? undefined,
-            amountOut: parseAmount(formData.amountOut) ?? undefined,
-            balance: parseAmount(formData.balance) ?? undefined,
-            accountIdentifier: formData.accountIdentifier || undefined,
-            metadata: formData.metadata || {},
-            linkage: null,
-          },
-        ]}
-        includeCurrentImport={false}
-        excludeTransactionId={transaction.id}
-        currentLinkage={{
-          type: "reimbursement",
-          reimbursesAllocations:
-            reimbursementLinkage?.reimbursesAllocations ||
-            formData.linkage?.reimbursesAllocations ||
-            [],
-          leftoverAmount:
-            reimbursementLinkage?.leftoverAmount ??
-            formData.linkage?.leftoverAmount,
-          leftoverCategoryId:
-            reimbursementLinkage?.leftoverCategoryId ??
-            formData.linkage?.leftoverCategoryId ??
-            null,
+      <ReimbursementLinkPicker
+        isOpen={pickerMode !== null}
+        subject={{ transactionId: transaction.id }}
+        mode={pickerMode || "expenses"}
+        subjectTitle={transaction.label || transaction.description}
+        categories={pickerMode === "expenses" ? categories : undefined}
+        initialLeftoverCategoryId={transaction.linkage?.leftoverCategoryId ?? null}
+        onClose={() => setPickerMode(null)}
+        onSaved={async ({ warnings }) => {
+          setPickerMode(null);
+          const fresh = await getLinkedTransactions(transaction.id).catch(() => null);
+          if (fresh)
+            setLinked({ reimburses: fresh.reimburses || [], reimbursedBy: fresh.reimbursedBy || [] });
+          await onLinksChanged?.(warnings);
         }}
-        categories={categories}
-        currentReimbursementId={transaction.id}
-        initialSelectedDbTransactions={initialSelectedDbTransactions}
       />
 
       <SplitTransactionModal

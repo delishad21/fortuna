@@ -154,3 +154,13 @@ export async function commitAgentDraft(draftId: string, confirmationToken: strin
     body: JSON.stringify({ confirmationToken, confirmed: true }),
   });
 }
+
+/** Commit several staged imports at once; links between them are kept. Nothing is saved if any fails. */
+export async function commitAgentDraftSelection(
+  items: Array<{ draftId: string; confirmationToken: string }>,
+) {
+  return request<{ success: boolean; results: Array<Record<string, any>> }>(
+    "/api/agent/drafts/commit-selection",
+    { method: "POST", body: JSON.stringify({ items, confirmed: true }) },
+  );
+}
