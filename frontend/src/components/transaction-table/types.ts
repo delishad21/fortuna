@@ -130,6 +130,8 @@ export interface TransactionTableProps {
   onBack?: () => void;
   onLinkageChange?: (index: number, linkage: TransactionLinkage | null) => void;
   onOpenReimbursementSelector?: (index: number) => void;
+  /** Money-out rows: choose the reimbursements that paid this expense back. */
+  onOpenReimbursedBySelector?: (index: number) => void;
   onOpenSplitTransaction?: (index: number) => void;
   amountInHeader?: string;
   amountOutHeader?: string;

@@ -6,27 +6,52 @@ import {
   useRef,
   useCallback,
   useEffect,
+  useMemo,
   memo,
 } from "react";
-import type { KeyboardEvent, FormEvent } from "react";
+import type { KeyboardEvent, FormEvent, ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowRight,
   ArrowRightToLine,
   ChevronRight,
   ChevronDown,
-  Filter,
-  X,
 } from "lucide-react";
 import { CategorySelect } from "@/components/ui/CategorySelect";
 import { DatePicker } from "@/components/ui/DatePicker";
 import { Checkbox } from "@/components/ui/Checkbox";
-import { SearchBar } from "@/components/ui/SearchBar";
-import { Select } from "@/components/ui/Select";
 import { HoverTooltip } from "@/components/ui/HoverTooltip";
 import { resolveTransactionAccountColor } from "@/components/import/importAccountMapping";
 import { ResizableHeader } from "./ResizableHeader";
 import { TransactionTableToolbar } from "./TransactionTableToolbar";
+import { TransactionTableFilterBar } from "./TransactionTableFilterBar";
+import {
+  AmountRangeFilter,
+  CategoryChecklistFilter,
+  ColumnFilterMenu,
+  DateRangeFilter,
+} from "./ColumnFilterMenu";
+import {
+  EMPTY_TABLE_VIEW,
+  SORT_LABELS,
+  applyTableView,
+  buildCategoryFilterOptions,
+  getSortState,
+  isColumnFiltered,
+  isFundingInTopup as resolveIsFundingInTopup,
+  isTableViewActive,
+  needsReview,
+  resetColumnFilter,
+  resolveDisplayCategoryId,
+  updateSorts,
+} from "./columnFilters";
+import type {
+  AmountFilter,
+  CategoryContext,
+  FilterableColumn,
+  TableRow,
+  TableViewState,
+} from "./columnFilters";
 import { DuplicateWarningBanner } from "./DuplicateWarningBanner";
 import { TransactionRowExpanded } from "./TransactionRowExpanded";
 import { DuplicateMatchList } from "./DuplicateMatchList";
@@ -207,6 +232,7 @@ function TransactionTableComponent({
   onBack,
   onLinkageChange,
   onOpenReimbursementSelector,
+  onOpenReimbursedBySelector,
   onOpenSplitTransaction,
   amountInHeader = "In",
   amountOutHeader = "Out",
@@ -218,58 +244,77 @@ function TransactionTableComponent({
   primaryActionLabel,
 }: TransactionTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
-  const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
-  const [tableSearch, setTableSearch] = useState("");
-  const [tableCategoryFilter, setTableCategoryFilter] = useState("");
-  const [tableTypeFilter, setTableTypeFilter] = useState<"all" | "in" | "out">(
-    "all",
-  );
-  const [tableSuggestionFilter, setTableSuggestionFilter] = useState<
-    "all" | "auto" | "unresolved"
-  >("all");
-  const [tableDateFrom, setTableDateFrom] = useState("");
-  const [tableDateTo, setTableDateTo] = useState("");
+  // Column filters, sorts, search and toggles. Lives here so it resets when
+  // the review screen unmounts.
+  const [tableView, setTableView] = useState<TableViewState>(EMPTY_TABLE_VIEW);
+  const [openFilterColumn, setOpenFilterColumn] =
+    useState<FilterableColumn | null>(null);
+  const [reapplyToken, setReapplyToken] = useState(0);
   const [isTableReady, setIsTableReady] = useState(false);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const rowVirtualizerMeasureRef = useRef<(() => void) | null>(null);
   const { columnWidths, handleResizeStart } = useColumnResize(
     DEFAULT_COLUMN_WIDTHS,
   );
-  const internalCategory = categories.find(
-    (category) => category.name === "Internal",
-  );
-  const reimbursementCategory = categories.find(
-    (category) => category.name === "Reimbursement",
-  );
-  const displayCategories = [
-    ...categories,
-    ...(internalCategory
-      ? []
-      : [
+  const { internalCategoryId, reimbursementCategoryId, displayCategories } =
+    useMemo(() => {
+      const internalCategory = categories.find(
+        (category) => category.name === "Internal",
+      );
+      const reimbursementCategory = categories.find(
+        (category) => category.name === "Reimbursement",
+      );
+      return {
+        internalCategoryId: internalCategory?.id ?? "__internal__",
+        reimbursementCategoryId:
+          reimbursementCategory?.id ?? "__reimbursement__",
+        displayCategories: [
+          ...categories,
+          ...(internalCategory
+            ? []
+            : [
+                {
+                  id: "__internal__",
+                  name: "Internal",
+                  color: "#9ca3af",
+                },
+              ]),
+          ...(reimbursementCategory
+            ? []
+            : [
+                {
+                  id: "__reimbursement__",
+                  name: "Reimbursement",
+                  color: "#22c55e",
+                },
+              ]),
           {
-            id: "__internal__",
-            name: "Internal",
-            color: "#9ca3af",
-          },
-        ]),
-    ...(reimbursementCategory
-      ? []
-      : [
-          {
-            id: "__reimbursement__",
-            name: "Reimbursement",
+            id: "__funding_in__",
+            name: "Funding In",
             color: "#22c55e",
           },
-        ]),
-    {
-      id: "__funding_in__",
-      name: "Funding In",
-      color: "#22c55e",
-    },
-  ];
+        ],
+      };
+    }, [categories]);
   const isTripParser =
     parsedData?.parserId === "revolut_statement" ||
     parsedData?.parserId === "youtrip_statement";
+  const categoryContext = useMemo<CategoryContext>(
+    () => ({
+      internalCategoryId,
+      reimbursementCategoryId,
+      isTripParser,
+      categoryNames: new Map(
+        displayCategories.map((category) => [category.id, category.name]),
+      ),
+    }),
+    [
+      internalCategoryId,
+      reimbursementCategoryId,
+      isTripParser,
+      displayCategories,
+    ],
+  );
 
   const toggleRowExpanded = (index: number) => {
     const newExpanded = new Set(expandedRows);
@@ -320,6 +365,68 @@ function TransactionTableComponent({
     rowVirtualizerMeasureRef.current?.();
   }, []);
 
+  // Rows the table could show before any filters (duplicate mode narrows them).
+  const baseRows = useMemo<TableRow[]>(
+    () =>
+      transactions
+        .map((transaction, index) => ({ transaction, index }))
+        .filter(({ index }) =>
+          showDuplicatesOnly ? !!duplicates?.has(index) : true,
+        ),
+    [transactions, showDuplicatesOnly, duplicates],
+  );
+  const isViewActive = isTableViewActive(tableView);
+  const liveRows = useMemo(
+    () =>
+      isViewActive
+        ? applyTableView(baseRows, tableView, categoryContext)
+        : baseRows,
+    [isViewActive, baseRows, tableView, categoryContext],
+  );
+  const liveIndices = useMemo(
+    () => liveRows.map(({ index }) => index),
+    [liveRows],
+  );
+
+  // Like a spreadsheet, filters and sorts are applied when they change (or
+  // the row set changes), not on every cell edit: otherwise a row would jump
+  // or vanish while it is being typed into. Edits that change what matches
+  // surface a "Reapply filters" action instead.
+  const [appliedView, setAppliedView] = useState(() => ({
+    view: tableView,
+    rowCount: transactions.length,
+    showDuplicatesOnly,
+    duplicates,
+    token: reapplyToken,
+    indices: liveIndices,
+    version: 0,
+  }));
+  const shouldReapply =
+    appliedView.view !== tableView ||
+    appliedView.rowCount !== transactions.length ||
+    appliedView.showDuplicatesOnly !== showDuplicatesOnly ||
+    appliedView.duplicates !== duplicates ||
+    appliedView.token !== reapplyToken;
+  if (shouldReapply) {
+    // Render-phase update (React's "adjust state when props change" pattern).
+    setAppliedView({
+      view: tableView,
+      rowCount: transactions.length,
+      showDuplicatesOnly,
+      duplicates,
+      token: reapplyToken,
+      indices: liveIndices,
+      version: appliedView.version + 1,
+    });
+  }
+  const appliedIndices =
+    !isViewActive || shouldReapply ? liveIndices : appliedView.indices;
+  const isViewStale =
+    isViewActive &&
+    !shouldReapply &&
+    (appliedIndices.length !== liveIndices.length ||
+      appliedIndices.some((index, position) => index !== liveIndices[position]));
+
   useEffect(() => {
     const raf = requestAnimationFrame(resizeVisibleDescriptionRows);
     return () => cancelAnimationFrame(raf);
@@ -327,12 +434,8 @@ function TransactionTableComponent({
     resizeVisibleDescriptionRows,
     transactions.length,
     showDuplicatesOnly,
-    tableSearch,
-    tableCategoryFilter,
-    tableTypeFilter,
-    tableSuggestionFilter,
-    tableDateFrom,
-    tableDateTo,
+    tableView,
+    appliedView.version,
   ]);
 
   useEffect(() => {
@@ -355,54 +458,134 @@ function TransactionTableComponent({
     };
   }, [resizeVisibleDescriptionRows]);
 
-  const baseVisibleRows = transactions
-    .map((transaction, index) => ({ transaction, index }))
-    .filter(({ index }) =>
-      showDuplicatesOnly ? duplicates?.has(index) : true,
+  // `index` is always the row's ORIGINAL index into `transactions`.
+  const visibleRows = useMemo<TableRow[]>(
+    () =>
+      appliedIndices
+        .filter((index) => index < transactions.length)
+        .map((index) => ({ transaction: transactions[index], index })),
+    [appliedIndices, transactions],
+  );
+  const visibleIndices = useMemo(
+    () => visibleRows.map(({ index }) => index),
+    [visibleRows],
+  );
+
+  const categoryFilterOptions = useMemo(
+    () =>
+      openFilterColumn === "category"
+        ? buildCategoryFilterOptions(
+            baseRows,
+            categoryContext,
+            displayCategories,
+            tableView.columns.hiddenCategoryKeys,
+          )
+        : [],
+    [
+      openFilterColumn,
+      baseRows,
+      categoryContext,
+      displayCategories,
+      tableView.columns.hiddenCategoryKeys,
+    ],
+  );
+  const needsReviewCount = useMemo(
+    () =>
+      baseRows.reduce(
+        (count, { transaction }) => count + (needsReview(transaction) ? 1 : 0),
+        0,
+      ),
+    [baseRows],
+  );
+  const hiddenSelectedCount = useMemo(() => {
+    if (!showSelection || !selectedIndices || selectedIndices.size === 0) {
+      return 0;
+    }
+    if (visibleRows.length === baseRows.length) return 0;
+    const visible = new Set(visibleIndices);
+    return baseRows.reduce(
+      (count, { index }) =>
+        count + (selectedIndices.has(index) && !visible.has(index) ? 1 : 0),
+      0,
     );
+  }, [
+    showSelection,
+    selectedIndices,
+    visibleRows.length,
+    baseRows,
+    visibleIndices,
+  ]);
 
-  const visibleRows = baseVisibleRows.filter(({ transaction }) => {
-    const searchLower = tableSearch.trim().toLowerCase();
-    const matchesSearch =
-      searchLower.length === 0 ||
-      transaction.description.toLowerCase().includes(searchLower) ||
-      (transaction.label || "").toLowerCase().includes(searchLower);
+  const handleSortChange = useCallback(
+    (column: FilterableColumn, direction: "asc" | "desc" | null) => {
+      setTableView((view) => ({
+        ...view,
+        sorts: updateSorts(view.sorts, column, direction),
+      }));
+    },
+    [],
+  );
+  const handleResetColumn = useCallback((column: FilterableColumn) => {
+    setTableView((view) => ({
+      ...view,
+      columns: resetColumnFilter(view.columns, column),
+      sorts: updateSorts(view.sorts, column, null),
+    }));
+  }, []);
+  const updateColumnFilters = useCallback(
+    (patch: Partial<TableViewState["columns"]>) => {
+      setTableView((view) => ({
+        ...view,
+        columns: { ...view.columns, ...patch },
+      }));
+    },
+    [],
+  );
+  const handleResetAllFilters = useCallback(() => {
+    setTableView(EMPTY_TABLE_VIEW);
+    setOpenFilterColumn(null);
+  }, []);
 
-    const matchesCategory =
-      !tableCategoryFilter || transaction.categoryId === tableCategoryFilter;
-
-    const amountIn = Number(transaction.amountIn || 0);
-    const amountOut = Number(transaction.amountOut || 0);
-    const matchesType =
-      tableTypeFilter === "all" ||
-      (tableTypeFilter === "in" && amountIn > 0) ||
-      (tableTypeFilter === "out" && amountOut > 0);
-
-    const isAutoApplied = transaction.suggestionApplied === true;
-    const matchesSuggestion =
-      tableSuggestionFilter === "all" ||
-      (tableSuggestionFilter === "auto" && isAutoApplied) ||
-      (tableSuggestionFilter === "unresolved" &&
-        !isAutoApplied &&
-        !transaction.categoryId &&
-        !transaction.label &&
-        !transaction.linkage);
-
-    const txDate = transaction.date || "";
-    const matchesDateFrom = !tableDateFrom || txDate >= tableDateFrom;
-    const matchesDateTo = !tableDateTo || txDate <= tableDateTo;
-
+  const renderColumnMenu = (
+    column: FilterableColumn,
+    columnLabel: string,
+    filterContent?: ReactNode,
+  ) => {
+    const sortState = getSortState(tableView.sorts, column);
     return (
-      matchesSearch &&
-      matchesCategory &&
-      matchesType &&
-      matchesSuggestion &&
-      matchesDateFrom &&
-      matchesDateTo
+      <ColumnFilterMenu
+        columnLabel={columnLabel}
+        isOpen={openFilterColumn === column}
+        onOpenChange={(open) =>
+          setOpenFilterColumn((current) =>
+            open ? column : current === column ? null : current,
+          )
+        }
+        sortLabels={SORT_LABELS[column]}
+        sortDirection={sortState?.direction ?? null}
+        sortPriority={sortState?.priority ?? null}
+        sortCount={tableView.sorts.length}
+        isFiltered={isColumnFiltered(column, tableView.columns)}
+        onSortChange={(direction) => handleSortChange(column, direction)}
+        onReset={() => handleResetColumn(column)}
+      >
+        {filterContent}
+      </ColumnFilterMenu>
     );
-  });
+  };
 
-  const visibleIndices = visibleRows.map(({ index }) => index);
+  const renderAmountFilter = (
+    key: "amountIn" | "amountOut",
+    onlyWithValueLabel: string,
+  ) => (
+    <AmountRangeFilter
+      filter={tableView.columns[key]}
+      onlyWithValueLabel={onlyWithValueLabel}
+      onChange={(filter: AmountFilter) =>
+        updateColumnFilters({ [key]: filter })
+      }
+    />
+  );
   const rowVirtualizer = useVirtualizer({
     count: visibleRows.length,
     getScrollElement: () => tableContainerRef.current,
@@ -506,6 +689,25 @@ function TransactionTableComponent({
         primaryActionLabel={primaryActionLabel}
       />
 
+      <TransactionTableFilterBar
+        search={tableView.search}
+        onSearchChange={(search) =>
+          setTableView((view) => ({ ...view, search }))
+        }
+        needsReviewOnly={tableView.needsReviewOnly}
+        onNeedsReviewChange={(needsReviewOnly) =>
+          setTableView((view) => ({ ...view, needsReviewOnly }))
+        }
+        needsReviewCount={needsReviewCount}
+        visibleCount={visibleRows.length}
+        totalCount={baseRows.length}
+        hiddenSelectedCount={hiddenSelectedCount}
+        isActive={isViewActive}
+        onReset={handleResetAllFilters}
+        isStale={isViewStale}
+        onReapply={() => setReapplyToken((token) => token + 1)}
+      />
+
       {showDuplicatesOnly && duplicates && duplicates.size > 0 && (
         <DuplicateWarningBanner
           duplicateCount={duplicates.size}
@@ -566,124 +768,29 @@ function TransactionTableComponent({
                 </div>
               </th>
               <th
-                className="py-3 px-2 font-medium text-dark dark:text-white relative"
+                className="py-3 px-2 font-medium text-dark dark:text-white"
                 style={{ width: columnWidths.expand }}
-              >
-                <div className="flex items-center justify-center">
-                  <button
-                    type="button"
-                    onClick={() => setIsFilterMenuOpen((prev) => !prev)}
-                    className="p-1 rounded hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors"
-                    title="Table filters"
-                  >
-                    <Filter className="h-4 w-4" />
-                  </button>
-                </div>
-                {isFilterMenuOpen && (
-                  <div className="absolute left-2 top-11 z-30 w-[300px] rounded-lg border border-stroke bg-white p-3 shadow-card dark:border-dark-3 dark:bg-dark-2">
-                    <div className="mb-2 flex items-center justify-between">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                        Filter rows
-                      </p>
-                      <button
-                        type="button"
-                        className="p-1 rounded hover:bg-gray-2 dark:hover:bg-dark-3"
-                        onClick={() => setIsFilterMenuOpen(false)}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                    <div className="space-y-2">
-                      <SearchBar
-                        value={tableSearch}
-                        onChange={setTableSearch}
-                        placeholder="Search description or label"
-                      />
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="h-11 rounded-lg border border-stroke bg-white dark:border-dark-3 dark:bg-dark-2">
-                          <DatePicker
-                            value={tableDateFrom}
-                            onChange={setTableDateFrom}
-                            className="h-full"
-                          />
-                        </div>
-                        <div className="h-11 rounded-lg border border-stroke bg-white dark:border-dark-3 dark:bg-dark-2">
-                          <DatePicker
-                            value={tableDateTo}
-                            onChange={setTableDateTo}
-                            className="h-full"
-                          />
-                        </div>
-                      </div>
-                      <Select
-                        value={tableCategoryFilter}
-                        onChange={setTableCategoryFilter}
-                        options={[
-                          { value: "", label: "All categories" },
-                          ...displayCategories.map((category) => ({
-                            value: category.id,
-                            label: category.name,
-                          })),
-                        ]}
-                        className="w-full"
-                        buttonClassName="w-full"
-                        menuPlacement="auto"
-                      />
-                      <Select
-                        value={tableTypeFilter}
-                        onChange={(value) =>
-                          setTableTypeFilter(value as "all" | "in" | "out")
-                        }
-                        options={[
-                          { value: "all", label: "All types" },
-                          { value: "in", label: "In only" },
-                          { value: "out", label: "Out only" },
-                        ]}
-                        className="w-full"
-                        buttonClassName="w-full"
-                        menuPlacement="auto"
-                      />
-                      <Select
-                        value={tableSuggestionFilter}
-                        onChange={(value) =>
-                          setTableSuggestionFilter(
-                            value as "all" | "auto" | "unresolved",
-                          )
-                        }
-                        options={[
-                          { value: "all", label: "All rule states" },
-                          { value: "auto", label: "Auto-applied" },
-                          { value: "unresolved", label: "Unresolved" },
-                        ]}
-                        className="w-full"
-                        buttonClassName="w-full"
-                        menuPlacement="auto"
-                      />
-                      <button
-                        type="button"
-                        className="text-xs text-primary hover:underline"
-                        onClick={() => {
-                          setTableSearch("");
-                          setTableCategoryFilter("");
-                          setTableTypeFilter("all");
-                          setTableSuggestionFilter("all");
-                          setTableDateFrom("");
-                          setTableDateTo("");
-                        }}
-                      >
-                        Clear filters
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </th>
+              />
               <ResizableHeader
                 columnKey="date"
                 columnWidth={columnWidths.date}
                 minWidth={MIN_COLUMN_WIDTHS.date}
                 onResizeStart={handleResizeStart}
               >
-                Date
+                <div className="flex items-center justify-between gap-1">
+                  <span className="truncate">Date</span>
+                  {renderColumnMenu(
+                    "date",
+                    "Date",
+                    <DateRangeFilter
+                      from={tableView.columns.dateFrom}
+                      to={tableView.columns.dateTo}
+                      onChange={({ from, to }) =>
+                        updateColumnFilters({ dateFrom: from, dateTo: to })
+                      }
+                    />,
+                  )}
+                </div>
               </ResizableHeader>
               <ResizableHeader
                 columnKey="description"
@@ -691,17 +798,21 @@ function TransactionTableComponent({
                 minWidth={MIN_COLUMN_WIDTHS.description}
                 onResizeStart={handleResizeStart}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span>Description</span>
-                  {!showDuplicatesOnly && (
-                    <button
-                      onClick={handleCopyAllDescriptionsToLabels}
-                      className="p-1 hover:bg-gray-2 dark:hover:bg-dark-3 rounded transition-colors"
-                      title="Copy all descriptions to labels"
-                    >
-                      <ArrowRightToLine className="h-3.5 w-3.5 text-primary" />
-                    </button>
-                  )}
+                <div className="flex items-center justify-between gap-1">
+                  <span className="truncate">Description</span>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {!showDuplicatesOnly && (
+                      <button
+                        type="button"
+                        onClick={handleCopyAllDescriptionsToLabels}
+                        className="p-1 hover:bg-gray-2 dark:hover:bg-dark-3 rounded transition-colors"
+                        title="Copy all descriptions to labels"
+                      >
+                        <ArrowRightToLine className="h-3.5 w-3.5 text-primary" />
+                      </button>
+                    )}
+                    {renderColumnMenu("description", "Description")}
+                  </div>
                 </div>
               </ResizableHeader>
               <ResizableHeader
@@ -710,7 +821,10 @@ function TransactionTableComponent({
                 minWidth={MIN_COLUMN_WIDTHS.label}
                 onResizeStart={handleResizeStart}
               >
-                Label
+                <div className="flex items-center justify-between gap-1">
+                  <span className="truncate">Label</span>
+                  {renderColumnMenu("label", "Label")}
+                </div>
               </ResizableHeader>
               <ResizableHeader
                 columnKey="category"
@@ -718,7 +832,20 @@ function TransactionTableComponent({
                 minWidth={MIN_COLUMN_WIDTHS.category}
                 onResizeStart={handleResizeStart}
               >
-                Category
+                <div className="flex items-center justify-between gap-1">
+                  <span className="truncate">Category</span>
+                  {renderColumnMenu(
+                    "category",
+                    "Category",
+                    <CategoryChecklistFilter
+                      options={categoryFilterOptions}
+                      hiddenKeys={tableView.columns.hiddenCategoryKeys}
+                      onChange={(hiddenCategoryKeys) =>
+                        updateColumnFilters({ hiddenCategoryKeys })
+                      }
+                    />,
+                  )}
+                </div>
               </ResizableHeader>
               <ResizableHeader
                 columnKey="amountIn"
@@ -726,7 +853,14 @@ function TransactionTableComponent({
                 minWidth={MIN_COLUMN_WIDTHS.amountIn}
                 onResizeStart={handleResizeStart}
               >
-                {amountInHeader}
+                <div className="flex items-center justify-between gap-1">
+                  <span className="truncate">{amountInHeader}</span>
+                  {renderColumnMenu(
+                    "amountIn",
+                    amountInHeader,
+                    renderAmountFilter("amountIn", "Only rows with money in"),
+                  )}
+                </div>
               </ResizableHeader>
               <ResizableHeader
                 columnKey="amountOut"
@@ -734,7 +868,14 @@ function TransactionTableComponent({
                 minWidth={MIN_COLUMN_WIDTHS.amountOut}
                 resizable={false}
               >
-                {amountOutHeader}
+                <div className="flex items-center justify-between gap-1">
+                  <span className="truncate">{amountOutHeader}</span>
+                  {renderColumnMenu(
+                    "amountOut",
+                    amountOutHeader,
+                    renderAmountFilter("amountOut", "Only rows with money out"),
+                  )}
+                </div>
               </ResizableHeader>
             </tr>
           </thead>
@@ -762,30 +903,20 @@ function TransactionTableComponent({
                 pendingAccountColors.has(transaction.accountIdentifier)
               );
 
-              const internalCategoryId = internalCategory?.id ?? "__internal__";
-              const reimbursementCategoryId =
-                reimbursementCategory?.id ?? "__reimbursement__";
               const linkageType = transaction.linkage?.type;
-              const transactionType = String(
-                transaction.metadata?.transactionType || "",
-              ).toLowerCase();
               const metadata =
                 transaction.metadata && typeof transaction.metadata === "object"
                   ? (transaction.metadata as Record<string, unknown>)
                   : {};
-              const fundingInDisabled = metadata.fundingInDisabled === true;
-              const isFundingInTopup =
-                isTripParser &&
-                (transaction.entryTypeOverride === "funding_in" ||
-                  (transactionType === "topup" && !fundingInDisabled));
-              const displayCategoryId =
-                linkageType === "internal"
-                  ? internalCategoryId
-                  : linkageType === "reimbursement"
-                    ? reimbursementCategoryId
-                    : isFundingInTopup
-                      ? "__funding_in__"
-                      : transaction.categoryId;
+              const isFundingInTopup = resolveIsFundingInTopup(
+                transaction,
+                isTripParser,
+              );
+              // Shared with the category column filter/sort.
+              const displayCategoryId = resolveDisplayCategoryId(
+                transaction,
+                categoryContext,
+              );
               const isReimbursementLinkage =
                 linkageType === "reimbursement" || linkageType === "reimbursed";
               const isLockedByLinkage =
@@ -919,7 +1050,10 @@ function TransactionTableComponent({
                     >
                       <div className="flex min-h-[44px] items-center justify-center">
                         <button
+                          type="button"
                           onClick={() => toggleRowExpanded(index)}
+                          aria-expanded={expandedRows.has(index)}
+                          aria-label={`${expandedRows.has(index) ? "Hide" : "Show"} details for ${transaction.label || transaction.description}`}
                           className="p-1 hover:bg-gray-2 dark:hover:bg-dark-3 rounded"
                         >
                           {expandedRows.has(index) ? (
@@ -1123,6 +1257,7 @@ function TransactionTableComponent({
                             if (
                               allowReservedCategorySelection &&
                               transaction.linkage &&
+                              transaction.linkage.type !== "reimbursed" &&
                               onLinkageChange
                             ) {
                               onLinkageChange(index, null);
@@ -1259,6 +1394,9 @@ function TransactionTableComponent({
                       linkedCount={
                         transaction.linkage?.reimbursesAllocations?.length || 0
                       }
+                      reimbursedByCount={
+                        transaction.linkage?.reimbursedByAllocations?.length || 0
+                      }
                       accountIdentifiers={accountIdentifiers}
                       isNewAccount={isNewRowAccount}
                       renderExpandedActions={
@@ -1285,6 +1423,11 @@ function TransactionTableComponent({
                       onSelectReimbursement={
                         onOpenReimbursementSelector
                           ? () => onOpenReimbursementSelector(index)
+                          : undefined
+                      }
+                      onSelectReimbursedBy={
+                        onOpenReimbursedBySelector
+                          ? () => onOpenReimbursedBySelector(index)
                           : undefined
                       }
                       onSplitTransaction={

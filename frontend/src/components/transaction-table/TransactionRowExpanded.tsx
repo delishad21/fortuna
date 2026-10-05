@@ -17,6 +17,7 @@ interface TransactionRowExpandedProps {
   showOptions?: boolean;
   disabled?: boolean;
   linkedCount?: number;
+  reimbursedByCount?: number;
   accountIdentifiers?: AccountIdentifier[];
   isNewAccount?: boolean;
   renderExpandedActions?: () => ReactNode;
@@ -24,6 +25,7 @@ interface TransactionRowExpandedProps {
   onAddAccountIdentifier?: () => void;
   onLinkageChange?: (linkage: TransactionLinkage | null) => void;
   onSelectReimbursement?: () => void;
+  onSelectReimbursedBy?: () => void;
   onSplitTransaction?: () => void;
 }
 
@@ -34,6 +36,7 @@ export function TransactionRowExpanded({
   showOptions = false,
   disabled = false,
   linkedCount = 0,
+  reimbursedByCount = 0,
   accountIdentifiers = [],
   isNewAccount = false,
   renderExpandedActions,
@@ -41,9 +44,14 @@ export function TransactionRowExpanded({
   onAddAccountIdentifier,
   onLinkageChange,
   onSelectReimbursement,
+  onSelectReimbursedBy,
   onSplitTransaction,
 }: TransactionRowExpandedProps) {
   const canMarkReimbursement = (transaction.amountIn ?? 0) > 0;
+  const canBeReimbursed =
+    Number(transaction.amountOut ?? 0) > 0 &&
+    linkage?.type !== "internal" &&
+    linkage?.type !== "reimbursement";
   const suggestionReason = String(transaction.metadata?.suggestionReason || "");
   const reviewStatus = String(transaction.metadata?.reviewStatus || "");
 
@@ -59,12 +67,9 @@ export function TransactionRowExpanded({
     }
   };
 
+  // Marks the row (when needed) and opens the picker; "Clear" unmarks it.
   const handleMarkReimbursement = () => {
-    if (linkage?.type === "reimbursement") {
-      onLinkageChange?.(null);
-    } else {
-      onSelectReimbursement?.();
-    }
+    onSelectReimbursement?.();
   };
 
   const handleClearLinkage = () => {
@@ -110,7 +115,11 @@ export function TransactionRowExpanded({
                         : "bg-green/10 text-green dark:text-green-light"
                     }`}
                   >
-                    {linkage.type === "internal" ? "Internal" : "Reimbursement"}
+                    {linkage.type === "internal"
+                      ? "Internal"
+                      : linkage.type === "reimbursed"
+                        ? "Reimbursed"
+                        : "Reimbursement"}
                     {linkage.autoDetected && " (Auto)"}
                   </span>
                 )}
@@ -161,7 +170,21 @@ export function TransactionRowExpanded({
                     : "Mark as Reimbursement"}
                 </Button>
 
-                {linkage && (
+                {onSelectReimbursedBy && canBeReimbursed && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={onSelectReimbursedBy}
+                    disabled={disabled}
+                    leftIcon={<Receipt className="w-4 h-4" />}
+                  >
+                    {reimbursedByCount > 0
+                      ? `Reimbursed by ${reimbursedByCount}`
+                      : "Reimbursed by…"}
+                  </Button>
+                )}
+
+                {linkage && linkage.type !== "reimbursed" && (
                   <Button
                     variant="ghost"
                     size="sm"
