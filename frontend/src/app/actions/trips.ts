@@ -5,6 +5,45 @@ import { auth } from "@/lib/actionAuth";
 const DATA_SERVICE_URL =
   process.env.DATA_SERVICE_URL || "http://localhost:4001";
 
+/**
+ * Next.js swaps a thrown server action error for a generic message in production,
+ * so trip mutations return the data-service message instead. Call them through
+ * `@/lib/tripMutations`, which throws it again on the caller's side.
+ */
+export type TripActionResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string };
+
+async function settle<T>(run: () => Promise<T>): Promise<TripActionResult<T>> {
+  try {
+    return { ok: true, data: await run() };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Something went wrong.",
+    };
+  }
+}
+
+export type TripFundingSourceType =
+  | "manual"
+  | "transfer"
+  | "bank_wallet_topup"
+  | "opening_balance";
+
+export interface TripFundingOutInput {
+  // "wallet" moves money into another wallet of the same trip.
+  destinationType?: "bank" | "trip" | "wallet" | "external";
+  destinationTripId?: string | null;
+  destinationWalletId?: string | null;
+  bankTransactionId?: string | null;
+  destinationCurrency?: string | null;
+  destinationAmount?: number | null;
+  fxRate?: number | null;
+  feeAmount?: number | null;
+  feeCurrency?: string | null;
+}
+
 export interface Trip {
   id: string;
   name: string;
@@ -273,6 +312,17 @@ export interface TripAnalytics {
   }>;
 }
 
+export interface TripImportResult {
+  importedSpendings: number;
+  importedReimbursements: number;
+  importedFundings?: number;
+  importedTransfers?: number;
+  importedFees?: number;
+  // Rows already in this trip from an earlier import.
+  skippedDuplicates?: number;
+  skipped: number;
+}
+
 export async function getTrips(): Promise<Trip[]> {
   const session = await auth();
   if (!session?.user?.id) return [];
@@ -289,12 +339,13 @@ export async function getTrips(): Promise<Trip[]> {
   return data.trips || [];
 }
 
-export async function createTrip(input: {
+async function createTripRequest(input: {
   name: string;
   coverImageUrl?: string | null;
   baseCurrency: string;
   startDate: string;
   endDate?: string | null;
+  status?: string | null;
   notes?: string | null;
 }): Promise<Trip> {
   const session = await auth();
@@ -310,6 +361,7 @@ export async function createTrip(input: {
       baseCurrency: input.baseCurrency,
       startDate: input.startDate,
       ...(input.endDate ? { endDate: input.endDate } : {}),
+      ...(input.status ? { status: input.status } : {}),
       ...(input.notes ? { notes: input.notes } : {}),
     }),
   });
@@ -341,7 +393,7 @@ export async function getTrip(tripId: string): Promise<Trip> {
   return data.trip;
 }
 
-export async function updateTrip(
+async function updateTripRequest(
   tripId: string,
   input: {
     name?: string;
@@ -374,7 +426,7 @@ export async function updateTrip(
   return data.trip;
 }
 
-export async function deleteTrip(tripId: string): Promise<{ success: boolean }> {
+async function deleteTripRequest(tripId: string): Promise<{ success: boolean }> {
   const session = await auth();
   if (!session?.user?.id) throw new Error("Not authenticated");
 
@@ -411,10 +463,10 @@ export async function getTripFundings(tripId: string): Promise<TripFunding[]> {
   return data.fundings || [];
 }
 
-export async function createTripFunding(tripId: string, input: {
+async function createTripFundingRequest(tripId: string, input: {
   walletId?: string | null;
   bankTransactionId?: string | null;
-  sourceType: string;
+  sourceType: TripFundingSourceType;
   sourceCurrency: string;
   sourceAmount: number;
   destinationCurrency: string;
@@ -422,6 +474,8 @@ export async function createTripFunding(tripId: string, input: {
   fxRate?: number | null;
   feeAmount?: number | null;
   feeCurrency?: string | null;
+  // Required when neither currency is the trip's base currency.
+  baseAmount?: number | null;
   metadata?: Record<string, any> | null;
 }): Promise<TripFundingMutationResult> {
   const session = await auth();
@@ -448,7 +502,7 @@ export async function createTripFunding(tripId: string, input: {
   };
 }
 
-export async function reviewTripFundingMatch(
+async function reviewTripFundingMatchRequest(
   tripId: string,
   fundingId: string,
   input: {
@@ -481,7 +535,7 @@ export async function reviewTripFundingMatch(
   return data.funding;
 }
 
-export async function mergeTripFunding(
+async function mergeTripFundingRequest(
   tripId: string,
   importedFundingId: string,
   targetFundingId: string,
@@ -510,7 +564,7 @@ export async function mergeTripFunding(
   return data.funding;
 }
 
-export async function updateTripFunding(
+async function updateTripFundingRequest(
   tripId: string,
   fundingId: string,
   input: {
@@ -522,6 +576,7 @@ export async function updateTripFunding(
     fxRate?: number | null;
     feeAmount?: number | null;
     feeCurrency?: string | null;
+    baseAmount?: number | null;
     metadata?: Record<string, any> | null;
   },
 ): Promise<TripFundingMutationResult> {
@@ -552,7 +607,7 @@ export async function updateTripFunding(
   };
 }
 
-export async function deleteTripFunding(
+async function deleteTripFundingRequest(
   tripId: string,
   fundingId: string,
 ): Promise<{ success: boolean; propagationTrace: TripPropagationTrace | null }> {
@@ -599,7 +654,7 @@ export async function getWallets(tripId: string): Promise<Wallet[]> {
   return data.wallets || [];
 }
 
-export async function createWallet(
+async function createWalletRequest(
   tripId: string,
   input: { name: string; currency: string; color?: string | null },
 ) {
@@ -626,7 +681,7 @@ export async function createWallet(
   return data.wallet;
 }
 
-export async function recalculateWalletEntriesToBase(
+async function recalculateWalletEntriesToBaseRequest(
   tripId: string,
   walletId: string,
   input: {
@@ -672,7 +727,7 @@ export async function recalculateWalletEntriesToBase(
   };
 }
 
-export async function importTripSpendings(
+async function importTripSpendingsRequest(
   tripId: string,
   options: {
     walletId?: string | null;
@@ -697,26 +752,13 @@ export async function importTripSpendings(
       } | null;
       amountIn?: number;
       amountOut?: number;
-    fundingOut?: {
+    // Statement imports can't move money into another wallet of the trip.
+    fundingOut?: (TripFundingOutInput & {
       destinationType?: "bank" | "trip" | "external";
-      destinationTripId?: string | null;
-      bankTransactionId?: string | null;
-      destinationCurrency?: string | null;
-      destinationAmount?: number | null;
-      fxRate?: number | null;
-      feeAmount?: number | null;
-      feeCurrency?: string | null;
-    } | null;
+    }) | null;
     metadata?: Record<string, any>;
   }>,
-): Promise<{
-  importedSpendings: number;
-  importedReimbursements: number;
-  importedFundings?: number;
-  importedTransfers?: number;
-  importedFees?: number;
-  skipped: number;
-}> {
+): Promise<TripImportResult> {
   const session = await auth();
   if (!session?.user?.id) throw new Error("Not authenticated");
 
@@ -884,7 +926,7 @@ export async function searchTripEntriesForReimbursement(
   };
 }
 
-export async function createTripReimbursementLink(
+async function createTripReimbursementLinkRequest(
   tripId: string,
   reimbursementEntryId: string,
   payload: {
@@ -916,7 +958,7 @@ export async function createTripReimbursementLink(
   return response.json();
 }
 
-export async function clearTripEntryLinkage(
+async function clearTripEntryLinkageRequest(
   tripId: string,
   entryId: string,
 ) {
@@ -988,22 +1030,13 @@ export async function getSourceTransactionCandidates(
   };
 }
 
-export async function addEntriesFromSourceTransactions(
+async function addEntriesFromSourceTransactionsRequest(
   tripId: string,
   payload: {
     transactionIds: string[];
     categoryId?: string | null;
     entryType?: "spending" | "reimbursement" | "funding_out";
-    fundingOut?: {
-      destinationType?: "bank" | "trip" | "external";
-      destinationTripId?: string | null;
-      bankTransactionId?: string | null;
-      destinationCurrency?: string | null;
-      destinationAmount?: number | null;
-      fxRate?: number | null;
-      feeAmount?: number | null;
-      feeCurrency?: string | null;
-    } | null;
+    fundingOut?: TripFundingOutInput | null;
   },
 ): Promise<{ created: number }> {
   const session = await auth();
@@ -1029,7 +1062,7 @@ export async function addEntriesFromSourceTransactions(
   return response.json();
 }
 
-export async function createTripEntry(
+async function createTripEntryRequest(
   tripId: string,
   payload: {
     walletId?: string | null;
@@ -1040,20 +1073,12 @@ export async function createTripEntry(
     categoryId?: string | null;
     localCurrency: string;
     localAmount: number;
-    baseAmount: number;
+    // Leave out on a wallet entry to value it at the wallet's average rate.
+    baseAmount?: number | null;
     fxRate?: number | null;
     feeAmount?: number | null;
     feeCurrency?: string | null;
-    fundingOut?: {
-      destinationType?: "bank" | "trip" | "external";
-      destinationTripId?: string | null;
-      bankTransactionId?: string | null;
-      destinationCurrency?: string | null;
-      destinationAmount?: number | null;
-      fxRate?: number | null;
-      feeAmount?: number | null;
-      feeCurrency?: string | null;
-    } | null;
+    fundingOut?: TripFundingOutInput | null;
     metadata?: Record<string, any> | null;
   },
 ): Promise<{ entry: { id: string } }> {
@@ -1072,6 +1097,50 @@ export async function createTripEntry(
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.error || "Failed to create trip entry");
+  }
+
+  return response.json();
+}
+
+/**
+ * Funding-in entries are edited from the funding page. Entries taken from a bank
+ * transaction keep its amount and currency. Leaving out baseAmount and fxRate on a
+ * wallet entry values it at the wallet's average rate; giving either locks it.
+ */
+async function updateTripEntryRequest(
+  tripId: string,
+  entryId: string,
+  changes: {
+    date?: string;
+    description?: string;
+    label?: string | null;
+    categoryId?: string | null;
+    walletId?: string | null;
+    localCurrency?: string;
+    localAmount?: number;
+    baseAmount?: number | null;
+    fxRate?: number | null;
+    fundingOut?: TripFundingOutInput | null;
+  },
+): Promise<{ id: string }> {
+  const session = await auth();
+  if (!session?.user?.id) throw new Error("Not authenticated");
+
+  const response = await fetch(
+    `${DATA_SERVICE_URL}/api/trips/${tripId}/entries/${entryId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId: session.user.id,
+        ...changes,
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || "Failed to update trip entry");
   }
 
   return response.json();
@@ -1118,7 +1187,7 @@ export async function getOutgoingFundingEntryCandidates(
   };
 }
 
-export async function addFundingsFromOutgoingEntries(
+async function addFundingsFromOutgoingEntriesRequest(
   tripId: string,
   payload: { sourceEntryIds: string[]; walletId?: string | null },
 ): Promise<{ created: number }> {
@@ -1148,7 +1217,7 @@ export async function addFundingsFromOutgoingEntries(
   return response.json();
 }
 
-export async function bulkUpdateTripEntriesByIds(
+async function bulkUpdateTripEntriesByIdsRequest(
   tripId: string,
   ids: string[],
   updates: { categoryId?: string | null; date?: string },
@@ -1177,7 +1246,7 @@ export async function bulkUpdateTripEntriesByIds(
   return response.json();
 }
 
-export async function bulkUpdateTripEntriesByFilter(
+async function bulkUpdateTripEntriesByFilterRequest(
   tripId: string,
   filters: TripEntryFilterPayload,
   excludeIds: string[] | undefined,
@@ -1212,7 +1281,7 @@ export async function bulkUpdateTripEntriesByFilter(
   return response.json();
 }
 
-export async function bulkDeleteTripEntriesByIds(tripId: string, ids: string[]) {
+async function bulkDeleteTripEntriesByIdsRequest(tripId: string, ids: string[]) {
   const session = await auth();
   if (!session?.user?.id) throw new Error("Not authenticated");
 
@@ -1236,7 +1305,7 @@ export async function bulkDeleteTripEntriesByIds(tripId: string, ids: string[]) 
   return response.json();
 }
 
-export async function bulkDeleteTripEntriesByFilter(
+async function bulkDeleteTripEntriesByFilterRequest(
   tripId: string,
   filters: TripEntryFilterPayload,
   excludeIds: string[] | undefined,
@@ -1267,4 +1336,90 @@ export async function bulkDeleteTripEntriesByFilter(
   }
 
   return response.json();
+}
+
+// Mutations return TripActionResult; see settle() above.
+
+export async function createTrip(...args: Parameters<typeof createTripRequest>) {
+  return settle(() => createTripRequest(...args));
+}
+
+export async function updateTrip(...args: Parameters<typeof updateTripRequest>) {
+  return settle(() => updateTripRequest(...args));
+}
+
+export async function deleteTrip(...args: Parameters<typeof deleteTripRequest>) {
+  return settle(() => deleteTripRequest(...args));
+}
+
+export async function createTripFunding(...args: Parameters<typeof createTripFundingRequest>) {
+  return settle(() => createTripFundingRequest(...args));
+}
+
+export async function reviewTripFundingMatch(...args: Parameters<typeof reviewTripFundingMatchRequest>) {
+  return settle(() => reviewTripFundingMatchRequest(...args));
+}
+
+export async function mergeTripFunding(...args: Parameters<typeof mergeTripFundingRequest>) {
+  return settle(() => mergeTripFundingRequest(...args));
+}
+
+export async function updateTripFunding(...args: Parameters<typeof updateTripFundingRequest>) {
+  return settle(() => updateTripFundingRequest(...args));
+}
+
+export async function deleteTripFunding(...args: Parameters<typeof deleteTripFundingRequest>) {
+  return settle(() => deleteTripFundingRequest(...args));
+}
+
+export async function createWallet(...args: Parameters<typeof createWalletRequest>) {
+  return settle(() => createWalletRequest(...args));
+}
+
+export async function recalculateWalletEntriesToBase(...args: Parameters<typeof recalculateWalletEntriesToBaseRequest>) {
+  return settle(() => recalculateWalletEntriesToBaseRequest(...args));
+}
+
+export async function importTripSpendings(...args: Parameters<typeof importTripSpendingsRequest>) {
+  return settle(() => importTripSpendingsRequest(...args));
+}
+
+export async function createTripReimbursementLink(...args: Parameters<typeof createTripReimbursementLinkRequest>) {
+  return settle(() => createTripReimbursementLinkRequest(...args));
+}
+
+export async function clearTripEntryLinkage(...args: Parameters<typeof clearTripEntryLinkageRequest>) {
+  return settle(() => clearTripEntryLinkageRequest(...args));
+}
+
+export async function addEntriesFromSourceTransactions(...args: Parameters<typeof addEntriesFromSourceTransactionsRequest>) {
+  return settle(() => addEntriesFromSourceTransactionsRequest(...args));
+}
+
+export async function createTripEntry(...args: Parameters<typeof createTripEntryRequest>) {
+  return settle(() => createTripEntryRequest(...args));
+}
+
+export async function updateTripEntry(...args: Parameters<typeof updateTripEntryRequest>) {
+  return settle(() => updateTripEntryRequest(...args));
+}
+
+export async function addFundingsFromOutgoingEntries(...args: Parameters<typeof addFundingsFromOutgoingEntriesRequest>) {
+  return settle(() => addFundingsFromOutgoingEntriesRequest(...args));
+}
+
+export async function bulkUpdateTripEntriesByIds(...args: Parameters<typeof bulkUpdateTripEntriesByIdsRequest>) {
+  return settle(() => bulkUpdateTripEntriesByIdsRequest(...args));
+}
+
+export async function bulkUpdateTripEntriesByFilter(...args: Parameters<typeof bulkUpdateTripEntriesByFilterRequest>) {
+  return settle(() => bulkUpdateTripEntriesByFilterRequest(...args));
+}
+
+export async function bulkDeleteTripEntriesByIds(...args: Parameters<typeof bulkDeleteTripEntriesByIdsRequest>) {
+  return settle(() => bulkDeleteTripEntriesByIdsRequest(...args));
+}
+
+export async function bulkDeleteTripEntriesByFilter(...args: Parameters<typeof bulkDeleteTripEntriesByFilterRequest>) {
+  return settle(() => bulkDeleteTripEntriesByFilterRequest(...args));
 }

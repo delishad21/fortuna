@@ -5,15 +5,67 @@ import { CalendarDays, ImagePlus, MapPinned, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { DatePicker } from "@/components/ui/DatePicker";
+import { Modal } from "@/components/ui/Modal";
+import { Select } from "@/components/ui/Select";
 import { TextInput } from "@/components/ui/TextInput";
-import { createTrip, type Trip } from "@/app/actions/trips";
+import { type Trip } from "@/app/actions/trips";
+import { getCurrencyOptions } from "@/lib/currencies";
+import { createTrip } from "@/lib/tripMutations";
 
 interface TripsClientProps {
   trips: Trip[];
   baseCurrency: string;
 }
 
-const DEFAULT_TRIP_COVER_URL = "/images/trips/default-trip-cover.jpg";
+export const DEFAULT_TRIP_COVER_URL = "/images/trips/default-trip-cover.jpg";
+
+export const TRIP_STATUS_OPTIONS = [
+  { value: "active", label: "Active" },
+  { value: "completed", label: "Completed" },
+  { value: "archived", label: "Archived" },
+];
+
+// Reads the picked image into a data URL, which is what the trip stores.
+export function TripCoverUploadButton({
+  onSelect,
+}: {
+  onSelect: (dataUrl: string) => void;
+}) {
+  const handleChange = (file?: File | null) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      onSelect(typeof reader.result === "string" ? reader.result : "");
+    };
+    reader.readAsDataURL(file);
+  };
+
+  return (
+    <label className="h-11 rounded-lg border border-stroke dark:border-dark-3 bg-gray-1 dark:bg-dark-3 px-3 text-sm text-dark-5 dark:text-dark-6 inline-flex items-center justify-center gap-2 cursor-pointer hover:border-primary dark:hover:border-primary">
+      <ImagePlus className="h-4 w-4" />
+      Upload
+      <input
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(event) => {
+          handleChange(event.target.files?.[0]);
+          event.target.value = "";
+        }}
+      />
+    </label>
+  );
+}
+
+const emptyForm = (baseCurrency: string) => ({
+  name: "",
+  baseCurrency,
+  status: "active",
+  startDate: "",
+  endDate: "",
+  notes: "",
+  coverImageUrl: "",
+});
 
 const formatDate = (value: string | null | undefined) => {
   if (!value) return "Ongoing";
@@ -28,14 +80,13 @@ export function TripsClient({ trips, baseCurrency }: TripsClientProps) {
   const router = useRouter();
   const [items, setItems] = useState(trips);
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({
-    name: "",
-    startDate: "",
-    endDate: "",
-    notes: "",
-    coverImageUrl: "",
-  });
+  const [form, setForm] = useState(() => emptyForm(baseCurrency));
   const [isCreating, setIsCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const currencyOptions = useMemo(() => getCurrencyOptions(), []);
+  const endBeforeStart = Boolean(
+    form.startDate && form.endDate && form.endDate < form.startDate,
+  );
 
   const sortedTrips = useMemo(
     () =>
@@ -46,12 +97,13 @@ export function TripsClient({ trips, baseCurrency }: TripsClientProps) {
   );
 
   const handleCreate = async () => {
-    if (!form.name.trim() || !form.startDate) return;
+    if (!form.name.trim() || !form.startDate || endBeforeStart) return;
     setIsCreating(true);
     try {
       const trip = await createTrip({
         name: form.name.trim(),
-        baseCurrency,
+        baseCurrency: form.baseCurrency,
+        status: form.status,
         startDate: form.startDate,
         endDate: form.endDate || null,
         notes: form.notes || null,
@@ -59,26 +111,12 @@ export function TripsClient({ trips, baseCurrency }: TripsClientProps) {
       });
       setItems((prev) => [trip, ...prev]);
       setShowCreate(false);
-      setForm({
-        name: "",
-        startDate: "",
-        endDate: "",
-        notes: "",
-        coverImageUrl: "",
-      });
+      setForm(emptyForm(baseCurrency));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create trip.");
     } finally {
       setIsCreating(false);
     }
-  };
-
-  const handleImageChange = (file?: File | null) => {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = typeof reader.result === "string" ? reader.result : "";
-      setForm((prev) => ({ ...prev, coverImageUrl: result }));
-    };
-    reader.readAsDataURL(file);
   };
 
   return (
@@ -178,6 +216,33 @@ export function TripsClient({ trips, baseCurrency }: TripsClientProps) {
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="flex flex-col gap-2">
                   <label className="text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
+                    Base currency
+                  </label>
+                  <Select
+                    value={form.baseCurrency}
+                    onChange={(value) => setForm((prev) => ({ ...prev, baseCurrency: value }))}
+                    options={currencyOptions}
+                    className="w-full"
+                    buttonClassName="w-full"
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
+                    Status
+                  </label>
+                  <Select
+                    value={form.status}
+                    onChange={(value) => setForm((prev) => ({ ...prev, status: value }))}
+                    options={TRIP_STATUS_OPTIONS}
+                    className="w-full"
+                    buttonClassName="w-full"
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
                     Start date
                   </label>
                   <DatePicker
@@ -201,6 +266,9 @@ export function TripsClient({ trips, baseCurrency }: TripsClientProps) {
                         "rounded-lg border border-stroke dark:border-dark-3 bg-white dark:bg-dark-2 hover:border-primary dark:hover:border-primary",
                     }}
                   />
+                  {endBeforeStart && (
+                    <p className="text-xs text-red">End date can't be before the start date.</p>
+                  )}
                 </div>
               </div>
 
@@ -219,16 +287,11 @@ export function TripsClient({ trips, baseCurrency }: TripsClientProps) {
                   <label className="text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
                     Cover photo
                   </label>
-                  <label className="h-11 rounded-lg border border-stroke dark:border-dark-3 bg-gray-1 dark:bg-dark-3 px-3 text-sm text-dark-5 dark:text-dark-6 inline-flex items-center justify-center gap-2 cursor-pointer hover:border-primary dark:hover:border-primary">
-                    <ImagePlus className="h-4 w-4" />
-                    Upload
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(event) => handleImageChange(event.target.files?.[0])}
-                    />
-                  </label>
+                  <TripCoverUploadButton
+                    onSelect={(dataUrl) =>
+                      setForm((prev) => ({ ...prev, coverImageUrl: dataUrl }))
+                    }
+                  />
                 </div>
               </div>
 
@@ -248,7 +311,9 @@ export function TripsClient({ trips, baseCurrency }: TripsClientProps) {
               <Button
                 variant="primary"
                 onClick={handleCreate}
-                disabled={isCreating || !form.name.trim() || !form.startDate}
+                disabled={
+                  isCreating || !form.name.trim() || !form.startDate || endBeforeStart
+                }
               >
                 {isCreating ? "Creating..." : "Create Trip"}
               </Button>
@@ -256,6 +321,14 @@ export function TripsClient({ trips, baseCurrency }: TripsClientProps) {
           </div>
         </div>
       )}
+
+      <Modal
+        isOpen={Boolean(error)}
+        onClose={() => setError(null)}
+        type="error"
+        title="Create Failed"
+        message={error || ""}
+      />
     </div>
   );
 }

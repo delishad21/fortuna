@@ -5,7 +5,14 @@ import { useRouter } from "next/navigation";
 import type { WalletSummary } from "@/app/actions/trips";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent } from "@/components/ui/Card";
-import { Link2, Pencil, Trash2, Wallet, WalletCards } from "lucide-react";
+import {
+  AlertTriangle,
+  Link2,
+  Pencil,
+  Trash2,
+  Wallet,
+  WalletCards,
+} from "lucide-react";
 
 interface TripTransactionsSideRailProps {
   tripId: string;
@@ -19,6 +26,8 @@ interface TripTransactionsSideRailProps {
         currency: string;
         amount: number;
         walletColor?: string;
+        /** Set when the funding lost its bank transaction and needs relinking. */
+        notice?: string;
       }
     | {
         kind: "out";
@@ -89,6 +98,12 @@ export function TripTransactionsSideRail({
                       <div className="mt-1 text-dark-5 dark:text-dark-6 truncate">
                         {format(new Date(item.date), "dd MMM yyyy")} • {item.currency}
                       </div>
+                      {item.kind === "in" && item.notice && (
+                        <div className="mt-1 inline-flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300">
+                          <AlertTriangle className="h-3 w-3 shrink-0" />
+                          <span className="truncate">{item.notice}</span>
+                        </div>
+                      )}
                     </div>
                     <div className="flex items-start gap-1.5">
                       <div

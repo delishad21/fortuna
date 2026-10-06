@@ -10,6 +10,7 @@ import {
   Receipt,
   Link2,
   Plane,
+  AlertTriangle,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/Checkbox";
 import Link from "next/link";
@@ -59,6 +60,14 @@ export interface TransactionCardTransaction {
     id: string;
     trip: { id: string; name: string };
   }>;
+  /** Trip entries created from this bank transaction. */
+  tripEntries?: Array<{
+    id: string;
+    type: string;
+    trip: { id: string; name: string };
+  }>;
+  /** Short warning shown as a badge under the description. */
+  notice?: string;
   metadata?: Record<string, any>;
   linkage?: TransactionLinkage | null;
   accentColor?: string;
@@ -104,6 +113,25 @@ export const getTransactionCardPrimaryClickAction = ({
 }): TransactionCardPrimaryClickAction =>
   hasSelectionToggle ? "toggle-selection" : "toggle-expansion";
 
+// One badge per trip and kind, linking to where the trip shows the transaction.
+const getTripBadges = (transaction: TransactionCardTransaction) => {
+  const badges: Array<{ key: string; href: string; label: string }> = [];
+  const seen = new Set<string>();
+  const add = (kind: "funding" | "entry", trip: { id: string; name: string }) => {
+    const key = `${kind}:${trip.id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    badges.push(
+      kind === "funding"
+        ? { key, href: `/trips/${trip.id}`, label: `Funding: ${trip.name}` }
+        : { key, href: `/trips/${trip.id}/manage`, label: `Trip: ${trip.name}` },
+    );
+  };
+  transaction.tripFundings?.forEach((funding) => add("funding", funding.trip));
+  transaction.tripEntries?.forEach((entry) => add("entry", entry.trip));
+  return badges;
+};
+
 export function TransactionCard({
   transaction,
   accountColor,
@@ -125,6 +153,8 @@ export function TransactionCard({
   const primaryClickAction = getTransactionCardPrimaryClickAction({
     hasSelectionToggle: Boolean(onToggleSelect),
   });
+
+  const tripBadges = getTripBadges(transaction);
 
   const linkageType = transaction.linkage?.type;
   const isInternal = linkageType === "internal";
@@ -234,16 +264,27 @@ export function TransactionCard({
                 transaction.accountIdentifier &&
                 ` · ${accountText}`}
             </div>
-            {transaction.tripFundings && transaction.tripFundings.length > 0 && (
+            {transaction.notice && (
               <div className="mt-1">
-                <Link
-                  href={`/trips/${transaction.tripFundings[0].trip.id}`}
-                  onClick={(event) => event.stopPropagation()}
-                  className="inline-flex items-center gap-1 rounded-full border border-stroke dark:border-dark-3 px-2 py-0.5 text-[11px] text-primary hover:border-primary"
-                >
-                  <Plane className="h-3 w-3" />
-                  Funding: {transaction.tripFundings[0].trip.name}
-                </Link>
+                <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-700 dark:text-amber-300">
+                  <AlertTriangle className="h-3 w-3" />
+                  {transaction.notice}
+                </span>
+              </div>
+            )}
+            {tripBadges.length > 0 && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {tripBadges.map((badge) => (
+                  <Link
+                    key={badge.key}
+                    href={badge.href}
+                    onClick={(event) => event.stopPropagation()}
+                    className="inline-flex items-center gap-1 rounded-full border border-stroke dark:border-dark-3 px-2 py-0.5 text-[11px] text-primary hover:border-primary"
+                  >
+                    <Plane className="h-3 w-3" />
+                    {badge.label}
+                  </Link>
+                ))}
               </div>
             )}
             {transaction.category && (

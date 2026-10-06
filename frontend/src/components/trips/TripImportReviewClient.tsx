@@ -5,11 +5,11 @@ import { useRouter } from "next/navigation";
 import { parseFile } from "@/app/actions/parser";
 import { createCategory, type Category } from "@/app/actions/categories";
 import {
-  importTripSpendings,
   type Trip,
   type TripFunding,
   type Wallet,
 } from "@/app/actions/trips";
+import { importTripSpendings } from "@/lib/tripMutations";
 import { useHeaderConfig } from "@/components/Layouts/header-context";
 import { FileUploadDropzone } from "@/components/import/FileUploadDropzone";
 import { FilePreview } from "@/components/import/FilePreview";
@@ -29,6 +29,7 @@ import { NumberInput } from "@/components/ui/NumberInput";
 import { Select } from "@/components/ui/Select";
 import { getCurrencyOptions } from "@/lib/currencies";
 import {
+  AlertTriangle,
   ArrowDownToLine,
   ArrowRightLeft,
   ArrowUpFromLine,
@@ -73,6 +74,68 @@ interface ConversionPairCandidate {
   description: string;
   score: number;
 }
+
+// Plain-language text for the parser's metadata.reviewReasons codes.
+const REVIEW_REASON_LABELS: Record<string, string> = {
+  account_holder_unknown: "Couldn't tell if this came from you or someone else",
+  counterparty_unclear: "Sender looks like your own vault or pocket",
+  counterparty_name_partial_match: "Sender's name partly matches yours",
+  pending: "Still pending, may change",
+  pdf_row_not_in_csv: "In the PDF but not in the CSV",
+};
+
+interface RowCheck {
+  reasons: string[];
+  // Lines the parser skipped near this row (not about the row itself).
+  warnings: string[];
+}
+
+const humanizeCode = (code: string) => {
+  const text = code.replace(/[_-]+/g, " ").trim();
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : code;
+};
+
+const formatParseWarning = (warning: unknown): string | null => {
+  if (typeof warning === "string") return warning.trim() || null;
+  if (!warning || typeof warning !== "object") return null;
+  const raw = warning as Record<string, unknown>;
+  const type = String(raw.type || "");
+  const line = String(raw.line || raw.description || "").trim();
+  if (type === "skipped_state") {
+    const state = String(raw.state || "").toLowerCase();
+    return `Skipped ${line ? `"${line}"` : "a row"}${state ? ` (${state})` : ""}`;
+  }
+  if (type === "skipped_reverted" && line) return `Skipped reverted line: ${line}`;
+  if (type === "unparsed_line" && line) return `Couldn't read line: ${line}`;
+  const reason = String(raw.reason || "").trim();
+  if (reason && line) return `${line}: ${reason}`;
+  return reason || line || null;
+};
+
+const readRowCheck = (transaction: ImportTransaction): RowCheck | null => {
+  const metadata =
+    transaction.metadata && typeof transaction.metadata === "object"
+      ? (transaction.metadata as Record<string, unknown>)
+      : {};
+  const reasons = (
+    Array.isArray(metadata.reviewReasons) ? metadata.reviewReasons : []
+  )
+    .map((code) => String(code || "").trim())
+    .filter(Boolean)
+    .map((code) => REVIEW_REASON_LABELS[code] || humanizeCode(code));
+  const warnings = (
+    Array.isArray(metadata.parseWarnings) ? metadata.parseWarnings : []
+  )
+    .map(formatParseWarning)
+    .filter((text): text is string => Boolean(text));
+  if (metadata.needsReview !== true && !reasons.length && !warnings.length) {
+    return null;
+  }
+  if (metadata.needsReview === true && !reasons.length) {
+    reasons.push("Flagged by the parser");
+  }
+  return { reasons, warnings };
+};
 
 interface TripImportReviewClientProps {
   trip: Trip;
@@ -143,6 +206,11 @@ export function TripImportReviewClient({
     title: "",
     message: "",
   });
+  // Where to go once the post-import notice is dismissed.
+  const [redirectAfterModal, setRedirectAfterModal] = useState<string | null>(
+    null,
+  );
+  const [rowChecksOpen, setRowChecksOpen] = useState(true);
   const currencyOptions = useMemo(() => getCurrencyOptions(), []);
   const isRevolutParser = importForm.parserId === "revolut_statement";
   const isStatementWalletRouted =
@@ -151,7 +219,7 @@ export function TripImportReviewClient({
 
   useEffect(() => {
     setHeaderConfig({
-      title: `${trip.name} · Import Review`,
+      title: `${trip.name} · Import statement`,
       showBack: true,
       backHref: `/trips/${trip.id}/manage`,
     });
@@ -171,11 +239,16 @@ export function TripImportReviewClient({
     });
   };
 
-  const closeModal = () =>
+  const closeModal = () => {
     setModalState((prev) => ({
       ...prev,
       isOpen: false,
     }));
+    if (redirectAfterModal) {
+      setRedirectAfterModal(null);
+      router.push(redirectAfterModal);
+    }
+  };
 
   const buildFundingOutDraft = (currency: string): FundingOutDraft => ({
     destinationType: "external",
@@ -622,6 +695,24 @@ export function TripImportReviewClient({
       tripImportSelectedIndices,
     ],
   );
+
+  const rowChecksByIndex = useMemo(() => {
+    const checks = new Map<number, RowCheck>();
+    tripImportEditedTransactions.forEach((transaction, index) => {
+      const check = readRowCheck(transaction);
+      if (check) checks.set(index, check);
+    });
+    return checks;
+  }, [tripImportEditedTransactions]);
+
+  const formatRowAmount = (transaction: ImportTransaction) => {
+    const out = Number(transaction.amountOut || 0);
+    const input = Number(transaction.amountIn || 0);
+    const currency = getImportTransactionCurrency(transaction);
+    if (out > 0) return `-${out.toFixed(2)} ${currency}`;
+    if (input > 0) return `+${input.toFixed(2)} ${currency}`;
+    return "-";
+  };
 
   const tableCurrencyIndicator = useMemo(() => {
     let primaryCurrency = "";
@@ -1218,7 +1309,7 @@ export function TripImportReviewClient({
         return;
       }
 
-      await importTripSpendings(
+      const result = await importTripSpendings(
         trip.id,
         {
           walletId: isStatementWalletRouted ? null : importForm.walletId || null,
@@ -1231,7 +1322,20 @@ export function TripImportReviewClient({
         ),
       );
 
-      router.push(`/trips/${trip.id}/funding/review`);
+      const reviewHref = `/trips/${trip.id}/funding/review`;
+      const skippedDuplicates = Number(result?.skippedDuplicates || 0);
+      if (skippedDuplicates > 0) {
+        setRedirectAfterModal(reviewHref);
+        showModal(
+          "success",
+          "Statement Imported",
+          skippedDuplicates === 1
+            ? "1 row was already in this trip and was skipped."
+            : `${skippedDuplicates} rows were already in this trip and were skipped.`,
+        );
+        return;
+      }
+      router.push(reviewHref);
     } catch (error) {
       showModal(
         "error",
@@ -1251,7 +1355,7 @@ export function TripImportReviewClient({
             <div className="flex items-center gap-2 mb-4">
               <Upload className="h-4 w-4 text-primary" />
               <h3 className="text-sm font-semibold text-dark dark:text-white uppercase tracking-wide">
-                Import Trip Statement
+                Import statement
               </h3>
             </div>
 
@@ -1412,6 +1516,82 @@ export function TripImportReviewClient({
 
       {tripImportStep === "review" && tripImportParsedData && (
         <div className="h-[calc(100vh-12rem)] min-h-[640px] flex min-h-0 flex-col gap-4 overflow-hidden">
+          {rowChecksByIndex.size > 0 && (
+            <div className="shrink-0 rounded-lg border border-orange-light-2 bg-orange-light-4 px-4 py-3 dark:border-orange-dark-1 dark:bg-orange-dark-3/20">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="flex items-center gap-2 text-sm font-medium text-dark dark:text-white">
+                  <AlertTriangle className="h-4 w-4 text-orange" />
+                  {rowChecksByIndex.size === 1
+                    ? "1 row needs a check"
+                    : `${rowChecksByIndex.size} rows need a check`}
+                  <span className="text-xs font-normal text-dark-5 dark:text-dark-6">
+                    The parser wasn&apos;t sure about these. Check them before
+                    importing.
+                  </span>
+                </p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setRowChecksOpen((prev) => !prev)}
+                >
+                  {rowChecksOpen ? "Hide" : "Show"}
+                </Button>
+              </div>
+              {rowChecksOpen && (
+                <ul className="mt-3 max-h-48 space-y-2 overflow-y-auto pr-1">
+                  {Array.from(rowChecksByIndex.entries()).map(([index, check]) => {
+                    const transaction = tripImportEditedTransactions[index];
+                    return (
+                      <li
+                        key={`row-check-${index}`}
+                        className="rounded-md border border-stroke/70 bg-white px-3 py-2 text-xs dark:border-dark-3 dark:bg-dark-2"
+                      >
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <span className="font-semibold text-dark dark:text-white">
+                            #{index + 1}
+                          </span>
+                          <span className="text-dark-5 dark:text-dark-6">
+                            {transaction.date}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-dark dark:text-white">
+                            {transaction.description}
+                          </span>
+                          <span className="font-medium text-dark dark:text-white">
+                            {formatRowAmount(transaction)}
+                          </span>
+                          {!tripImportSelectedIndices.has(index) && (
+                            <span className="text-dark-5 dark:text-dark-6">
+                              Not selected
+                            </span>
+                          )}
+                        </div>
+                        {check.reasons.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {check.reasons.map((reason) => (
+                              <span
+                                key={reason}
+                                className="rounded-full bg-orange/15 px-2 py-0.5 font-medium text-orange-dark dark:text-orange-light"
+                              >
+                                {reason}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {check.warnings.map((warning, warningIndex) => (
+                          <p
+                            key={`${warningIndex}-${warning}`}
+                            className="mt-1 text-dark-5 dark:text-dark-6"
+                          >
+                            {warning}
+                          </p>
+                        ))}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
           <div className="min-h-0 flex-1 overflow-hidden">
             <TransactionTable
               parsedData={tripImportParsedData}
@@ -1475,8 +1655,36 @@ export function TripImportReviewClient({
                   transaction.linkage?.type === "reimbursement"
                     ? transaction.linkage.reimbursesAllocations?.length || 0
                     : 0;
+                const rowCheck = rowChecksByIndex.get(index);
                 return (
                   <div className="space-y-3">
+                    {rowCheck && (
+                      <div className="rounded-md border border-orange-light-2 bg-orange-light-4 px-3 py-2 text-xs dark:border-orange-dark-1 dark:bg-orange-dark-3/20">
+                        <p className="flex items-center gap-1 font-medium text-orange-dark dark:text-orange-light">
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          Needs a check
+                        </p>
+                        {rowCheck.reasons.length > 0 && (
+                          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-dark dark:text-white">
+                            {rowCheck.reasons.map((reason) => (
+                              <li key={reason}>{reason}</li>
+                            ))}
+                          </ul>
+                        )}
+                        {rowCheck.warnings.length > 0 && (
+                          <>
+                            <p className="mt-2 text-dark-5 dark:text-dark-6">
+                              Skipped lines near this row:
+                            </p>
+                            <ul className="mt-1 list-disc space-y-0.5 pl-5 text-dark-5 dark:text-dark-6">
+                              {rowCheck.warnings.map((warning, warningIndex) => (
+                                <li key={`${warningIndex}-${warning}`}>{warning}</li>
+                              ))}
+                            </ul>
+                          </>
+                        )}
+                      </div>
+                    )}
                     <div className="flex flex-wrap items-center gap-2">
                       {isFundingIn && (
                         <span className="inline-flex items-center gap-1 rounded-full bg-green/10 px-2 py-0.5 text-xs font-medium text-green dark:text-green-light">

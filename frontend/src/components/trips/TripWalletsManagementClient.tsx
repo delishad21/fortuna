@@ -3,13 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import {
-  createTripFunding,
   getTripEntries,
   getSourceTransactionCandidates,
   getTripFundings,
   getTripWalletSummaries,
-  recalculateWalletEntriesToBase,
-  updateTripFunding,
   type FundingCandidate,
   type SourceTransactionCandidatesResponse,
   type Trip,
@@ -19,6 +16,11 @@ import {
   type Wallet,
   type WalletSummary,
 } from "@/app/actions/trips";
+import {
+  createTripFunding,
+  recalculateWalletEntriesToBase,
+  updateTripFunding,
+} from "@/lib/tripMutations";
 import { useHeaderConfig } from "@/components/Layouts/header-context";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent } from "@/components/ui/Card";
@@ -47,6 +49,34 @@ const formatCurrencyValue = (value: number) =>
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(value);
+
+// The server unlinks fundings whose bank transaction was deleted, split or flipped
+// and sends them back to review.
+const getDetachedBankNote = (funding: TripFunding) => {
+  if (funding.bankTransactionId) return null;
+  const metadata =
+    funding.metadata && typeof funding.metadata === "object"
+      ? (funding.metadata as Record<string, unknown>)
+      : {};
+  if (
+    metadata.matchReviewState !== undefined &&
+    metadata.matchReviewState !== "pending_review"
+  ) {
+    return null;
+  }
+  const detached = metadata.detachedBankTransaction as
+    | { reason?: unknown }
+    | null
+    | undefined;
+  if (!detached || typeof detached !== "object") return null;
+  if (detached.reason === "split") {
+    return "Bank transaction was split — relink or delete";
+  }
+  if (detached.reason === "direction_changed") {
+    return "Bank transaction changed direction — relink or delete";
+  }
+  return "Bank transaction removed — relink or delete";
+};
 
 export function TripWalletsManagementClient({
   trip,
@@ -120,6 +150,7 @@ export function TripWalletsManagementClient({
     fxRate: "",
     feeAmount: "",
     feeCurrency: "",
+    baseAmount: "",
   });
   const [editingFundingInputMode, setEditingFundingInputMode] = useState<
     "amount" | "fxRate"
@@ -419,6 +450,7 @@ export function TripWalletsManagementClient({
         funding.sourceCurrency ||
         destinationCurrency ||
         trip.baseCurrency,
+      baseAmount: funding.baseAmount != null ? String(funding.baseAmount) : "",
     });
     setEditingFundingInputMode("amount");
     setIsEditFundingModalOpen(true);
@@ -466,6 +498,22 @@ export function TripWalletsManagementClient({
         feeCurrency: editingFundingForm.feeCurrency || sourceCurrency,
       });
 
+      const baseCurrency = trip.baseCurrency.toUpperCase();
+      const needsBaseAmount =
+        normalized.sourceCurrency !== baseCurrency &&
+        normalized.destinationCurrency !== baseCurrency;
+      const baseAmount = needsBaseAmount
+        ? Number(editingFundingForm.baseAmount || 0)
+        : null;
+      if (baseAmount !== null && !(baseAmount > 0)) {
+        showModal(
+          "warning",
+          "Invalid Base Amount",
+          `Base amount (${baseCurrency}) must be > 0.`,
+        );
+        return;
+      }
+
       const updateResult = await updateTripFunding(trip.id, editingFundingId, {
         walletId: nextWalletId,
         sourceCurrency: normalized.sourceCurrency,
@@ -475,6 +523,7 @@ export function TripWalletsManagementClient({
         fxRate: normalized.fxRate,
         feeAmount: normalized.feeAmount,
         feeCurrency: normalized.feeCurrency,
+        baseAmount,
       });
 
       const walletIdsToRecalculate = new Set<string>();
@@ -717,6 +766,11 @@ export function TripWalletsManagementClient({
                             {funding.destinationCurrency}{" "}
                             {formatCurrencyValue(Number(funding.destinationAmount))}
                           </div>
+                          {getDetachedBankNote(funding) && (
+                            <span className="mt-1 inline-block rounded-full bg-yellow-light-4 px-2 py-0.5 text-[11px] font-medium text-yellow-dark dark:bg-yellow-dark/15">
+                              {getDetachedBankNote(funding)}
+                            </span>
+                          )}
                         </div>
                         <Button
                           variant="secondary"
@@ -998,6 +1052,7 @@ export function TripWalletsManagementClient({
             ].filter((value): value is string => Boolean(value)),
           ),
         )}
+        baseCurrency={trip.baseCurrency}
         isBusy={isBusy}
         onSave={handleSaveFundingEdit}
       />

@@ -6,51 +6,95 @@ import {
 } from "../duplicates/duplicate-detector";
 
 export class TransactionRepository {
+  // Adds the trip fundings and trip entries each bank transaction backs.
   private static async attachTripFundingSummary<T extends { id: string }>(
     userId: string,
     transactions: T[],
   ) {
     if (transactions.length === 0) {
-      return transactions.map((tx) => ({ ...tx, tripFundings: [] }));
+      return transactions.map((tx) => ({
+        ...tx,
+        tripFundings: [],
+        tripEntries: [],
+      }));
     }
 
     const ids = transactions.map((tx) => tx.id);
-    const rows = await prisma.$queryRaw<
-      Array<{
-        id: string;
-        transactionId: string;
-        tripId: string;
-        tripName: string;
-      }>
-    >`
-      SELECT
-        tf.id,
-        tf.bank_transaction_id AS "transactionId",
-        t.id AS "tripId",
-        t.name AS "tripName"
-      FROM trip_fundings tf
-      INNER JOIN trips t ON t.id = tf.trip_id
-      WHERE
-        tf.bank_transaction_id IN (${Prisma.join(ids)})
-        AND t.user_id = ${userId}
-    `;
+    const [fundingRows, entryRows] = await Promise.all([
+      prisma.$queryRaw<
+        Array<{
+          id: string;
+          transactionId: string;
+          tripId: string;
+          tripName: string;
+        }>
+      >`
+        SELECT
+          tf.id,
+          tf.bank_transaction_id AS "transactionId",
+          t.id AS "tripId",
+          t.name AS "tripName"
+        FROM trip_fundings tf
+        INNER JOIN trips t ON t.id = tf.trip_id
+        WHERE
+          tf.bank_transaction_id IN (${Prisma.join(ids)})
+          AND t.user_id = ${userId}
+      `,
+      prisma.$queryRaw<
+        Array<{
+          id: string;
+          type: string;
+          transactionId: string;
+          tripId: string;
+          tripName: string;
+        }>
+      >`
+        SELECT
+          te.id,
+          te.type,
+          te.source_transaction_id AS "transactionId",
+          t.id AS "tripId",
+          t.name AS "tripName"
+        FROM trip_entries te
+        INNER JOIN trips t ON t.id = te.trip_id
+        WHERE
+          te.source_transaction_id IN (${Prisma.join(ids)})
+          AND te.type <> 'funding_in'
+          AND t.user_id = ${userId}
+      `,
+    ]);
 
-    const map = new Map<
+    const fundingMap = new Map<
       string,
       Array<{ id: string; trip: { id: string; name: string } }>
     >();
-    rows.forEach((row) => {
-      const existing = map.get(row.transactionId) || [];
+    fundingRows.forEach((row) => {
+      const existing = fundingMap.get(row.transactionId) || [];
       existing.push({
         id: row.id,
         trip: { id: row.tripId, name: row.tripName },
       });
-      map.set(row.transactionId, existing);
+      fundingMap.set(row.transactionId, existing);
+    });
+
+    const entryMap = new Map<
+      string,
+      Array<{ id: string; type: string; trip: { id: string; name: string } }>
+    >();
+    entryRows.forEach((row) => {
+      const existing = entryMap.get(row.transactionId) || [];
+      existing.push({
+        id: row.id,
+        type: row.type,
+        trip: { id: row.tripId, name: row.tripName },
+      });
+      entryMap.set(row.transactionId, existing);
     });
 
     return transactions.map((tx) => ({
       ...tx,
-      tripFundings: map.get(tx.id) || [],
+      tripFundings: fundingMap.get(tx.id) || [],
+      tripEntries: entryMap.get(tx.id) || [],
     }));
   }
 

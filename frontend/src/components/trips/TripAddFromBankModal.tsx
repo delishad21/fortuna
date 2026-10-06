@@ -1,13 +1,21 @@
 "use client";
 
 import type { Category } from "@/app/actions/categories";
-import type { SourceTransactionCandidate, Trip } from "@/app/actions/trips";
+import type {
+  SourceTransactionCandidate,
+  Trip,
+  Wallet,
+} from "@/app/actions/trips";
 import { Button } from "@/components/ui/Button";
 import { CategorySelect } from "@/components/ui/CategorySelect";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { ExistingTransactionsSelector } from "@/components/ui/ExistingTransactionsSelector";
 import { NumberInput } from "@/components/ui/NumberInput";
 import { Select } from "@/components/ui/Select";
+import {
+  TripFundingOutDestinationFields,
+  type FundingOutDestinationType,
+} from "@/components/trips/TripFundingOutDestinationFields";
 
 interface TripAddFromBankModalProps {
   isOpen: boolean;
@@ -30,8 +38,9 @@ interface TripAddFromBankModalProps {
   sourceCategoryId: string;
   onSourceCategoryIdChange: (value: string) => void;
   sourceFundingOut: {
-    destinationType: "bank" | "trip" | "external";
+    destinationType: FundingOutDestinationType;
     destinationTripId: string;
+    destinationWalletId: string;
     destinationCurrency: string;
     destinationAmount: string;
     fxRate: string;
@@ -46,6 +55,7 @@ interface TripAddFromBankModalProps {
   sourceFundingOutInputMode: "amount" | "fxRate";
   setSourceFundingOutInputMode: (mode: "amount" | "fxRate") => void;
   availableTrips: Pick<Trip, "id" | "name">[];
+  wallets: Wallet[];
   currencyOptions: { value: string; label: string }[];
   baseCurrency: string;
   localCategories: Category[];
@@ -77,6 +87,7 @@ export function TripAddFromBankModal({
   sourceFundingOutInputMode,
   setSourceFundingOutInputMode,
   availableTrips,
+  wallets,
   currencyOptions,
   baseCurrency,
   localCategories,
@@ -104,7 +115,7 @@ export function TripAddFromBankModal({
       >
         <div className="px-6 py-4 border-b border-stroke dark:border-dark-3">
           <h3 className="text-lg font-semibold text-dark dark:text-white">
-            Add Transactions From Bank Ledger
+            Add from bank
           </h3>
           <p className="text-sm text-dark-5 dark:text-dark-6">
             Added transactions keep their original category in your main ledger,
@@ -189,93 +200,16 @@ export function TripAddFromBankModal({
 
           {sourceEntryType === "funding_out" && (
             <div className="rounded-lg border border-stroke dark:border-dark-3 p-3 space-y-3">
-              <div className="grid gap-3 md:grid-cols-3">
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                    Destination
-                  </label>
-                  <Select
-                    value={sourceFundingOut.destinationType}
-                    onChange={(value) =>
-                      setSourceFundingOut((prev) => ({
-                        ...prev,
-                        destinationType: value as "bank" | "trip" | "external",
-                        destinationCurrency:
-                          value === "bank" ? baseCurrency : prev.destinationCurrency,
-                      }))
-                    }
-                    className="w-full"
-                    buttonClassName="w-full"
-                    menuPlacement="up"
-                    options={[
-                      { value: "bank", label: "Back to Bank" },
-                      { value: "trip", label: "Another Trip" },
-                      { value: "external", label: "External" },
-                    ]}
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                    Destination trip
-                  </label>
-                  <Select
-                    value={sourceFundingOut.destinationTripId}
-                    onChange={(value) =>
-                      setSourceFundingOut((prev) => ({
-                        ...prev,
-                        destinationTripId: value,
-                      }))
-                    }
-                    className="w-full"
-                    buttonClassName="w-full"
-                    menuPlacement="up"
-                    options={[
-                      ...(sourceFundingOut.destinationType === "trip"
-                        ? [{ value: "", label: "Select trip" }]
-                        : [{ value: "", label: "Destination is not a trip" }]),
-                      ...(sourceFundingOut.destinationType === "trip"
-                        ? availableTrips.map((item) => ({
-                            value: item.id,
-                            label: item.name,
-                          }))
-                        : []),
-                    ]}
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                    Destination currency
-                  </label>
-                  <Select
-                    value={sourceFundingOut.destinationCurrency}
-                    onChange={(value) =>
-                      sourceFundingOut.destinationType === "bank"
-                        ? undefined
-                        : setSourceFundingOut((prev) => ({
-                            ...prev,
-                            destinationCurrency: value,
-                          }))
-                    }
-                    options={
-                      sourceFundingOut.destinationType === "bank"
-                        ? [
-                            {
-                              value: baseCurrency,
-                              label: baseCurrency,
-                            },
-                          ]
-                        : currencyOptions
-                    }
-                    className="w-full"
-                    buttonClassName={`w-full ${
-                      sourceFundingOut.destinationType === "bank"
-                        ? "pointer-events-none opacity-70"
-                        : ""
-                    }`}
-                    menuPlacement="up"
-                  />
-                </div>
-              </div>
+              <TripFundingOutDestinationFields
+                value={sourceFundingOut}
+                onChange={(patch) =>
+                  setSourceFundingOut((prev) => ({ ...prev, ...patch }))
+                }
+                wallets={wallets}
+                availableTrips={availableTrips}
+                currencyOptions={currencyOptions}
+                baseCurrency={baseCurrency}
+              />
 
               <div className="flex flex-wrap items-center gap-4">
                 <label className="inline-flex items-center gap-2 text-sm text-dark dark:text-white">
@@ -370,7 +304,7 @@ export function TripAddFromBankModal({
             Cancel
           </Button>
           <Button variant="primary" onClick={onConfirmAdd} disabled={isBusy}>
-            {isBusy ? "Adding..." : "Add To Trip"}
+            {isBusy ? "Adding..." : "Add to trip"}
           </Button>
         </div>
       </div>

@@ -6,14 +6,30 @@ import {
   Link2,
   Loader2,
   MoreHorizontal,
-  PlaneTakeoff,
   Plus,
   Trash2,
   WalletCards,
 } from "lucide-react";
 import { format } from "date-fns";
 import { useRouter } from "next/navigation";
-import { parseFile } from "@/app/actions/parser";
+import {
+  getFundingCandidates,
+  getOutgoingFundingEntryCandidates,
+  getSourceTransactionCandidates,
+  getTripEntries,
+  getTripFundings,
+  getTripWalletSummaries,
+  type FundingCandidate,
+  type FundingCandidatesResponse,
+  type SourceTransactionCandidate,
+  type SourceTransactionCandidatesResponse,
+  type Trip,
+  type TripEntry,
+  type TripFunding,
+  type TripFundingOutInput,
+  type Wallet,
+  type WalletSummary,
+} from "@/app/actions/trips";
 import {
   addEntriesFromSourceTransactions,
   createTripEntry,
@@ -25,29 +41,13 @@ import {
   bulkUpdateTripEntriesByFilter,
   bulkUpdateTripEntriesByIds,
   createWallet,
-  getFundingCandidates,
-  getOutgoingFundingEntryCandidates,
-  getSourceTransactionCandidates,
-  getTripEntries,
-  getTripFundings,
-  getTripWalletSummaries,
-  importTripSpendings,
   mergeTripFunding,
   reviewTripFundingMatch,
+  updateTripEntry,
   updateTripFunding,
   addFundingsFromOutgoingEntries,
-  type FundingCandidate,
-  type FundingCandidatesResponse,
-  type SourceTransactionCandidate,
-  type SourceTransactionCandidatesResponse,
-  type Trip,
-  type TripEntry,
-  type TripFunding,
-  type Wallet,
-  type WalletSummary,
-} from "@/app/actions/trips";
+} from "@/lib/tripMutations";
 import { createCategory, type Category } from "@/app/actions/categories";
-import type { ParserOption } from "@/lib/parsers";
 import { getCurrencyOptions } from "@/lib/currencies";
 import { normalizeFundingEditInput } from "@/lib/fundingMath";
 import { getRandomWalletColor } from "@/lib/walletColors";
@@ -72,13 +72,14 @@ import { TripAddFromBankModal } from "@/components/trips/TripAddFromBankModal";
 import { TripEditFundingModal } from "@/components/trips/TripEditFundingModal";
 import { TripTransactionsFundingModal } from "@/components/trips/TripTransactionsFundingModal";
 import { TripTransactionsSideRail } from "@/components/trips/TripTransactionsSideRail";
-import { TripImportStatementModal } from "@/components/trips/TripImportStatementModal";
-import { TripManualEntryModal } from "@/components/trips/TripManualEntryModal";
+import {
+  TripManualEntryModal,
+  type TripEntryForm,
+} from "@/components/trips/TripManualEntryModal";
+import type { FundingOutDestinationType } from "@/components/trips/TripFundingOutDestinationFields";
 import { TripReimbursementSelectorModal } from "@/components/trips/TripReimbursementSelectorModal";
 import { TripWalletModal } from "@/components/trips/TripWalletModal";
-import { buildTripImportPayload } from "@/components/trips/tripImportPayload";
 import type {
-  ParseResult as ImportParseResult,
   Transaction as ImportTransaction,
   TransactionLinkage as ImportTransactionLinkage,
 } from "@/components/transaction-table/types";
@@ -93,7 +94,6 @@ interface TripTransactionsClientProps {
   initialFundingOutEntries: TripEntry[];
   initialEntriesTotal: number;
   initialFundingCandidates: FundingCandidatesResponse;
-  tripParserOptions: ParserOption[];
   allTrips: Trip[];
 }
 
@@ -235,6 +235,162 @@ const parseTripEntryLinkage = (
   };
 };
 
+const buildEmptyEntryForm = (baseCurrency: string): TripEntryForm => ({
+  walletId: "__none__",
+  type: "spending",
+  date: format(new Date(), "yyyy-MM-dd"),
+  description: "",
+  label: "",
+  categoryId: "",
+  localCurrency: baseCurrency,
+  localAmount: "",
+  baseAmount: "",
+  fxRate: "",
+  fundingOutDestinationType: "bank",
+  fundingOutDestinationTripId: "",
+  fundingOutDestinationWalletId: "",
+  fundingOutDestinationCurrency: baseCurrency,
+  fundingOutDestinationAmount: "",
+  fundingOutFxRate: "",
+  fundingOutFeeAmount: "",
+  fundingOutFeeCurrency: baseCurrency,
+  fundingOutInputMode: "amount",
+});
+
+const toFormNumber = (value: unknown) => {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? String(parsed) : "";
+};
+
+const isFundingOutDestinationType = (
+  value: unknown,
+): value is FundingOutDestinationType =>
+  value === "bank" ||
+  value === "trip" ||
+  value === "wallet" ||
+  value === "external";
+
+/** Edit form for a saved entry. Base amount and rate stay blank unless the entry was locked to them. */
+const buildEntryEditForm = (
+  entry: TripEntry,
+  baseCurrency: string,
+): TripEntryForm => {
+  const metadata = toRecord(entry.metadata) || {};
+  const fundingOut = toRecord(metadata.fundingOut) || {};
+  const locked =
+    metadata.baseAmountLocked === true ||
+    metadata.manualBaseAmount !== undefined ||
+    metadata.manualFxRate !== undefined;
+  const destinationAmount = toFormNumber(fundingOut.destinationAmount);
+  return {
+    walletId: entry.wallet.id === "__external__" ? "__none__" : entry.wallet.id,
+    type: entry.type === "funding_in" ? "spending" : entry.type,
+    date: String(entry.date).slice(0, 10),
+    description: entry.description,
+    label: entry.label || "",
+    categoryId: entry.type === "spending" ? entry.category?.id || "" : "",
+    localCurrency: entry.localCurrency.toUpperCase(),
+    localAmount: toFormNumber(entry.localAmount),
+    baseAmount: locked ? toFormNumber(entry.baseAmount) : "",
+    fxRate: "",
+    fundingOutDestinationType: isFundingOutDestinationType(
+      fundingOut.destinationType,
+    )
+      ? fundingOut.destinationType
+      : "external",
+    fundingOutDestinationTripId: String(fundingOut.destinationTripId || ""),
+    fundingOutDestinationWalletId: String(fundingOut.destinationWalletId || ""),
+    fundingOutDestinationCurrency: String(
+      fundingOut.destinationCurrency || entry.localCurrency,
+    ).toUpperCase(),
+    fundingOutDestinationAmount: destinationAmount,
+    fundingOutFxRate: toFormNumber(fundingOut.fxRate),
+    fundingOutFeeAmount: toFormNumber(fundingOut.feeAmount),
+    fundingOutFeeCurrency: String(
+      fundingOut.feeCurrency || baseCurrency,
+    ).toUpperCase(),
+    fundingOutInputMode: destinationAmount ? "amount" : "fxRate",
+  };
+};
+
+const buildFundingOutPayload = (
+  form: TripEntryForm,
+  baseCurrency: string,
+): TripFundingOutInput => ({
+  destinationType: form.fundingOutDestinationType,
+  destinationTripId:
+    form.fundingOutDestinationType === "trip"
+      ? form.fundingOutDestinationTripId || null
+      : null,
+  destinationWalletId:
+    form.fundingOutDestinationType === "wallet" ||
+    form.fundingOutDestinationType === "trip"
+      ? form.fundingOutDestinationWalletId || null
+      : null,
+  destinationCurrency: form.fundingOutDestinationCurrency || null,
+  destinationAmount:
+    form.fundingOutInputMode === "amount"
+      ? Number(form.fundingOutDestinationAmount || 0) || null
+      : null,
+  fxRate:
+    form.fundingOutInputMode === "fxRate"
+      ? Number(form.fundingOutFxRate || 0) || null
+      : null,
+  feeAmount: Number(form.fundingOutFeeAmount || 0) || null,
+  feeCurrency: form.fundingOutFeeCurrency || baseCurrency,
+});
+
+const FUNDING_OUT_FORM_FIELDS = [
+  "fundingOutDestinationType",
+  "fundingOutDestinationTripId",
+  "fundingOutDestinationWalletId",
+  "fundingOutDestinationCurrency",
+  "fundingOutDestinationAmount",
+  "fundingOutFxRate",
+  "fundingOutFeeAmount",
+  "fundingOutFeeCurrency",
+  "fundingOutInputMode",
+] as const;
+
+/** Checks the amount fields shared by adding and editing; returns a warning or null. */
+const validateEntryAmounts = (form: TripEntryForm) => {
+  if (!(Number(form.localAmount) > 0)) {
+    return "Enter an amount greater than 0.";
+  }
+  if (!/^[A-Z]{3}$/.test(form.localCurrency.trim().toUpperCase())) {
+    return "Currency must be a 3-letter code, like JPY.";
+  }
+  if (form.baseAmount.trim() && !(Number(form.baseAmount) > 0)) {
+    return "The base amount must be greater than 0, or left blank.";
+  }
+  if (form.fxRate.trim() && !(Number(form.fxRate) > 0)) {
+    return "The FX rate must be greater than 0, or left blank.";
+  }
+  if (
+    form.type === "funding_out" &&
+    form.fundingOutDestinationType === "wallet" &&
+    !form.fundingOutDestinationWalletId
+  ) {
+    return "Choose the wallet the money moves into.";
+  }
+  return null;
+};
+
+const DETACHED_SOURCE_NOTICES: Record<string, string> = {
+  deleted: "Bank transaction removed — relink or delete",
+  split: "Bank transaction was split — relink or delete",
+  direction_changed: "Bank transaction changed direction — relink or delete",
+};
+
+const getDetachedNotice = (metadata: Record<string, unknown> | null) => {
+  const detached = toRecord(metadata?.sourceDetached);
+  if (!detached) return undefined;
+  return (
+    DETACHED_SOURCE_NOTICES[String(detached.reason || "")] ||
+    DETACHED_SOURCE_NOTICES.deleted
+  );
+};
+
 export function TripTransactionsClient({
   trip,
   fundings: initialFundings,
@@ -245,7 +401,6 @@ export function TripTransactionsClient({
   initialFundingOutEntries,
   initialEntriesTotal,
   initialFundingCandidates,
-  tripParserOptions,
   allTrips,
 }: TripTransactionsClientProps) {
   const { setHeaderConfig } = useHeaderConfig();
@@ -307,7 +462,6 @@ export function TripTransactionsClient({
 
   const [isFundingModalOpen, setIsFundingModalOpen] = useState(false);
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
-  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isAddFromMainModalOpen, setIsAddFromMainModalOpen] = useState(false);
   const [isManualEntryModalOpen, setIsManualEntryModalOpen] = useState(false);
   const [isAddCategoryModalOpen, setIsAddCategoryModalOpen] = useState(false);
@@ -329,6 +483,7 @@ export function TripTransactionsClient({
     fxRate: "",
     feeAmount: "",
     feeCurrency: "",
+    baseAmount: "",
   });
   const [editingFundingInputMode, setEditingFundingInputMode] = useState<
     "amount" | "fxRate"
@@ -365,8 +520,9 @@ export function TripTransactionsClient({
     "spending" | "reimbursement" | "funding_out"
   >("spending");
   const [sourceFundingOut, setSourceFundingOut] = useState({
-    destinationType: "bank" as "bank" | "trip" | "external",
+    destinationType: "bank" as FundingOutDestinationType,
     destinationTripId: "",
+    destinationWalletId: "",
     destinationCurrency: trip.baseCurrency,
     destinationAmount: "",
     fxRate: "",
@@ -418,6 +574,7 @@ export function TripTransactionsClient({
     feeMode: "none" as "none" | "amount" | "percent",
     feeValue: "",
     feeCurrency: trip.baseCurrency,
+    baseAmount: "",
   });
 
   const [walletForm, setWalletForm] = useState({
@@ -425,50 +582,17 @@ export function TripTransactionsClient({
     currency: trip.baseCurrency,
     color: getRandomWalletColor(),
   });
-  const [importForm, setImportForm] = useState({
-    parserId: tripParserOptions[0]?.id || "",
-    walletId: "",
-  });
-  const [tripImportStep, setTripImportStep] = useState<"setup" | "review">(
-    "setup",
+  const [manualEntryForm, setManualEntryForm] = useState<TripEntryForm>(() =>
+    buildEmptyEntryForm(trip.baseCurrency),
   );
-  const [tripImportParsedData, setTripImportParsedData] =
-    useState<ImportParseResult | null>(null);
-  const [tripImportEditedTransactions, setTripImportEditedTransactions] =
-    useState<ImportTransaction[]>([]);
-  const [tripImportSelectedIndices, setTripImportSelectedIndices] = useState<
-    Set<number>
-  >(new Set());
-  const [manualEntryForm, setManualEntryForm] = useState({
-    walletId: "__none__",
-    type: "spending" as "spending" | "reimbursement" | "funding_out",
-    date: format(new Date(), "yyyy-MM-dd"),
-    description: "",
-    label: "",
-    categoryId: "",
-    localCurrency: trip.baseCurrency,
-    localAmount: "",
-    baseAmount: "",
-    fxRate: "",
-    fundingOutDestinationType: "bank" as "bank" | "trip" | "external",
-    fundingOutDestinationTripId: "",
-    fundingOutDestinationCurrency: trip.baseCurrency,
-    fundingOutDestinationAmount: "",
-    fundingOutFxRate: "",
-    fundingOutFeeAmount: "",
-    fundingOutFeeCurrency: trip.baseCurrency,
-    fundingOutInputMode: "amount" as "amount" | "fxRate",
-  });
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [supplementalFile, setSupplementalFile] = useState<File | null>(null);
-  const [importResult, setImportResult] = useState<{
-    importedSpendings: number;
-    importedReimbursements: number;
-    importedFundings?: number;
-    importedTransfers?: number;
-    importedFees?: number;
-    skipped: number;
-  } | null>(null);
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
+  const [entryEditForm, setEntryEditForm] = useState<TripEntryForm>(() =>
+    buildEmptyEntryForm(trip.baseCurrency),
+  );
+  const [entryEditInitial, setEntryEditInitial] = useState<TripEntryForm | null>(
+    null,
+  );
+  const [fundingInNoticeOpen, setFundingInNoticeOpen] = useState(false);
 
   const totalPages = Math.max(1, Math.ceil(entriesTotal / pageSize));
   const currencyOptions = useMemo(() => getCurrencyOptions(), []);
@@ -621,6 +745,7 @@ export function TripTransactionsClient({
                 }
             : undefined,
           accentColor,
+          notice: getDetachedNotice(entryMetadata),
           metadata: {
             entryType: entry.type,
             walletName: entry.wallet.name,
@@ -1472,6 +1597,25 @@ export function TripTransactionsClient({
     return amount > 0 ? amount : sourceAmount;
   };
 
+  // The server needs the base value when neither currency is the trip's.
+  const resolveFundingBaseAmount = (
+    sourceCurrency: string,
+    destinationCurrency: string,
+  ) => {
+    const base = trip.baseCurrency.toUpperCase();
+    if (
+      sourceCurrency.toUpperCase() === base ||
+      destinationCurrency.toUpperCase() === base
+    ) {
+      return null;
+    }
+    const amount = Number(fundingForm.baseAmount || 0);
+    if (!(amount > 0)) {
+      throw new Error(`Enter the ${trip.baseCurrency} amount for this funding.`);
+    }
+    return amount;
+  };
+
   const handleLinkFunding = async () => {
     setIsBusy(true);
     try {
@@ -1521,6 +1665,10 @@ export function TripTransactionsClient({
           destinationCurrency,
           destinationAmount,
           fxRate,
+          baseAmount: resolveFundingBaseAmount(
+            sourceCurrency,
+            destinationCurrency,
+          ),
           feeAmount: buildFeeAmount(sourceAmount),
           feeCurrency:
             fundingForm.feeMode === "none"
@@ -1535,6 +1683,17 @@ export function TripTransactionsClient({
         );
         if (selected.length === 0) {
           throw new Error("Select at least one bank transaction to link.");
+        }
+        if (
+          selected.length > 1 &&
+          resolveFundingBaseAmount(
+            fundingForm.sourceCurrency || trip.baseCurrency,
+            selectedFundingWallet.currency,
+          ) !== null
+        ) {
+          throw new Error(
+            "Select one bank transaction at a time when a base amount is needed.",
+          );
         }
 
         await Promise.all(
@@ -1562,6 +1721,10 @@ export function TripTransactionsClient({
               destinationCurrency,
               destinationAmount,
               fxRate,
+              baseAmount: resolveFundingBaseAmount(
+                sourceCurrency,
+                destinationCurrency,
+              ),
               feeAmount: buildFeeAmount(sourceAmount),
               feeCurrency:
                 fundingForm.feeMode === "none"
@@ -1581,6 +1744,7 @@ export function TripTransactionsClient({
         feeMode: "none",
         feeValue: "",
         feeCurrency: trip.baseCurrency,
+        baseAmount: "",
       });
       setFundingInputMode("amount");
       await refreshFundingsAndWallets();
@@ -1623,6 +1787,7 @@ export function TripTransactionsClient({
         funding.sourceCurrency ||
         destinationCurrency ||
         trip.baseCurrency,
+      baseAmount: funding.baseAmount != null ? String(funding.baseAmount) : "",
     });
     setEditingFundingInputMode("amount");
     setIsEditFundingModalOpen(true);
@@ -1675,9 +1840,25 @@ export function TripTransactionsClient({
       return;
     }
 
+    // Neither side in the base currency: the server needs the base value.
+    const needsBaseAmount =
+      normalized.sourceCurrency.toUpperCase() !== trip.baseCurrency.toUpperCase() &&
+      normalized.destinationCurrency.toUpperCase() !==
+        trip.baseCurrency.toUpperCase();
+    const baseAmount = Number(editingFundingForm.baseAmount || 0);
+    if (needsBaseAmount && !(baseAmount > 0)) {
+      showModal(
+        "warning",
+        "Base Amount Needed",
+        `Enter the ${trip.baseCurrency} amount for this funding.`,
+      );
+      return;
+    }
+
     setIsBusy(true);
     try {
       await updateTripFunding(trip.id, editingFundingId, {
+        baseAmount: needsBaseAmount ? baseAmount : null,
         walletId: editingFundingForm.walletId || null,
         sourceCurrency: normalized.sourceCurrency,
         sourceAmount: normalized.sourceAmount,
@@ -1875,6 +2056,11 @@ export function TripTransactionsClient({
                   sourceFundingOut.destinationType === "trip"
                     ? sourceFundingOut.destinationTripId || null
                     : null,
+                destinationWalletId:
+                  sourceFundingOut.destinationType === "wallet" ||
+                  sourceFundingOut.destinationType === "trip"
+                    ? sourceFundingOut.destinationWalletId || null
+                    : null,
                 destinationCurrency: sourceFundingOut.destinationCurrency || null,
                 destinationAmount:
                   sourceFundingOutInputMode === "amount"
@@ -1899,6 +2085,7 @@ export function TripTransactionsClient({
       setSourceFundingOut({
         destinationType: "bank",
         destinationTripId: "",
+        destinationWalletId: "",
         destinationCurrency: trip.baseCurrency,
         destinationAmount: "",
         fxRate: "",
@@ -1926,26 +2113,7 @@ export function TripTransactionsClient({
   };
 
   const resetManualEntryForm = () => {
-    setManualEntryForm({
-      walletId: "__none__",
-      type: "spending",
-      date: format(new Date(), "yyyy-MM-dd"),
-      description: "",
-      label: "",
-      categoryId: "",
-      localCurrency: trip.baseCurrency,
-      localAmount: "",
-      baseAmount: "",
-      fxRate: "",
-      fundingOutDestinationType: "bank",
-      fundingOutDestinationTripId: "",
-      fundingOutDestinationCurrency: trip.baseCurrency,
-      fundingOutDestinationAmount: "",
-      fundingOutFxRate: "",
-      fundingOutFeeAmount: "",
-      fundingOutFeeCurrency: trip.baseCurrency,
-      fundingOutInputMode: "amount",
-    });
+    setManualEntryForm(buildEmptyEntryForm(trip.baseCurrency));
   };
 
   const handleCreateManualEntry = async () => {
@@ -1954,53 +2122,14 @@ export function TripTransactionsClient({
       showModal("warning", "Missing Description", "Description is required.");
       return;
     }
-
-    const localAmount = Number(manualEntryForm.localAmount);
-    if (!(localAmount > 0)) {
-      showModal(
-        "warning",
-        "Invalid Spent Amount",
-        "Enter a spent amount greater than 0.",
-      );
+    const amountWarning = validateEntryAmounts(manualEntryForm);
+    if (amountWarning) {
+      showModal("warning", "Check the amounts", amountWarning);
       return;
     }
 
-    const normalizedLocalCurrency = manualEntryForm.localCurrency
-      .trim()
-      .toUpperCase();
-    if (!normalizedLocalCurrency) {
-      showModal("warning", "Missing Currency", "Spent currency is required.");
-      return;
-    }
-
-    const fxRateValue = manualEntryForm.fxRate
-      ? Number(manualEntryForm.fxRate)
-      : null;
-    if (fxRateValue !== null && !(fxRateValue > 0)) {
-      showModal(
-        "warning",
-        "Invalid FX Rate",
-        "FX rate must be greater than 0.",
-      );
-      return;
-    }
-
-    let baseAmount = Number(manualEntryForm.baseAmount);
-    if (!(baseAmount > 0)) {
-      if (normalizedLocalCurrency === trip.baseCurrency) {
-        baseAmount = localAmount;
-      } else if (fxRateValue !== null) {
-        baseAmount = localAmount * fxRateValue;
-      }
-    }
-    if (!(baseAmount > 0)) {
-      showModal(
-        "warning",
-        "Invalid Base Amount",
-        `Enter a base amount greater than 0 (${trip.baseCurrency}).`,
-      );
-      return;
-    }
+    const baseAmount = Number(manualEntryForm.baseAmount) || null;
+    const fxRate = Number(manualEntryForm.fxRate) || null;
 
     setIsBusy(true);
     try {
@@ -2017,36 +2146,16 @@ export function TripTransactionsClient({
           manualEntryForm.type === "spending"
             ? manualEntryForm.categoryId || null
             : null,
-        localCurrency: normalizedLocalCurrency,
-        localAmount,
+        localCurrency: manualEntryForm.localCurrency.trim().toUpperCase(),
+        localAmount: Number(manualEntryForm.localAmount),
+        // Left blank, the server values a wallet entry at the wallet's average rate.
         baseAmount,
-        fxRate: fxRateValue,
+        fxRate,
         feeAmount: null,
         feeCurrency: null,
         fundingOut:
           manualEntryForm.type === "funding_out"
-            ? {
-                destinationType: manualEntryForm.fundingOutDestinationType,
-                destinationTripId:
-                  manualEntryForm.fundingOutDestinationType === "trip"
-                    ? manualEntryForm.fundingOutDestinationTripId || null
-                    : null,
-                destinationCurrency:
-                  manualEntryForm.fundingOutDestinationCurrency || null,
-                destinationAmount:
-                  manualEntryForm.fundingOutInputMode === "amount"
-                    ? Number(manualEntryForm.fundingOutDestinationAmount || 0) ||
-                      null
-                    : null,
-                fxRate:
-                  manualEntryForm.fundingOutInputMode === "fxRate"
-                    ? Number(manualEntryForm.fundingOutFxRate || 0) || null
-                    : null,
-                feeAmount:
-                  Number(manualEntryForm.fundingOutFeeAmount || 0) || null,
-                feeCurrency:
-                  manualEntryForm.fundingOutFeeCurrency || trip.baseCurrency,
-              }
+            ? buildFundingOutPayload(manualEntryForm, trip.baseCurrency)
             : null,
         metadata: {
           source: "manual_trip_entry_modal",
@@ -2078,29 +2187,113 @@ export function TripTransactionsClient({
     }
   };
 
-  const handleOpenTripReimbursementEditor = (
-    transaction: TransactionCardTransaction,
-  ) => {
+  const editingEntry = useMemo(
+    () =>
+      editingEntryId
+        ? entries.find((entry) => entry.id === editingEntryId) || null
+        : null,
+    [editingEntryId, entries],
+  );
+  const editingEntryFromBank = Boolean(
+    toRecord(editingEntry?.metadata)?.sourceTransactionId,
+  );
+
+  const handleOpenEntryEditor = (transaction: TransactionCardTransaction) => {
     const entry = entries.find((item) => item.id === transaction.id);
     if (!entry) {
       showModal(
         "error",
         "Transaction Not Found",
-        "Unable to open reimbursement editor for this row.",
+        "Unable to open the editor for this row.",
       );
       return;
     }
+    if (entry.type === "funding_in") {
+      setFundingInNoticeOpen(true);
+      return;
+    }
+    const form = buildEntryEditForm(entry, trip.baseCurrency);
+    setEntryEditForm(form);
+    setEntryEditInitial(form);
+    setEditingEntryId(entry.id);
+  };
 
-    if (entry.type !== "reimbursement") {
+  const closeEntryEditor = () => {
+    setEditingEntryId(null);
+    setEntryEditInitial(null);
+  };
+
+  const handleSaveEntryEdit = async () => {
+    if (!editingEntry || !entryEditInitial) return;
+    const form = entryEditForm;
+    const initial = entryEditInitial;
+    const description = form.description.trim();
+    if (!description) {
+      showModal("warning", "Missing Description", "Description is required.");
+      return;
+    }
+    const amountWarning = validateEntryAmounts(form);
+    if (amountWarning) {
+      showModal("warning", "Check the amounts", amountWarning);
+      return;
+    }
+
+    // Send only what changed, so untouched values keep their current valuation.
+    const changes: Parameters<typeof updateTripEntry>[2] = {};
+    if (form.date !== initial.date) changes.date = form.date;
+    if (description !== initial.description.trim()) {
+      changes.description = description;
+    }
+    if (form.label.trim() !== initial.label.trim()) {
+      changes.label = form.label.trim() || null;
+    }
+    if (form.type === "spending" && form.categoryId !== initial.categoryId) {
+      changes.categoryId = form.categoryId || null;
+    }
+    if (!editingEntryFromBank) {
+      if (form.walletId !== initial.walletId) {
+        changes.walletId = form.walletId === "__none__" ? null : form.walletId;
+      }
+      const currency = form.localCurrency.trim().toUpperCase();
+      if (currency !== initial.localCurrency) changes.localCurrency = currency;
+      if (Number(form.localAmount) !== Number(initial.localAmount)) {
+        changes.localAmount = Number(form.localAmount);
+      }
+      if (form.baseAmount.trim() && form.baseAmount !== initial.baseAmount) {
+        changes.baseAmount = Number(form.baseAmount);
+      }
+      if (form.fxRate.trim()) changes.fxRate = Number(form.fxRate);
+    }
+    if (
+      form.type === "funding_out" &&
+      FUNDING_OUT_FORM_FIELDS.some((field) => form[field] !== initial[field])
+    ) {
+      changes.fundingOut = buildFundingOutPayload(form, trip.baseCurrency);
+    }
+
+    if (Object.keys(changes).length === 0) {
+      closeEntryEditor();
+      return;
+    }
+
+    setIsBusy(true);
+    try {
+      await updateTripEntry(trip.id, editingEntry.id, changes);
+      await Promise.all([
+        refreshEntries(page, filters),
+        refreshFundingsAndWallets(),
+      ]);
+      closeEntryEditor();
+      showModal("success", "Entry Updated", "Trip entry saved.");
+    } catch (error) {
       showModal(
-        "warning",
-        "Not a Reimbursement Transaction",
-        "Only reimbursement transactions can use the reimbursement linkage editor.",
+        "error",
+        "Update Failed",
+        error instanceof Error ? error.message : "Could not update the entry.",
       );
-      return;
+    } finally {
+      setIsBusy(false);
     }
-
-    setActiveReimbursementEntryId(entry.id);
   };
 
   const handleSaveTripReimbursementLinkage = async (
@@ -2315,205 +2508,6 @@ export function TripTransactionsClient({
     }
   };
 
-  const handleStartTripImportReview = async () => {
-    if (!selectedFile || !importForm.parserId) return;
-    const isRevolutParser = importForm.parserId === "revolut_statement";
-    setIsBusy(true);
-    setImportResult(null);
-    try {
-      const formData = new FormData();
-      formData.append("file", selectedFile);
-      formData.append("parserId", importForm.parserId);
-      if (isRevolutParser && supplementalFile) {
-        formData.append("supplementalFile", supplementalFile);
-      }
-      const parsed = (await parseFile(formData)) as ImportParseResult;
-
-      const normalized = (parsed.transactions || []).map((tx) => {
-        const metadata =
-          tx.metadata && typeof tx.metadata === "object"
-            ? { ...(tx.metadata as Record<string, unknown>) }
-            : {};
-        const transactionType = String(metadata.transactionType || "").toLowerCase();
-        const amountIn = Number(tx.amountIn ?? 0) || 0;
-        const amountOut = Number(tx.amountOut ?? 0) || 0;
-        const netTopupAmount =
-          amountIn > 0 ? Math.max(0, amountIn - amountOut) : 0;
-        const topupCurrency = String(
-          metadata.currency || trip.baseCurrency,
-        ).toUpperCase();
-        const defaultTopupLabel =
-          transactionType === "topup" && netTopupAmount > 0
-            ? `Top up of (${topupCurrency}) ${netTopupAmount.toFixed(2)}`
-            : undefined;
-        const fundingInDisabled = metadata.fundingInDisabled === true;
-
-        return {
-          ...tx,
-          label:
-            tx.label && tx.label.trim().length > 0
-              ? tx.label
-              : defaultTopupLabel,
-          entryTypeOverride:
-            tx.entryTypeOverride ||
-            (transactionType === "topup" && !fundingInDisabled
-              ? "funding_in"
-              : undefined),
-          metadata,
-        };
-      });
-
-      setTripImportParsedData(parsed);
-      setTripImportEditedTransactions(normalized);
-      setTripImportSelectedIndices(
-        new Set(normalized.map((_, index) => index)),
-      );
-      setTripImportStep("review");
-    } catch (error) {
-      showModal(
-        "error",
-        "Parse Failed",
-        error instanceof Error ? error.message : "Failed to parse statement.",
-      );
-    } finally {
-      setIsBusy(false);
-    }
-  };
-
-  const handleTripImportUpdateTransaction = (
-    index: number,
-    field: string,
-    value: unknown,
-  ) => {
-    setTripImportEditedTransactions((prev) => {
-      const next = [...prev];
-      const nextRow = { ...next[index], [field]: value };
-      if (field === "label") {
-        nextRow.suggestedLabel = undefined;
-      }
-      if (field === "categoryId") {
-        nextRow.suggestedCategoryId = undefined;
-      }
-      next[index] = nextRow;
-      return next;
-    });
-  };
-
-  const handleTripImportSelectAll = () => {
-    setTripImportSelectedIndices(
-      new Set(tripImportEditedTransactions.map((_, index) => index)),
-    );
-  };
-
-  const handleTripImportDeselectAll = () => {
-    setTripImportSelectedIndices(new Set());
-  };
-
-  const handleTripImportSelectVisible = (indices: number[]) => {
-    setTripImportSelectedIndices((prev) => {
-      const next = new Set(prev);
-      indices.forEach((index) => next.add(index));
-      return next;
-    });
-  };
-
-  const handleTripImportDeselectVisible = (indices: number[]) => {
-    setTripImportSelectedIndices((prev) => {
-      const next = new Set(prev);
-      indices.forEach((index) => next.delete(index));
-      return next;
-    });
-  };
-
-  const handleTripImportToggleSelection = (index: number) => {
-    setTripImportSelectedIndices((prev) => {
-      const next = new Set(prev);
-      if (next.has(index)) next.delete(index);
-      else next.add(index);
-      return next;
-    });
-  };
-
-  const handleCommitTripImportReview = async () => {
-    if (tripImportSelectedIndices.size === 0) {
-      showModal(
-        "warning",
-        "No Transactions Selected",
-        "Select at least one row to import.",
-      );
-      return;
-    }
-
-    setIsBusy(true);
-    try {
-      const selectedTransactions = Array.from(tripImportSelectedIndices)
-        .sort((a, b) => a - b)
-        .map((index) => tripImportEditedTransactions[index]);
-
-      const result = await importTripSpendings(
-        trip.id,
-        {
-          walletId: importForm.walletId || null,
-          parserId: importForm.parserId,
-        },
-        selectedTransactions.map((tx) => buildTripImportPayload(tx)),
-      );
-      setImportResult(result);
-      const [, nextFundings] = await Promise.all([
-        refreshEntries(page, filters),
-        refreshFundingsAndWallets(),
-      ]);
-      setSelectedFile(null);
-      setSupplementalFile(null);
-      setTripImportParsedData(null);
-      setTripImportEditedTransactions([]);
-      setTripImportSelectedIndices(new Set());
-      setTripImportStep("setup");
-
-      const pendingReviewCount = (nextFundings || []).filter((item) => {
-        const metadata =
-          item.metadata && typeof item.metadata === "object"
-            ? (item.metadata as Record<string, unknown>)
-            : {};
-        return (
-          item.sourceType === "imported_topup" &&
-          !item.bankTransactionId &&
-          typeof metadata.autoMatchedBankTransactionId === "string" &&
-          metadata.autoMatchedBankTransactionId.length > 0 &&
-          (typeof metadata.matchReviewStatus === "string"
-            ? metadata.matchReviewStatus === "pending"
-            : true)
-        );
-      }).length;
-
-      if (pendingReviewCount > 0) {
-        showModal(
-          "info",
-          "Import Complete",
-          `Imported successfully. ${pendingReviewCount} funding match${
-            pendingReviewCount > 1 ? "es" : ""
-          } require review.`,
-        );
-        setIsFundingModalOpen(true);
-      } else {
-        showModal(
-          "success",
-          "Import Complete",
-          "Trip statement imported successfully.",
-        );
-      }
-      setIsImportModalOpen(false);
-    } catch (error) {
-      showModal(
-        "error",
-        "Import Failed",
-        error instanceof Error ? error.message : "Failed to import statement.",
-      );
-    } finally {
-      setIsBusy(false);
-    }
-  };
-
   return (
     <div className="grid h-full min-h-0 w-full max-w-full overflow-x-hidden gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <TripTransactionsSideRail
@@ -2537,6 +2531,16 @@ export function TripTransactionsClient({
               description: item.description,
               currency: item.displayCurrency || trip.baseCurrency,
               amount: Number(item.amountIn ?? item.amountOut ?? 0),
+              notice: (() => {
+                const detached = toRecord(
+                  (item.metadata as Record<string, unknown> | undefined)
+                    ?.detachedBankTransaction,
+                );
+                return detached
+                  ? DETACHED_SOURCE_NOTICES[String(detached.reason || "")] ||
+                      DETACHED_SOURCE_NOTICES.deleted
+                  : undefined;
+              })(),
               walletColor: String(
                 (item.metadata as Record<string, unknown> | undefined)
                   ?.walletColor || "#ffffff",
@@ -2565,14 +2569,14 @@ export function TripTransactionsClient({
                 onClick={() => setIsAddFromMainModalOpen(true)}
                 leftIcon={<Link2 className="h-4 w-4" />}
               >
-                Add From Bank Ledger
+                Add from bank
               </Button>
               <Button
                 variant="secondary"
                 onClick={() => setIsManualEntryModalOpen(true)}
                 leftIcon={<Plus className="h-4 w-4" />}
               >
-                Manual Entry
+                Add entry
               </Button>
               <Button
                 variant="primary"
@@ -2580,7 +2584,7 @@ export function TripTransactionsClient({
                 onClick={() => router.push(`/trips/${trip.id}/import`)}
                 leftIcon={<FileUp className="h-4 w-4" />}
               >
-                Import Trip Statement
+                Import statement
               </Button>
             </div>
           </div>
@@ -2595,22 +2599,6 @@ export function TripTransactionsClient({
               compact
               className="pt-1"
             />
-            {importResult && (
-              <div className="inline-flex items-center gap-1 rounded-lg border border-stroke px-2.5 py-1.5 text-xs text-dark-5 dark:border-dark-3 dark:text-dark-6">
-                <PlaneTakeoff className="h-3.5 w-3.5" />
-                Imported {importResult.importedSpendings} spendings /{" "}
-                {importResult.importedReimbursements} reimbursements
-                {(importResult.importedFundings || 0) > 0 && (
-                  <> / {importResult.importedFundings} fundings</>
-                )}
-                {(importResult.importedTransfers || 0) > 0 && (
-                  <> / {importResult.importedTransfers} transfers</>
-                )}
-                {(importResult.importedFees || 0) > 0 && (
-                  <> / {importResult.importedFees} fees</>
-                )}
-              </div>
-            )}
           </div>
 
           <div className="grid gap-3 lg:grid-cols-[2fr_1fr_1fr_1fr_1fr]">
@@ -2856,11 +2844,7 @@ export function TripTransactionsClient({
                     : selectedEntryIds
                 }
                 onToggleSelect={toggleEntrySelection}
-                onEdit={handleOpenTripReimbursementEditor}
-                canEdit={(transaction) =>
-                  String(transaction.metadata?.entryType || "").toLowerCase() ===
-                  "reimbursement"
-                }
+                onEdit={handleOpenEntryEditor}
               />
             </>
           )}
@@ -2991,6 +2975,7 @@ export function TripTransactionsClient({
         sourceFundingOutInputMode={sourceFundingOutInputMode}
         setSourceFundingOutInputMode={setSourceFundingOutInputMode}
         availableTrips={allTrips.filter((item) => item.id !== trip.id)}
+        wallets={wallets}
         currencyOptions={currencyOptions}
         baseCurrency={trip.baseCurrency}
         localCategories={localCategories}
@@ -3013,6 +2998,46 @@ export function TripTransactionsClient({
         setForm={setManualEntryForm}
         resetForm={resetManualEntryForm}
         availableTrips={allTrips.filter((item) => item.id !== trip.id)}
+      />
+
+      <TripManualEntryModal
+        mode="edit"
+        isOpen={!!editingEntry}
+        onClose={closeEntryEditor}
+        isBusy={isBusy}
+        onSubmit={() => void handleSaveEntryEdit()}
+        onAddCategoryClick={() => setIsAddCategoryModalOpen(true)}
+        localCategories={localCategories}
+        wallets={wallets}
+        currencyOptions={currencyOptions}
+        baseCurrency={trip.baseCurrency}
+        form={entryEditForm}
+        setForm={setEntryEditForm}
+        resetForm={() => undefined}
+        availableTrips={allTrips.filter((item) => item.id !== trip.id)}
+        lockAmounts={editingEntryFromBank}
+        onEditReimbursementLinks={
+          editingEntry?.type === "reimbursement"
+            ? () => {
+                setActiveReimbursementEntryId(editingEntry.id);
+                closeEntryEditor();
+              }
+            : undefined
+        }
+      />
+
+      <Modal
+        isOpen={fundingInNoticeOpen}
+        onClose={() => setFundingInNoticeOpen(false)}
+        type="info"
+        title="Edit on the funding page"
+        message="Money coming into this trip is edited on the funding page."
+        confirmText="Go to funding"
+        cancelText="Cancel"
+        onConfirm={() => {
+          setFundingInNoticeOpen(false);
+          router.push(`/trips/${trip.id}/manage/funding`);
+        }}
       />
 
       <TripWalletModal
@@ -3056,44 +3081,10 @@ export function TripTransactionsClient({
             ].filter((value): value is string => Boolean(value)),
           ),
         )}
+        baseCurrency={trip.baseCurrency}
         onSave={() => void handleSaveEditFunding()}
       />
 
-      <TripImportStatementModal
-        isOpen={isImportModalOpen}
-        onClose={() => setIsImportModalOpen(false)}
-        isBusy={isBusy}
-        tripImportStep={tripImportStep}
-        setTripImportStep={setTripImportStep}
-        tripImportParsedData={tripImportParsedData}
-        tripImportEditedTransactions={tripImportEditedTransactions}
-        tripImportSelectedIndices={tripImportSelectedIndices}
-        localCategories={localCategories}
-        tripParserOptions={tripParserOptions}
-        wallets={wallets}
-        importForm={importForm}
-        setImportForm={setImportForm}
-        selectedFile={selectedFile}
-        setSelectedFile={setSelectedFile}
-        supplementalFile={supplementalFile}
-        setSupplementalFile={setSupplementalFile}
-        onStartReview={handleStartTripImportReview}
-        onUpdateTransaction={handleTripImportUpdateTransaction}
-        onCommitReview={handleCommitTripImportReview}
-        onSelectAll={handleTripImportSelectAll}
-        onDeselectAll={handleTripImportDeselectAll}
-        onSelectVisible={handleTripImportSelectVisible}
-        onDeselectVisible={handleTripImportDeselectVisible}
-        onToggleSelection={handleTripImportToggleSelection}
-        onAddCategoryClick={() => setIsAddCategoryModalOpen(true)}
-        onOpenFundingModal={() => setIsFundingModalOpen(true)}
-        resetReviewState={() => {
-          setTripImportStep("setup");
-          setTripImportParsedData(null);
-          setTripImportEditedTransactions([]);
-          setTripImportSelectedIndices(new Set());
-        }}
-      />
 
       {activeReimbursementEntry && activeReimbursementImportTransaction && (
         <TripReimbursementSelectorModal

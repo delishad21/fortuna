@@ -14,12 +14,12 @@ import { useRouter } from "next/navigation";
 import {
   getFundingCandidates,
   getTripFundings,
-  reviewTripFundingMatch,
   type FundingCandidate,
   type FundingCandidatesResponse,
   type Trip,
   type TripFunding,
 } from "@/app/actions/trips";
+import { reviewTripFundingMatch } from "@/lib/tripMutations";
 import { useHeaderConfig } from "@/components/Layouts/header-context";
 import { ExistingTransactionsSelector } from "@/components/ui/ExistingTransactionsSelector";
 import { Button } from "@/components/ui/Button";
@@ -98,6 +98,52 @@ const toNumericOrNull = (value: unknown): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+// The server unlinks fundings whose bank transaction was deleted, split or flipped
+// and sends them back to review.
+const getDetachedBankNote = (funding: TripFunding) => {
+  if (funding.bankTransactionId) return null;
+  const metadata =
+    funding.metadata && typeof funding.metadata === "object"
+      ? (funding.metadata as Record<string, unknown>)
+      : {};
+  if (
+    metadata.matchReviewState !== undefined &&
+    metadata.matchReviewState !== "pending_review"
+  ) {
+    return null;
+  }
+  const detached = metadata.detachedBankTransaction as
+    | { reason?: unknown }
+    | null
+    | undefined;
+  if (!detached || typeof detached !== "object") return null;
+  if (detached.reason === "split") {
+    return "Bank transaction was split — relink or delete";
+  }
+  if (detached.reason === "direction_changed") {
+    return "Bank transaction changed direction — relink or delete";
+  }
+  return "Bank transaction removed — relink or delete";
+};
+
+// Imported topups and opening balances awaiting review, plus any funding that lost
+// its bank transaction.
+const isPendingReviewFunding = (item: TripFunding) => {
+  if (item.bankTransactionId) return false;
+  if (getDetachedBankNote(item)) return true;
+  if (item.sourceType !== "imported_topup" && item.sourceType !== "opening_balance")
+    return false;
+  const metadata =
+    item.metadata && typeof item.metadata === "object"
+      ? (item.metadata as Record<string, unknown>)
+      : {};
+  const status =
+    typeof metadata.matchReviewStatus === "string"
+      ? metadata.matchReviewStatus
+      : "pending";
+  return status === "pending" || status === "unmatched";
+};
+
 export function TripFundingMatchReviewClient({
   trip,
   fundings: initialFundings,
@@ -158,22 +204,10 @@ export function TripFundingMatchReviewClient({
     return next;
   };
 
-  const pendingFundings = useMemo(() => {
-    return fundings.filter((item) => {
-      if (item.sourceType !== "imported_topup" && item.sourceType !== "opening_balance")
-        return false;
-      if (item.bankTransactionId) return false;
-      const metadata =
-        item.metadata && typeof item.metadata === "object"
-          ? (item.metadata as Record<string, unknown>)
-          : {};
-      const status =
-        typeof metadata.matchReviewStatus === "string"
-          ? metadata.matchReviewStatus
-          : "pending";
-      return status === "pending" || status === "unmatched";
-    });
-  }, [fundings]);
+  const pendingFundings = useMemo(
+    () => fundings.filter(isPendingReviewFunding),
+    [fundings],
+  );
 
   useEffect(() => {
     if (pendingFundings.length === 0) {
@@ -215,12 +249,22 @@ export function TripFundingMatchReviewClient({
       metadata.autoMatchCandidates && typeof metadata.autoMatchCandidates === "object"
         ? (metadata.autoMatchCandidates as Record<string, unknown>)
         : {};
+    // Never suggest the bank transaction this funding was just unlinked from.
+    const detachedId =
+      metadata.detachedBankTransaction &&
+      typeof metadata.detachedBankTransaction === "object" &&
+      typeof (metadata.detachedBankTransaction as Record<string, unknown>).id ===
+        "string"
+        ? ((metadata.detachedBankTransaction as Record<string, unknown>)
+            .id as string)
+        : "";
 
     const mapCandidate = (row: unknown, source: "funding_list" | "bank"): MatchCandidate | null => {
       if (!row || typeof row !== "object") return null;
       const data = row as Record<string, unknown>;
       if (typeof data.id !== "string" || data.id.length === 0) return null;
       if (usedBankTransactionIds.has(data.id)) return null;
+      if (detachedId && data.id === detachedId) return null;
       return {
         id: data.id,
         date:
@@ -254,7 +298,8 @@ export function TripFundingMatchReviewClient({
       .filter((row): row is MatchCandidate => !!row);
 
     const recommendedId =
-      typeof metadata.autoMatchedBankTransactionId === "string"
+      typeof metadata.autoMatchedBankTransactionId === "string" &&
+      metadata.autoMatchedBankTransactionId !== detachedId
         ? metadata.autoMatchedBankTransactionId
         : "";
 
@@ -377,7 +422,9 @@ export function TripFundingMatchReviewClient({
         ? metadata.originalDescription
         : currentFunding.sourceType === "opening_balance"
           ? "Opening balance funding"
-          : "Imported topup";
+          : currentFunding.sourceType === "imported_topup"
+            ? "Imported topup"
+            : "Funding";
 
     const sourceAmount = toNumericOrNull(currentFunding.sourceAmount);
     const destinationAmount = toNumericOrNull(currentFunding.destinationAmount);
@@ -391,7 +438,9 @@ export function TripFundingMatchReviewClient({
       label:
         currentFunding.sourceType === "opening_balance"
           ? "Opening Balance"
-          : "Imported Topup",
+          : currentFunding.sourceType === "imported_topup"
+            ? "Imported Topup"
+            : "Funding",
       amountIn: destinationAmount,
       amountOut: sourceAmount,
       balance: null,
@@ -487,20 +536,7 @@ export function TripFundingMatchReviewClient({
         bankTransactionId,
       });
       const next = await refreshFundings();
-      const nextPending = next.filter((item) => {
-        if (item.sourceType !== "imported_topup" && item.sourceType !== "opening_balance")
-          return false;
-        if (item.bankTransactionId) return false;
-        const metadata =
-          item.metadata && typeof item.metadata === "object"
-            ? (item.metadata as Record<string, unknown>)
-            : {};
-        const status =
-          typeof metadata.matchReviewStatus === "string"
-            ? metadata.matchReviewStatus
-            : "pending";
-        return status === "pending" || status === "unmatched";
-      });
+      const nextPending = next.filter(isPendingReviewFunding);
 
       if (nextPending.length === 0) {
         showModal("success", "Review Complete", "All pending funding matches were resolved.");
@@ -571,7 +607,9 @@ export function TripFundingMatchReviewClient({
                     <p className="text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
                       {currentFunding.sourceType === "opening_balance"
                         ? "Opening Balance Suggestion"
-                        : "Current Topup"}
+                        : currentFunding.sourceType === "imported_topup"
+                          ? "Current Topup"
+                          : "Current Funding"}
                     </p>
                     {currentFundingCard ? (
                       <TransactionCard
@@ -580,6 +618,11 @@ export function TripFundingMatchReviewClient({
                         className="border border-stroke dark:border-dark-3 rounded-lg"
                       />
                     ) : null}
+                    {getDetachedBankNote(currentFunding) && (
+                      <span className="inline-block rounded-full bg-yellow-light-4 px-2 py-0.5 text-xs font-medium text-yellow-dark dark:bg-yellow-dark/15">
+                        {getDetachedBankNote(currentFunding)}
+                      </span>
+                    )}
 
                     {currentFunding.sourceType === "opening_balance" ? (
                       <div />
@@ -707,7 +750,9 @@ export function TripFundingMatchReviewClient({
                     >
                       {currentFunding.sourceType === "opening_balance"
                         ? "Skip Opening Balance"
-                        : "Skip Linkage (keep topup as funding)"}
+                        : currentFunding.sourceType === "imported_topup"
+                          ? "Skip Linkage (keep topup as funding)"
+                          : "Skip Linkage (keep funding)"}
                     </Button>
                   </div>
                 </CardContent>

@@ -75,6 +75,8 @@ interface TripTransactionsFundingModalProps {
     feeMode: "none" | "amount" | "percent";
     feeValue: string;
     feeCurrency: string;
+    // Value in the trip base currency; needed when neither currency is the base.
+    baseAmount: string;
   };
   setFundingForm: (
     updater: (
@@ -163,6 +165,19 @@ export function TripTransactionsFundingModal({
   onLinkFunding,
 }: TripTransactionsFundingModalProps) {
   if (!isOpen) return null;
+
+  const base = baseCurrency.trim().toUpperCase();
+  const fundingSourceCurrency = (fundingForm.sourceCurrency || baseCurrency)
+    .trim()
+    .toUpperCase();
+  const fundingDestinationCurrency = (selectedFundingWallet?.currency || "")
+    .trim()
+    .toUpperCase();
+  const showBaseAmount =
+    (fundingModalTab === "bank" || fundingModalTab === "manual") &&
+    !!fundingDestinationCurrency &&
+    fundingSourceCurrency !== base &&
+    fundingDestinationCurrency !== base;
 
   return (
     <div
@@ -555,6 +570,27 @@ export function TripTransactionsFundingModal({
                   />
                 </div>
               </div>
+
+              {showBaseAmount && (
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
+                    Base amount ({base})
+                  </label>
+                  <NumberInput
+                    value={fundingForm.baseAmount}
+                    onChange={(e) =>
+                      setFundingForm((prev) => ({
+                        ...prev,
+                        baseAmount: e.target.value,
+                      }))
+                    }
+                    placeholder={`Amount in ${base}`}
+                  />
+                  <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
+                    Needed when neither currency is {base}.
+                  </p>
+                </div>
+              )}
 
               <div className="grid gap-3 md:grid-cols-3">
                 <div className="md:col-span-3">

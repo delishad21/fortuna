@@ -1,21 +1,31 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Trash2 } from "lucide-react";
-import { deleteTrip, type Trip, updateTrip } from "@/app/actions/trips";
+import { type Trip } from "@/app/actions/trips";
+import { deleteTrip, updateTrip } from "@/lib/tripMutations";
 import { useHeaderConfig } from "@/components/Layouts/header-context";
 import { Button } from "@/components/ui/Button";
 import { DatePicker } from "@/components/ui/DatePicker";
 import { Modal } from "@/components/ui/Modal";
+import { Select } from "@/components/ui/Select";
 import { TextInput } from "@/components/ui/TextInput";
+import {
+  DEFAULT_TRIP_COVER_URL,
+  TRIP_STATUS_OPTIONS,
+  TripCoverUploadButton,
+} from "@/components/trips/TripsClient";
+import { getCurrencyOptions } from "@/lib/currencies";
 
 interface TripDetailsClientProps {
   trip: Trip;
+  /** The trip has entries or funding, so its base currency is fixed. */
+  hasActivity: boolean;
 }
 
-export function TripDetailsClient({ trip }: TripDetailsClientProps) {
+export function TripDetailsClient({ trip, hasActivity }: TripDetailsClientProps) {
   const router = useRouter();
   const { setHeaderConfig } = useHeaderConfig();
   const [isSaving, setIsSaving] = useState(false);
@@ -42,6 +52,7 @@ export function TripDetailsClient({ trip }: TripDetailsClientProps) {
     status: trip.status || "active",
     notes: trip.notes || "",
   });
+  const currencyOptions = useMemo(() => getCurrencyOptions(), []);
 
   useEffect(() => {
     setHeaderConfig({
@@ -69,11 +80,18 @@ export function TripDetailsClient({ trip }: TripDetailsClientProps) {
       showModal("warning", "Start Date Required", "Start date is required.");
       return;
     }
+    if (form.endDate && form.endDate < form.startDate) {
+      showModal("warning", "Check Dates", "End date can't be before the start date.");
+      return;
+    }
 
     setIsSaving(true);
     try {
       await updateTrip(trip.id, {
         name: form.name.trim(),
+        ...(form.baseCurrency !== trip.baseCurrency
+          ? { baseCurrency: form.baseCurrency }
+          : {}),
         coverImageUrl: form.coverImageUrl.trim() || null,
         startDate: form.startDate,
         endDate: form.endDate || null,
@@ -128,7 +146,19 @@ export function TripDetailsClient({ trip }: TripDetailsClientProps) {
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
               Base currency
             </label>
-            <TextInput value={form.baseCurrency} disabled />
+            <Select
+              value={form.baseCurrency}
+              onChange={(value) => setForm((prev) => ({ ...prev, baseCurrency: value }))}
+              options={currencyOptions}
+              disabled={hasActivity}
+              className="w-full"
+              buttonClassName="w-full"
+            />
+            {hasActivity && (
+              <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
+                Can&apos;t change after the trip has transactions or funding.
+              </p>
+            )}
           </div>
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
@@ -158,16 +188,48 @@ export function TripDetailsClient({ trip }: TripDetailsClientProps) {
               />
             </div>
           </div>
-          <div className="md:col-span-2">
+          <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-              Cover image URL
+              Status
             </label>
-            <TextInput
-              value={form.coverImageUrl}
-              onChange={(e) =>
-                setForm((prev) => ({ ...prev, coverImageUrl: e.target.value }))
-              }
-              placeholder="/images/default-trip-cover.jpg"
+            <Select
+              value={form.status}
+              onChange={(value) => setForm((prev) => ({ ...prev, status: value }))}
+              options={TRIP_STATUS_OPTIONS}
+              className="w-full"
+              buttonClassName="w-full"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
+              Cover photo
+            </label>
+            <div className="flex items-center gap-2">
+              <TripCoverUploadButton
+                onSelect={(dataUrl) =>
+                  setForm((prev) => ({ ...prev, coverImageUrl: dataUrl }))
+                }
+              />
+              {form.coverImageUrl && (
+                <Button
+                  variant="secondary"
+                  onClick={() => setForm((prev) => ({ ...prev, coverImageUrl: "" }))}
+                >
+                  Use default
+                </Button>
+              )}
+            </div>
+          </div>
+          <div className="md:col-span-2 h-48 overflow-hidden rounded-lg border border-stroke dark:border-dark-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={form.coverImageUrl || DEFAULT_TRIP_COVER_URL}
+              alt="Trip cover preview"
+              className="h-full w-full object-cover"
+              onError={(event) => {
+                event.currentTarget.onerror = null;
+                event.currentTarget.src = DEFAULT_TRIP_COVER_URL;
+              }}
             />
           </div>
           <div className="md:col-span-2">

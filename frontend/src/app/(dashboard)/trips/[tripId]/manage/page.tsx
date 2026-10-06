@@ -9,7 +9,6 @@ import {
 } from "@/app/actions/trips";
 import { getCategories } from "@/app/actions/categories";
 import { TripTransactionsClient } from "@/components/trips/TripTransactionsClient";
-import { getParserOptions } from "@/lib/parsers";
 
 interface TripManagePageProps {
   params: Promise<{ tripId: string }>;
@@ -26,7 +25,6 @@ export default async function TripManagePage({ params }: TripManagePageProps) {
     fundingOutEntries,
     categories,
     fundingCandidates,
-    tripParsers,
     allTrips,
   ] = await Promise.all([
     getTrip(tripId),
@@ -41,7 +39,6 @@ export default async function TripManagePage({ params }: TripManagePageProps) {
     }),
     getCategories({ scope: "trips" }),
     getFundingCandidates(tripId, { limit: 20, offset: 0 }),
-    getParserOptions("trip"),
     getTrips(),
   ]);
 
@@ -56,7 +53,6 @@ export default async function TripManagePage({ params }: TripManagePageProps) {
       initialFundingOutEntries={fundingOutEntries.items}
       initialEntriesTotal={entries.total}
       initialFundingCandidates={fundingCandidates}
-      tripParserOptions={tripParsers}
       allTrips={allTrips}
     />
   );

@@ -53,6 +53,11 @@ interface Transaction {
     id: string;
     trip: { id: string; name: string };
   }>;
+  tripEntries?: Array<{
+    id: string;
+    type: string;
+    trip: { id: string; name: string };
+  }>;
   linkedTransactions?: {
     reimburses: Array<{
       id: string;

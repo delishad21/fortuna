@@ -16,24 +16,11 @@ import { format } from "date-fns";
 import Link from "next/link";
 import { parseFile } from "@/app/actions/parser";
 import {
-  addEntriesFromSourceTransactions,
-  createTripEntry,
-  createTripFunding,
-  deleteTripFunding,
-  bulkDeleteTripEntriesByFilter,
-  bulkDeleteTripEntriesByIds,
-  bulkUpdateTripEntriesByFilter,
-  bulkUpdateTripEntriesByIds,
-  createWallet,
   getFundingCandidates,
   getSourceTransactionCandidates,
   getTripEntries,
   getTripFundings,
   getTripWalletSummaries,
-  importTripSpendings,
-  mergeTripFunding,
-  reviewTripFundingMatch,
-  updateTripFunding,
   type FundingCandidate,
   type FundingCandidatesResponse,
   type SourceTransactionCandidate,
@@ -45,6 +32,21 @@ import {
   type Wallet,
   type WalletSummary,
 } from "@/app/actions/trips";
+import {
+  addEntriesFromSourceTransactions,
+  createTripEntry,
+  createTripFunding,
+  deleteTripFunding,
+  bulkDeleteTripEntriesByFilter,
+  bulkDeleteTripEntriesByIds,
+  bulkUpdateTripEntriesByFilter,
+  bulkUpdateTripEntriesByIds,
+  createWallet,
+  importTripSpendings,
+  mergeTripFunding,
+  reviewTripFundingMatch,
+  updateTripFunding,
+} from "@/lib/tripMutations";
 import { createCategory, type Category } from "@/app/actions/categories";
 import type { ParserOption } from "@/lib/parsers";
 import { getCurrencyOptions } from "@/lib/currencies";
@@ -70,6 +72,7 @@ import type { TransactionCardTransaction } from "@/components/transactions/Trans
 import { ExistingTransactionsSelector } from "@/components/ui/ExistingTransactionsSelector";
 import { TransactionTable } from "@/components/transaction-table/TransactionTable";
 import { TripPropagationTraceCard } from "@/components/trips/TripPropagationTraceCard";
+import { TripEditFundingModal } from "@/components/trips/TripEditFundingModal";
 import type {
   ParseResult as ImportParseResult,
   Transaction as ImportTransaction,
@@ -103,6 +106,51 @@ const formatCurrencyValue = (value: number) =>
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(value);
+
+// The server needs a base amount when neither side of the funding is in the base currency.
+const fundingNeedsBaseAmount = (
+  sourceCurrency: string,
+  destinationCurrency: string,
+  baseCurrency: string,
+) => {
+  const source = sourceCurrency.trim().toUpperCase();
+  const destination = destinationCurrency.trim().toUpperCase();
+  const base = baseCurrency.trim().toUpperCase();
+  return !!source && !!destination && source !== base && destination !== base;
+};
+
+// The server unlinks fundings whose bank transaction was deleted, split or flipped
+// and sends them back to review.
+const getDetachedBankNote = (funding: TripFunding) => {
+  if (funding.bankTransactionId) return null;
+  const metadata =
+    funding.metadata && typeof funding.metadata === "object"
+      ? (funding.metadata as Record<string, unknown>)
+      : {};
+  if (
+    metadata.matchReviewState !== undefined &&
+    metadata.matchReviewState !== "pending_review"
+  ) {
+    return null;
+  }
+  const detached = metadata.detachedBankTransaction as
+    | { reason?: unknown }
+    | null
+    | undefined;
+  if (!detached || typeof detached !== "object") return null;
+  if (detached.reason === "split") {
+    return "Bank transaction was split — relink or delete";
+  }
+  if (detached.reason === "direction_changed") {
+    return "Bank transaction changed direction — relink or delete";
+  }
+  return "Bank transaction removed — relink or delete";
+};
+
+// Imported topups and fundings that lost their bank transaction can be linked to one.
+const canAttachBankTransaction = (funding: TripFunding) =>
+  !funding.bankTransactionId &&
+  (funding.sourceType === "imported_topup" || !!getDetachedBankNote(funding));
 
 export function TripManageFundingClient({
   trip,
@@ -180,6 +228,7 @@ export function TripManageFundingClient({
     fxRate: "",
     feeAmount: "",
     feeCurrency: "",
+    baseAmount: "",
   });
   const [editingFundingInputMode, setEditingFundingInputMode] = useState<
     "amount" | "fxRate"
@@ -257,6 +306,7 @@ export function TripManageFundingClient({
     feeMode: "none" as "none" | "amount" | "percent",
     feeValue: "",
     feeCurrency: trip.baseCurrency,
+    baseAmount: "",
   });
 
   const [walletForm, setWalletForm] = useState({
@@ -1113,6 +1163,28 @@ export function TripManageFundingClient({
     return amount > 0 ? amount : sourceAmount;
   };
 
+  const resolveFundingBaseAmount = (
+    sourceCurrency: string,
+    destinationCurrency: string,
+  ) => {
+    if (
+      !fundingNeedsBaseAmount(
+        sourceCurrency,
+        destinationCurrency,
+        trip.baseCurrency,
+      )
+    ) {
+      return null;
+    }
+    const amount = Number(fundingForm.baseAmount || 0);
+    if (!(amount > 0)) {
+      throw new Error(
+        `Base amount (${trip.baseCurrency}) must be greater than 0.`,
+      );
+    }
+    return amount;
+  };
+
   const handleLinkFunding = async () => {
     setIsBusy(true);
     try {
@@ -1154,6 +1226,10 @@ export function TripManageFundingClient({
             : sourceAmount > 0
               ? sourceAmount / destinationAmount
               : null;
+        const baseAmount = resolveFundingBaseAmount(
+          sourceCurrency,
+          destinationCurrency,
+        );
         const result = await createTripFunding(trip.id, {
           walletId: selectedWalletId,
           bankTransactionId: null,
@@ -1163,6 +1239,7 @@ export function TripManageFundingClient({
           destinationCurrency,
           destinationAmount,
           fxRate,
+          baseAmount,
           feeAmount: buildFeeAmount(sourceAmount),
           feeCurrency:
             fundingForm.feeMode === "none"
@@ -1180,6 +1257,17 @@ export function TripManageFundingClient({
         );
         if (selected.length === 0) {
           throw new Error("Select at least one bank transaction to link.");
+        }
+        const bankSourceCurrency =
+          fundingForm.sourceCurrency || trip.baseCurrency;
+        const baseAmount = resolveFundingBaseAmount(
+          bankSourceCurrency,
+          selectedFundingWallet.currency,
+        );
+        if (baseAmount !== null && selected.length > 1) {
+          throw new Error(
+            "Select one bank transaction at a time when a base amount is needed.",
+          );
         }
 
         const results = await Promise.all(
@@ -1207,6 +1295,7 @@ export function TripManageFundingClient({
               destinationCurrency,
               destinationAmount,
               fxRate,
+              baseAmount,
               feeAmount: buildFeeAmount(sourceAmount),
               feeCurrency:
                 fundingForm.feeMode === "none"
@@ -1239,6 +1328,7 @@ export function TripManageFundingClient({
         feeMode: "none",
         feeValue: "",
         feeCurrency: trip.baseCurrency,
+        baseAmount: "",
       });
       setFundingInputMode("amount");
       await refreshFundingsAndWallets();
@@ -1281,6 +1371,7 @@ export function TripManageFundingClient({
         funding.sourceCurrency ||
         destinationCurrency ||
         trip.baseCurrency,
+      baseAmount: funding.baseAmount != null ? String(funding.baseAmount) : "",
     });
     setEditingFundingInputMode("amount");
     setIsEditFundingModalOpen(true);
@@ -1333,6 +1424,22 @@ export function TripManageFundingClient({
       return;
     }
 
+    const baseAmount = fundingNeedsBaseAmount(
+      normalized.sourceCurrency,
+      normalized.destinationCurrency,
+      trip.baseCurrency,
+    )
+      ? Number(editingFundingForm.baseAmount || 0)
+      : null;
+    if (baseAmount !== null && !(baseAmount > 0)) {
+      showModal(
+        "warning",
+        "Invalid Funding",
+        `Base amount (${trip.baseCurrency}) must be greater than 0.`,
+      );
+      return;
+    }
+
     setIsBusy(true);
     try {
       const result = await updateTripFunding(trip.id, editingFundingId, {
@@ -1344,6 +1451,7 @@ export function TripManageFundingClient({
         fxRate: normalized.fxRate,
         feeAmount: normalized.feeAmount,
         feeCurrency: normalized.feeCurrency,
+        baseAmount,
       });
       setPropagationTrace(result.propagationTrace || null);
       await refreshFundingsAndWallets();
@@ -1444,14 +1552,11 @@ export function TripManageFundingClient({
       );
       return;
     }
-    const activeIsImportedTopup =
-      activeFunding.sourceType === "imported_topup" &&
-      !activeFunding.bankTransactionId;
-    if (!activeIsImportedTopup) {
+    if (!canAttachBankTransaction(activeFunding)) {
       showModal(
         "warning",
         "Funding Already Linked",
-        "Only imported topup fundings without a linked bank transaction can be attached here.",
+        "Only imported topups and fundings that lost their bank transaction can be linked here.",
       );
       return;
     }
@@ -2166,21 +2271,21 @@ export function TripManageFundingClient({
                 onClick={() => setIsAddFromMainModalOpen(true)}
                 leftIcon={<Link2 className="h-4 w-4" />}
               >
-                Add From Bank Ledger
+                Add from bank
               </Button>
               <Button
                 variant="secondary"
                 onClick={() => setIsManualEntryModalOpen(true)}
                 leftIcon={<Plus className="h-4 w-4" />}
               >
-                Manual Entry
+                Add entry
               </Button>
               <Link
                 href={`/trips/${trip.id}/import`}
                 className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-white visited:text-white transition-colors hover:bg-primary/90"
               >
                 <FileUp className="h-4 w-4" />
-                <span>Import Trip Statement</span>
+                <span>Import statement</span>
               </Link>
             </div>
           </div>
@@ -2540,6 +2645,7 @@ export function TripManageFundingClient({
                             ?.originalDescription || "",
                         ).trim() ||
                         "Funding";
+                      const detachedNote = getDetachedBankNote(item);
                       return (
                         <button
                           key={item.id}
@@ -2579,6 +2685,11 @@ export function TripManageFundingClient({
                               {item.wallet?.name || "No wallet"}
                             </p>
                           </div>
+                          {detachedNote && (
+                            <span className="mt-2 inline-block rounded-full bg-yellow-light-4 px-2 py-0.5 text-[11px] font-medium text-yellow-dark dark:bg-yellow-dark/15">
+                              {detachedNote}
+                            </span>
+                          )}
                         </button>
                       );
                     })}
@@ -2673,6 +2784,11 @@ export function TripManageFundingClient({
                         Not linked
                       </p>
                     )}
+                    {getDetachedBankNote(selectedFundingManageItem) && (
+                      <p className="mt-1 text-xs text-yellow-dark">
+                        {getDetachedBankNote(selectedFundingManageItem)}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <Button
@@ -2698,10 +2814,9 @@ export function TripManageFundingClient({
                 <div className="space-y-3">
                   <div className="rounded-lg border border-stroke dark:border-dark-3 px-3 py-2 text-xs text-dark-5 dark:text-dark-6">
                     {selectedFundingManageItem &&
-                    selectedFundingManageItem.sourceType === "imported_topup" &&
-                    !selectedFundingManageItem.bankTransactionId
-                      ? "Select one bank transaction below to link to this imported topup."
-                      : "Only imported topup fundings without linked bank transactions are linkable here."}
+                    canAttachBankTransaction(selectedFundingManageItem)
+                      ? "Select one bank transaction below to link to this funding."
+                      : "Only imported topups and fundings that lost their bank transaction are linkable here."}
                   </div>
                   <div className="h-[360px] min-h-[260px] overflow-hidden">
                     <ExistingTransactionsSelector
@@ -2741,9 +2856,7 @@ export function TripManageFundingClient({
                     disabled={
                       isBusy ||
                       !selectedFundingManageItem ||
-                      selectedFundingManageItem.sourceType !==
-                        "imported_topup" ||
-                      !!selectedFundingManageItem.bankTransactionId
+                      !canAttachBankTransaction(selectedFundingManageItem)
                     }
                     className="w-full"
                   >
@@ -3125,6 +3238,32 @@ export function TripManageFundingClient({
                     </div>
                   </div>
 
+                  {selectedFundingWallet &&
+                    fundingNeedsBaseAmount(
+                      fundingForm.sourceCurrency || trip.baseCurrency,
+                      selectedFundingWallet.currency,
+                      trip.baseCurrency,
+                    ) && (
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
+                          Base amount ({trip.baseCurrency})
+                        </label>
+                        <NumberInput
+                          value={fundingForm.baseAmount}
+                          onChange={(e) =>
+                            setFundingForm((prev) => ({
+                              ...prev,
+                              baseAmount: e.target.value,
+                            }))
+                          }
+                          placeholder={`Amount in ${trip.baseCurrency}`}
+                        />
+                        <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
+                          Needed when neither currency is {trip.baseCurrency}.
+                        </p>
+                      </div>
+                    )}
+
                   <div className="grid gap-3 md:grid-cols-3">
                     <div className="md:col-span-3">
                       <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
@@ -3297,7 +3436,7 @@ export function TripManageFundingClient({
           >
             <div className="px-6 py-4 border-b border-stroke dark:border-dark-3">
               <h3 className="text-lg font-semibold text-dark dark:text-white">
-                Add Transactions From Bank Ledger
+                Add from bank
               </h3>
               <p className="text-sm text-dark-5 dark:text-dark-6">
                 Added transactions keep their original category in your main
@@ -3411,7 +3550,7 @@ export function TripManageFundingClient({
           >
             <div className="px-6 py-4 border-b border-stroke dark:border-dark-3">
               <h3 className="text-lg font-semibold text-dark dark:text-white">
-                Add Manual Trip Transaction
+                Add entry
               </h3>
               <p className="text-sm text-dark-5 dark:text-dark-6">
                 Create a trip transaction directly, and choose whether it should
@@ -3748,228 +3887,38 @@ export function TripManageFundingClient({
         </div>
       )}
 
-      {isEditFundingModalOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-black/50 dark:bg-black/70 p-4 flex items-center justify-center"
-          onClick={() => setIsEditFundingModalOpen(false)}
-        >
-          <div
-            onClick={(event) => event.stopPropagation()}
-            className="w-full max-w-2xl bg-white dark:bg-dark-2 rounded-lg border border-stroke dark:border-dark-3 shadow-card-2"
-          >
-            <div className="px-6 py-4 border-b border-stroke dark:border-dark-3">
-              <h3 className="text-lg font-semibold text-dark dark:text-white">
-                Edit Funding
-              </h3>
-            </div>
-            <div className="p-6 space-y-3">
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                  Destination wallet
-                </label>
-                <Select
-                  value={editingFundingForm.walletId}
-                  onChange={(value) =>
-                    setEditingFundingForm((prev) => ({
-                      ...prev,
-                      walletId: value,
-                      destinationCurrency:
-                        wallets.find((wallet) => wallet.id === value)?.currency ||
-                        prev.destinationCurrency,
-                    }))
-                  }
-                  className="w-full"
-                  buttonClassName="w-full"
-                  options={[
-                    { value: "", label: "No wallet" },
-                    ...wallets.map((wallet) => ({
-                      value: wallet.id,
-                      label: `${wallet.name} (${wallet.currency})`,
-                    })),
-                  ]}
-                />
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                    Source currency
-                  </label>
-                  <TextInput
-                    value={editingFundingForm.sourceCurrency}
-                    onChange={(e) =>
-                      setEditingFundingForm((prev) => ({
-                        ...prev,
-                        sourceCurrency: e.target.value.toUpperCase(),
-                      }))
-                    }
-                    placeholder="Source currency"
-                    disabled={!!editingFundingItem?.bankTransactionId}
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                    Source amount
-                  </label>
-                  <NumberInput
-                    value={editingFundingForm.sourceAmount}
-                    onChange={(e) =>
-                      setEditingFundingForm((prev) => ({
-                        ...prev,
-                        sourceAmount: e.target.value,
-                      }))
-                    }
-                    placeholder="Source amount"
-                    disabled={!!editingFundingItem?.bankTransactionId}
-                  />
-                </div>
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                    Destination currency
-                  </label>
-                  <TextInput
-                    value={editingFundingForm.destinationCurrency}
-                    onChange={(e) =>
-                      setEditingFundingForm((prev) => ({
-                        ...prev,
-                        destinationCurrency: e.target.value.toUpperCase(),
-                      }))
-                    }
-                    placeholder="Destination currency"
-                    disabled={!!editingFundingItem?.bankTransactionId}
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                    Destination amount
-                  </label>
-                  <NumberInput
-                    value={editingFundingForm.destinationAmount}
-                    onChange={(e) =>
-                      setEditingFundingForm((prev) => ({
-                        ...prev,
-                        destinationAmount: e.target.value,
-                      }))
-                    }
-                    placeholder="Destination amount"
-                    disabled={editingFundingInputMode === "fxRate"}
-                  />
-                </div>
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <label className="flex items-center gap-2 rounded-md border border-stroke px-3 py-2 dark:border-dark-3">
-                  <Checkbox
-                    checked={editingFundingInputMode === "amount"}
-                    onChange={() => setEditingFundingInputMode("amount")}
-                  />
-                  <span className="text-xs text-dark dark:text-white">
-                    Edit destination amount
-                  </span>
-                </label>
-                <label className="flex items-center gap-2 rounded-md border border-stroke px-3 py-2 dark:border-dark-3">
-                  <Checkbox
-                    checked={editingFundingInputMode === "fxRate"}
-                    onChange={() => setEditingFundingInputMode("fxRate")}
-                  />
-                  <span className="text-xs text-dark dark:text-white">
-                    Edit FX rate
-                  </span>
-                </label>
-              </div>
-              <div className="grid gap-3 md:grid-cols-3">
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                    FX rate
-                  </label>
-                  <NumberInput
-                    value={editingFundingForm.fxRate}
-                    onChange={(e) =>
-                      setEditingFundingForm((prev) => ({
-                        ...prev,
-                        fxRate: e.target.value,
-                      }))
-                    }
-                    placeholder="FX rate"
-                    disabled={editingFundingInputMode !== "fxRate"}
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                    Fee amount
-                  </label>
-                  <NumberInput
-                    value={editingFundingForm.feeAmount}
-                    onChange={(e) =>
-                      setEditingFundingForm((prev) => ({
-                        ...prev,
-                        feeAmount: e.target.value,
-                      }))
-                    }
-                    placeholder="Fee amount"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                    Fee currency
-                  </label>
-                  <Select
-                    value={editingFundingForm.feeCurrency}
-                    onChange={(value) =>
-                      setEditingFundingForm((prev) => ({
-                        ...prev,
-                        feeCurrency: value.toUpperCase(),
-                      }))
-                    }
-                    options={Array.from(
-                      new Set(
-                        [
-                          (
-                            editingFundingItem?.bankTransactionId
-                              ? editingFundingItem.sourceCurrency
-                              : editingFundingForm.sourceCurrency
-                          )?.toUpperCase(),
-                          (
-                            editingFundingItem?.bankTransactionId
-                              ? wallets.find(
-                                  (wallet) =>
-                                    wallet.id === editingFundingForm.walletId,
-                                )?.currency ||
-                                editingFundingItem?.destinationCurrency
-                              : editingFundingForm.destinationCurrency
-                          )?.toUpperCase(),
-                        ].filter((currency): currency is string =>
-                          Boolean(currency),
-                        ),
-                      ),
-                    ).map((currency) => ({
-                      value: currency,
-                      label: currency,
-                    }))}
-                    className="w-full"
-                    buttonClassName="w-full"
-                  />
-                </div>
-              </div>
-            </div>
-            <div className="px-6 py-4 border-t border-stroke dark:border-dark-3 flex items-center justify-end gap-3">
-              <Button
-                variant="secondary"
-                onClick={() => setIsEditFundingModalOpen(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                onClick={() => void handleSaveEditFunding()}
-                disabled={isBusy}
-              >
-                {isBusy ? "Saving..." : "Save Changes"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <TripEditFundingModal
+        isOpen={isEditFundingModalOpen}
+        onClose={() => setIsEditFundingModalOpen(false)}
+        isBusy={isBusy}
+        wallets={wallets}
+        form={editingFundingForm}
+        setForm={setEditingFundingForm}
+        inputMode={editingFundingInputMode}
+        setInputMode={setEditingFundingInputMode}
+        lockSourceFields={!!editingFundingItem?.bankTransactionId}
+        lockDestinationCurrency={!!editingFundingItem?.bankTransactionId}
+        feeCurrencyOptions={Array.from(
+          new Set(
+            [
+              (
+                editingFundingItem?.bankTransactionId
+                  ? editingFundingItem.sourceCurrency
+                  : editingFundingForm.sourceCurrency
+              )?.toUpperCase(),
+              (
+                editingFundingItem?.bankTransactionId
+                  ? wallets.find(
+                      (wallet) => wallet.id === editingFundingForm.walletId,
+                    )?.currency || editingFundingItem?.destinationCurrency
+                  : editingFundingForm.destinationCurrency
+              )?.toUpperCase(),
+            ].filter((currency): currency is string => Boolean(currency)),
+          ),
+        )}
+        baseCurrency={trip.baseCurrency}
+        onSave={() => void handleSaveEditFunding()}
+      />
 
       {isImportModalOpen && (
         <div
@@ -3994,7 +3943,7 @@ export function TripManageFundingClient({
               <h3 className="text-lg font-semibold text-dark dark:text-white">
                 {tripImportStep === "review"
                   ? "Review Trip Statement Import"
-                  : "Import Trip Statement"}
+                  : "Import statement"}
               </h3>
               <div className="inline-flex items-center gap-1 text-xs text-dark-5 dark:text-dark-6">
                 <PlaneTakeoff className="h-3.5 w-3.5" />

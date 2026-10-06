@@ -22,6 +22,7 @@ interface TripEditFundingModalProps {
     fxRate: string;
     feeAmount: string;
     feeCurrency: string;
+    baseAmount: string;
   };
   setForm: (
     updater: (
@@ -33,6 +34,8 @@ interface TripEditFundingModalProps {
   lockSourceFields?: boolean;
   lockDestinationCurrency?: boolean;
   feeCurrencyOptions?: string[];
+  // Trip base currency; enables the base amount field when neither currency matches it.
+  baseCurrency?: string;
   onSave: () => void;
 }
 
@@ -48,9 +51,20 @@ export function TripEditFundingModal({
   lockSourceFields = false,
   lockDestinationCurrency = false,
   feeCurrencyOptions = [],
+  baseCurrency,
   onSave,
 }: TripEditFundingModalProps) {
   if (!isOpen) return null;
+
+  const base = baseCurrency?.trim().toUpperCase() || "";
+  const sourceCurrency = form.sourceCurrency.trim().toUpperCase();
+  const destinationCurrency = form.destinationCurrency.trim().toUpperCase();
+  const showBaseAmount =
+    !!base &&
+    !!sourceCurrency &&
+    !!destinationCurrency &&
+    sourceCurrency !== base &&
+    destinationCurrency !== base;
 
   return (
     <div
@@ -247,6 +261,26 @@ export function TripEditFundingModal({
               />
             </div>
           </div>
+          {showBaseAmount && (
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
+                Base amount ({base})
+              </label>
+              <NumberInput
+                value={form.baseAmount}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    baseAmount: e.target.value,
+                  }))
+                }
+                placeholder={`Amount in ${base}`}
+              />
+              <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
+                Needed when neither currency is {base}.
+              </p>
+            </div>
+          )}
         </div>
         <div className="px-6 py-4 border-t border-stroke dark:border-dark-3 flex items-center justify-end gap-3">
           <Button variant="secondary" onClick={onClose}>

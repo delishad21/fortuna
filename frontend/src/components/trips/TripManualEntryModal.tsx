@@ -9,6 +9,32 @@ import { DatePicker } from "@/components/ui/DatePicker";
 import { NumberInput } from "@/components/ui/NumberInput";
 import { Select } from "@/components/ui/Select";
 import { TextInput } from "@/components/ui/TextInput";
+import {
+  TripFundingOutDestinationFields,
+  type FundingOutDestinationType,
+} from "@/components/trips/TripFundingOutDestinationFields";
+
+export interface TripEntryForm {
+  walletId: string;
+  type: "spending" | "reimbursement" | "funding_out";
+  date: string;
+  description: string;
+  label: string;
+  categoryId: string;
+  localCurrency: string;
+  localAmount: string;
+  baseAmount: string;
+  fxRate: string;
+  fundingOutDestinationType: FundingOutDestinationType;
+  fundingOutDestinationTripId: string;
+  fundingOutDestinationWalletId: string;
+  fundingOutDestinationCurrency: string;
+  fundingOutDestinationAmount: string;
+  fundingOutFxRate: string;
+  fundingOutFeeAmount: string;
+  fundingOutFeeCurrency: string;
+  fundingOutInputMode: "amount" | "fxRate";
+}
 
 interface TripManualEntryModalProps {
   isOpen: boolean;
@@ -20,33 +46,15 @@ interface TripManualEntryModalProps {
   wallets: Wallet[];
   currencyOptions: { value: string; label: string }[];
   baseCurrency: string;
-  form: {
-    walletId: string;
-    type: "spending" | "reimbursement" | "funding_out";
-    date: string;
-    description: string;
-    label: string;
-    categoryId: string;
-    localCurrency: string;
-    localAmount: string;
-    baseAmount: string;
-    fxRate: string;
-    fundingOutDestinationType: "bank" | "trip" | "external";
-    fundingOutDestinationTripId: string;
-    fundingOutDestinationCurrency: string;
-    fundingOutDestinationAmount: string;
-    fundingOutFxRate: string;
-    fundingOutFeeAmount: string;
-    fundingOutFeeCurrency: string;
-    fundingOutInputMode: "amount" | "fxRate";
-  };
-  setForm: (
-    updater: (
-      prev: TripManualEntryModalProps["form"],
-    ) => TripManualEntryModalProps["form"],
-  ) => void;
+  form: TripEntryForm;
+  setForm: (updater: (prev: TripEntryForm) => TripEntryForm) => void;
   resetForm: () => void;
   availableTrips: Pick<Trip, "id" | "name">[];
+  /** "edit" changes an existing entry; its type can't change. */
+  mode?: "create" | "edit";
+  /** The entry comes from a bank transaction, so its amount and currency are fixed. */
+  lockAmounts?: boolean;
+  onEditReimbursementLinks?: () => void;
 }
 
 export function TripManualEntryModal({
@@ -63,9 +71,13 @@ export function TripManualEntryModal({
   setForm,
   resetForm,
   availableTrips,
+  mode = "create",
+  lockAmounts = false,
+  onEditReimbursementLinks,
 }: TripManualEntryModalProps) {
   if (!isOpen) return null;
 
+  const isEdit = mode === "edit";
   const localCurrencyLabel =
     form.type === "reimbursement"
       ? "Received currency"
@@ -78,6 +90,16 @@ export function TripManualEntryModal({
       : form.type === "funding_out"
         ? "Outgoing amount"
         : "Spent amount";
+  const selectedWallet = wallets.find((wallet) => wallet.id === form.walletId);
+  const localCurrency = form.localCurrency.toUpperCase();
+  const isBaseCurrency = localCurrency === baseCurrency.toUpperCase();
+  const valuationHint = lockAmounts
+    ? "Amounts come from the bank transaction. Change them there."
+    : isBaseCurrency
+      ? `Already in ${baseCurrency}.`
+      : selectedWallet && selectedWallet.currency.toUpperCase() === localCurrency
+        ? "Leave blank to use this wallet's average rate."
+        : `Leave blank to use the average rate of a ${localCurrency} wallet, or enter the ${baseCurrency} amount or a rate.`;
 
   return (
     <div
@@ -90,11 +112,12 @@ export function TripManualEntryModal({
       >
         <div className="px-6 py-4 border-b border-stroke dark:border-dark-3">
           <h3 className="text-lg font-semibold text-dark dark:text-white">
-            Add Manual Trip Transaction
+            {isEdit ? "Edit entry" : "Add entry"}
           </h3>
           <p className="text-sm text-dark-5 dark:text-dark-6">
-            Create a trip transaction directly, and choose whether it should
-            deduct from a wallet.
+            {isEdit
+              ? "Change this trip entry."
+              : "Create a trip transaction directly, and choose whether it should deduct from a wallet."}
           </p>
         </div>
 
@@ -113,6 +136,7 @@ export function TripManualEntryModal({
                     categoryId: value === "reimbursement" ? "" : prev.categoryId,
                   }))
                 }
+                disabled={isEdit}
                 className="w-full"
                 buttonClassName="w-full"
                 menuPlacement="down"
@@ -135,6 +159,7 @@ export function TripManualEntryModal({
                     walletId: value,
                   }))
                 }
+                disabled={lockAmounts}
                 className="w-full"
                 buttonClassName="w-full"
                 menuPlacement="down"
@@ -223,95 +248,61 @@ export function TripManualEntryModal({
             </div>
           )}
 
+          {isEdit && form.type === "reimbursement" && onEditReimbursementLinks && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-stroke dark:border-dark-3 p-3">
+              <p className="text-sm text-dark-5 dark:text-dark-6">
+                Choose which spending this pays back.
+              </p>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={onEditReimbursementLinks}
+              >
+                Edit reimbursement links
+              </Button>
+            </div>
+          )}
+
           {form.type === "funding_out" && (
             <div className="rounded-lg border border-stroke dark:border-dark-3 p-3 space-y-3">
-              <div className="grid gap-3 md:grid-cols-3">
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                    Destination
-                  </label>
-                  <Select
-                    value={form.fundingOutDestinationType}
-                    onChange={(value) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        fundingOutDestinationType: value as
-                          | "bank"
-                          | "trip"
-                          | "external",
-                        fundingOutDestinationCurrency:
-                          value === "bank"
-                            ? baseCurrency
-                            : prev.fundingOutDestinationCurrency,
-                      }))
-                    }
-                    className="w-full"
-                    buttonClassName="w-full"
-                    menuPlacement="up"
-                    options={[
-                      { value: "bank", label: "Back to Bank" },
-                      { value: "trip", label: "Another Trip" },
-                      { value: "external", label: "External" },
-                    ]}
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                    Destination trip
-                  </label>
-                  <Select
-                    value={form.fundingOutDestinationTripId}
-                    onChange={(value) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        fundingOutDestinationTripId: value,
-                      }))
-                    }
-                    className="w-full"
-                    buttonClassName="w-full"
-                    menuPlacement="up"
-                    options={[
-                      ...(form.fundingOutDestinationType === "trip"
-                        ? [{ value: "", label: "Select trip" }]
-                        : [{ value: "", label: "Destination is not a trip" }]),
-                      ...(form.fundingOutDestinationType === "trip"
-                        ? availableTrips.map((item) => ({
-                            value: item.id,
-                            label: item.name,
-                          }))
-                        : []),
-                    ]}
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                    Destination currency
-                  </label>
-                  <Select
-                    value={form.fundingOutDestinationCurrency}
-                    onChange={(value) =>
-                      form.fundingOutDestinationType === "bank"
-                        ? undefined
-                        : setForm((prev) => ({
-                            ...prev,
-                            fundingOutDestinationCurrency: value,
-                          }))
-                    }
-                    options={
-                      form.fundingOutDestinationType === "bank"
-                        ? [{ value: baseCurrency, label: baseCurrency }]
-                        : currencyOptions
-                    }
-                    className="w-full"
-                    buttonClassName={`w-full ${
-                      form.fundingOutDestinationType === "bank"
-                        ? "pointer-events-none opacity-70"
-                        : ""
-                    }`}
-                    menuPlacement="up"
-                  />
-                </div>
-              </div>
+              <TripFundingOutDestinationFields
+                value={{
+                  destinationType: form.fundingOutDestinationType,
+                  destinationTripId: form.fundingOutDestinationTripId,
+                  destinationWalletId: form.fundingOutDestinationWalletId,
+                  destinationCurrency: form.fundingOutDestinationCurrency,
+                }}
+                onChange={(patch) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    ...(patch.destinationType !== undefined
+                      ? { fundingOutDestinationType: patch.destinationType }
+                      : {}),
+                    ...(patch.destinationTripId !== undefined
+                      ? { fundingOutDestinationTripId: patch.destinationTripId }
+                      : {}),
+                    ...(patch.destinationWalletId !== undefined
+                      ? {
+                          fundingOutDestinationWalletId:
+                            patch.destinationWalletId,
+                        }
+                      : {}),
+                    ...(patch.destinationCurrency !== undefined
+                      ? {
+                          fundingOutDestinationCurrency:
+                            patch.destinationCurrency,
+                        }
+                      : {}),
+                  }))
+                }
+                wallets={wallets}
+                sourceWalletId={
+                  form.walletId === "__none__" ? null : form.walletId
+                }
+                availableTrips={availableTrips}
+                currencyOptions={currencyOptions}
+                baseCurrency={baseCurrency}
+              />
 
               <div className="flex flex-wrap items-center gap-4">
                 <label className="inline-flex items-center gap-2 text-sm text-dark dark:text-white">
@@ -410,7 +401,7 @@ export function TripManualEntryModal({
             </div>
           )}
 
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-4">
             <div>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
                 {localCurrencyLabel}
@@ -423,6 +414,7 @@ export function TripManualEntryModal({
                     localCurrency: value,
                   }))
                 }
+                disabled={lockAmounts}
                 options={currencyOptions}
                 className="w-full"
                 buttonClassName="w-full"
@@ -441,12 +433,13 @@ export function TripManualEntryModal({
                     localAmount: e.target.value,
                   }))
                 }
+                disabled={lockAmounts}
                 placeholder="0.00"
               />
             </div>
             <div>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
-                Base amount ({baseCurrency})
+                {baseCurrency} amount (optional)
               </label>
               <NumberInput
                 value={form.baseAmount}
@@ -456,12 +449,10 @@ export function TripManualEntryModal({
                     baseAmount: e.target.value,
                   }))
                 }
+                disabled={lockAmounts || isBaseCurrency}
                 placeholder="0.00"
               />
             </div>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-1">
             <div>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
                 FX rate (optional)
@@ -474,14 +465,18 @@ export function TripManualEntryModal({
                     fxRate: e.target.value,
                   }))
                 }
-                placeholder="Auto if empty"
+                disabled={lockAmounts || isBaseCurrency}
+                placeholder={`${baseCurrency} per 1 ${localCurrency || "unit"}`}
               />
             </div>
           </div>
-          <p className="text-xs text-dark-5 dark:text-dark-6">
-            Fees are recorded as separate transactions. Add a dedicated fee entry
-            if needed.
-          </p>
+          <p className="text-xs text-dark-5 dark:text-dark-6">{valuationHint}</p>
+          {!isEdit && (
+            <p className="text-xs text-dark-5 dark:text-dark-6">
+              Fees are recorded as separate transactions. Add a dedicated fee
+              entry if needed.
+            </p>
+          )}
         </div>
 
         <div className="px-6 py-4 border-t border-stroke dark:border-dark-3 flex items-center justify-end gap-3">
@@ -495,7 +490,13 @@ export function TripManualEntryModal({
             Cancel
           </Button>
           <Button variant="primary" onClick={onSubmit} disabled={isBusy}>
-            {isBusy ? "Adding..." : "Add Transaction"}
+            {isEdit
+              ? isBusy
+                ? "Saving..."
+                : "Save changes"
+              : isBusy
+                ? "Adding..."
+                : "Add entry"}
           </Button>
         </div>
       </div>
