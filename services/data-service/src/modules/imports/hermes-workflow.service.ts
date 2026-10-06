@@ -125,6 +125,76 @@ async function audit(
   });
 }
 
+// Trip drafts keep their reimbursement allocations (to trip entries or rows of the
+// same statement) in the row itself; the main-ledger links table only knows bank
+// transactions and main-ledger draft rows.
+const storedPayloadFor = (mode: string, payload: Record<string, unknown>) =>
+  mode === "trip" ? payload : storedDraftPayload(payload);
+
+const applyLinkageFor = (
+  mode: string,
+  ...args: Parameters<typeof applyDraftRowLinkage>
+): ReturnType<typeof applyDraftRowLinkage> =>
+  mode === "trip" ? Promise.resolve([]) : applyDraftRowLinkage(...args);
+
+/**
+ * Rows of a bank statement that were assigned to a trip become trip records once the
+ * bank transactions are saved. Spending and reimbursements become trip entries; funding
+ * is created when the wallet holds the trip's currency. Anything else is reported back
+ * for the user to finish in the trip, without failing the import.
+ */
+export async function applyTripAssignments(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  payloads: Array<Record<string, any>>,
+  transactionIds: string[],
+) {
+  const applied: Array<{ transactionId: string; tripId: string; entryType: string }> = [];
+  const skipped: Array<{ transactionId: string; tripId: string; reason: string }> = [];
+  for (const [position, payload] of payloads.entries()) {
+    const transactionId = transactionIds[position];
+    const tripId = typeof payload?.tripId === "string" ? payload.tripId : null;
+    if (!transactionId || !tripId) continue;
+    const entryType = String(payload.entryType || (Number(payload.amountOut || 0) > 0 ? "spending" : "reimbursement"));
+    try {
+      if (entryType === "spending" || entryType === "reimbursement") {
+        await TripService.addEntriesFromSourceTransactions(userId, tripId, {
+          transactionIds: [transactionId],
+          entryType,
+          categoryId: entryType === "spending" ? (payload.categoryId ?? null) : null,
+        });
+      } else if (entryType === "funding_in" && payload.walletId) {
+        const wallet = await tx.wallet.findFirst({
+          where: { id: payload.walletId, tripId, trip: { userId } },
+          select: { currency: true, trip: { select: { baseCurrency: true } } },
+        });
+        const amount = Number(payload.amountOut || 0);
+        if (!wallet || wallet.currency.toUpperCase() !== wallet.trip.baseCurrency.toUpperCase() || !(amount > 0)) {
+          skipped.push({ transactionId, tripId, reason: "Add this top-up's received amount in the trip's funding page." });
+          continue;
+        }
+        await TripService.createFunding(userId, {
+          tripId,
+          walletId: payload.walletId,
+          bankTransactionId: transactionId,
+          sourceType: "bank_wallet_topup",
+          sourceCurrency: wallet.trip.baseCurrency,
+          sourceAmount: amount,
+          destinationCurrency: wallet.currency,
+          destinationAmount: amount,
+        });
+      } else {
+        skipped.push({ transactionId, tripId, reason: "Add this transfer in the trip; it needs a destination." });
+        continue;
+      }
+      applied.push({ transactionId, tripId, entryType });
+    } catch (error) {
+      skipped.push({ transactionId, tripId, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return { applied, skipped };
+}
+
 export class HermesWorkflowService {
   static async cleanupExpiredData(now = new Date()) {
     return cleanupExpiredWorkflowData(prisma, unlink, now);
@@ -516,7 +586,11 @@ export class HermesWorkflowService {
           });
       }
     }
-    const rows = await decorateDraftRows(prisma, userId, draft.rows);
+    const decorated = await decorateDraftRows(prisma, userId, draft.rows);
+    const rows =
+      draft.mode === "trip"
+        ? decorated.map((row, index) => ({ ...row, currentPayload: draft.rows[index].currentPayload }))
+        : decorated;
     return {
       ...draft,
       reviewSummary: summarizeDraftReview(rows),
@@ -689,7 +763,8 @@ export class HermesWorkflowService {
         data: {
           ...(input.currentPayload !== undefined
             ? {
-                currentPayload: storedDraftPayload(
+                currentPayload: storedPayloadFor(
+                  parent.mode,
                   input.currentPayload,
                 ) as Prisma.InputJsonValue,
               }
@@ -701,7 +776,8 @@ export class HermesWorkflowService {
       });
       const linkWarnings =
         input.currentPayload !== undefined
-          ? await applyDraftRowLinkage(
+          ? await applyLinkageFor(
+              parent.mode,
               tx,
               userId,
               { id: row.id, draftId, previousPayload: row.currentPayload },
@@ -1020,7 +1096,8 @@ export class HermesWorkflowService {
           await tx.importDraftRow.update({
             where: { id: row.id },
             data: {
-              currentPayload: storedDraftPayload(
+              currentPayload: storedPayloadFor(
+                draft.mode,
                 updatedPayload,
               ) as Prisma.InputJsonValue,
               reviewStatus: "auto_applied",
@@ -1033,7 +1110,8 @@ export class HermesWorkflowService {
               },
             },
           });
-          await applyDraftRowLinkage(
+          await applyLinkageFor(
+            draft.mode,
             tx,
             userId,
             { id: row.id, draftId, previousPayload: current },
@@ -1113,13 +1191,14 @@ export class HermesWorkflowService {
         await tx.importDraftRow.update({
           where: { id: proposal.draftRowId },
           data: {
-            currentPayload: storedDraftPayload(payload) as Prisma.InputJsonValue,
+            currentPayload: storedPayloadFor(proposal.draft.mode, payload) as Prisma.InputJsonValue,
             version: { increment: 1 },
             reviewStatus: "accepted",
             provenance: { source: "hermes", proposalId },
           },
         });
-        await applyDraftRowLinkage(
+        await applyLinkageFor(
+          proposal.draft.mode,
           tx,
           userId,
           {
@@ -1629,7 +1708,7 @@ export class HermesWorkflowService {
             include: { rows: { orderBy: { rowIndex: "asc" } } },
           });
           const rows = draft.rows.map(
-            (row) => storedDraftPayload(row.currentPayload as Record<string, any>) as Record<string, any>,
+            (row) => storedPayloadFor(draft.mode, row.currentPayload as Record<string, any>) as Record<string, any>,
           );
           const selectedIndices = draft.rows.flatMap((row, index) =>
             row.selected ? [index] : [],
@@ -1660,13 +1739,37 @@ export class HermesWorkflowService {
             (committed.transactionIds || []).forEach((transactionId, position) =>
               rowToTransaction.set(draft.rows[selectedIndices[position]].id, transactionId),
             );
-            result = committed as unknown as Record<string, unknown>;
+            const tripAssignments = await applyTripAssignments(
+              tx,
+              userId,
+              selectedIndices.map((index) => rows[index]),
+              committed.transactionIds || [],
+            );
+            result = { ...(committed as unknown as Record<string, unknown>), tripAssignments };
           } else {
             if (!draft.targetTripId)
               throw new Error("Trip draft has no target trip");
-            const selectedRows = rows.filter((_row, index) =>
-              selectedIndices.includes(index),
-            );
+            // Links to rows of the same statement name the row's draft position; the
+            // importer only sees the selected rows, so positions are re-mapped and links
+            // to rows left out are dropped.
+            const positionOf = new Map(selectedIndices.map((rowIndex, position) => [rowIndex, position]));
+            const selectedRows = rows
+              .filter((_row, index) => selectedIndices.includes(index))
+              .map((row) => {
+                const linkage = row.linkage as Record<string, any> | null | undefined;
+                if (!linkage || !Array.isArray(linkage.reimbursesAllocations)) return row;
+                return {
+                  ...row,
+                  linkage: {
+                    ...linkage,
+                    reimbursesAllocations: linkage.reimbursesAllocations.flatMap((item: Record<string, any>) => {
+                      if (typeof item.pendingBatchIndex !== "number") return [item];
+                      const position = positionOf.get(item.pendingBatchIndex);
+                      return position === undefined ? [] : [{ ...item, pendingBatchIndex: position }];
+                    }),
+                  },
+                };
+              });
             const walletIds = [
               ...new Set(selectedRows.map((row) => row.walletId).filter(Boolean)),
             ] as string[];

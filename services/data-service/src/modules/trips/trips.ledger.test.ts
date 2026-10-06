@@ -316,3 +316,97 @@ test("a rate change in the sending wallet reaches the next trip's funding and to
       assert.equal(totals.totalFundingIn, 650);
     }),
   ));
+
+test("deleting or re-pricing a bank transaction reaches the trip", () =>
+  withChatDb((db) =>
+    withDatabase(db, async () => {
+      const { user, trip, food, wallet } = await seed(db);
+      const { TransactionService } = await import("../transactions/transactions.service");
+      const usd = await wallet("Revolut", "USD");
+      const topUp = await db.transaction.create({
+        data: { userId: user.id, date: new Date("2026-09-01"), description: "Top up", amountOut: 135, accountIdentifier: "DBS" },
+      });
+      const hotel = await db.transaction.create({
+        data: { userId: user.id, date: new Date("2026-09-02"), description: "Hotel", amountOut: 300, accountIdentifier: "DBS", categoryId: food.id },
+      });
+      const funded = await TripRepository.createFunding(user.id, {
+        tripId: trip.id,
+        walletId: usd.id,
+        bankTransactionId: topUp.id,
+        sourceType: "bank_wallet_topup",
+        sourceCurrency: "SGD",
+        sourceAmount: 135,
+        destinationCurrency: "USD",
+        destinationAmount: 100,
+      });
+      await TripRepository.addEntriesFromSourceTransactions(user.id, trip.id, {
+        transactionIds: [hotel.id],
+        entryType: "spending",
+        categoryId: food.id,
+      });
+
+      await TransactionService.updateTransaction(hotel.id, user.id, { amountOut: 280 });
+      const hotelEntry = await db.tripEntry.findFirstOrThrow({ where: { sourceTransactionId: hotel.id } });
+      assert.equal(Number(hotelEntry.baseAmount), 280, "the trip follows the corrected bank amount");
+
+      await TransactionService.deleteTransaction(topUp.id, user.id);
+      const funding = await db.tripFunding.findUniqueOrThrow({ where: { id: funded.funding.id } });
+      assert.equal(funding.bankTransactionId, null);
+      assert.equal((funding.metadata as any).matchReviewState, "pending_review");
+      assert.equal((funding.metadata as any).detachedBankTransaction.reason, "deleted");
+    }),
+  ));
+
+test("re-importing a statement skips rows already imported but keeps repeats within it", () =>
+  withChatDb((db) =>
+    withDatabase(db, async () => {
+      const { user, trip, wallet, fund } = await seed(db);
+      const usd = await wallet("Revolut", "USD");
+      await fund(usd.id, 135, 100);
+      const usdRate = { currency: "USD", fxRate: 1.35, fxBaseCurrency: "USD", fxQuoteCurrency: "SGD" };
+      const coffee = { date: "2026-09-03", description: "Coffee", amountOut: 5, metadata: usdRate };
+      const first = await TripRepository.importTripSpendings(user.id, trip.id, usd.id, "manual_csv", [
+        { ...coffee, metadata: { ...usdRate } },
+        { ...coffee, metadata: { ...usdRate } },
+      ] as never);
+      assert.equal(first.importedSpendings, 2, "two identical coffees in one statement");
+      const second = await TripRepository.importTripSpendings(user.id, trip.id, usd.id, "manual_csv", [
+        { ...coffee, metadata: { ...usdRate } },
+        { ...coffee, metadata: { ...usdRate } },
+        { ...coffee, description: "Lunch", amountOut: 12, metadata: { ...usdRate } },
+      ] as never);
+      assert.equal(second.skippedDuplicates, 2);
+      assert.equal(second.importedSpendings, 1);
+      assert.equal(await db.tripEntry.count({ where: { tripId: trip.id, type: "spending" } }), 3);
+    }),
+  ));
+
+test("bank rows assigned to a trip in a staged import become trip entries on commit", () =>
+  withChatDb((db) =>
+    withDatabase(db, async () => {
+      const { user, trip, food } = await seed(db);
+      const { applyTripAssignments } = await import("../imports/hermes-workflow.service");
+      const { runInTransaction } = await import("../reimbursements/links.service");
+      const dinner = await db.transaction.create({
+        data: { userId: user.id, date: new Date("2026-09-02"), description: "Dinner", amountOut: 80, accountIdentifier: "DBS" },
+      });
+      const unrelated = await db.transaction.create({
+        data: { userId: user.id, date: new Date("2026-09-02"), description: "Rent", amountOut: 2000, accountIdentifier: "DBS" },
+      });
+      const result = await runInTransaction((tx) =>
+        applyTripAssignments(
+          tx,
+          user.id,
+          [
+            { tripId: trip.id, entryType: "spending", amountOut: 80, categoryId: food.id },
+            { amountOut: 2000 },
+          ],
+          [dinner.id, unrelated.id],
+        ),
+      );
+      assert.equal(result.applied.length, 1);
+      const entry = await db.tripEntry.findFirstOrThrow({ where: { sourceTransactionId: dinner.id } });
+      assert.equal(entry.tripId, trip.id);
+      assert.equal(entry.categoryId, food.id);
+    }),
+  ));

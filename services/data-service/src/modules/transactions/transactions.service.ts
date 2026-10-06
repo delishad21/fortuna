@@ -29,6 +29,7 @@ import {
   syncTransactionCaches,
 } from "../reimbursements/links.service";
 import { auditLinks } from "../reimbursements/links.queries";
+import { TripRepository } from "../trips/trips.repository";
 
 // Reserved category names and colors
 const RESERVED_CATEGORIES = {
@@ -1490,6 +1491,8 @@ export class TransactionService {
 
       await assertSavedLinksFit(db, userId, id);
       await syncTransactionCaches(db, userId, [id]);
+      if (data.amountIn !== undefined || data.amountOut !== undefined)
+        await TripRepository.syncBankTransactionAmountsTx(db, userId, [id]);
       const updated = await prisma.transaction.findFirst({ where: { id, userId } });
       return { ...updated, ...(warnings.length ? { warnings } : {}) };
     });
@@ -1629,6 +1632,7 @@ export class TransactionService {
         );
       }
 
+      await TripRepository.detachBankTransactionsTx(tx, userId, [id], "split");
       await tx.transaction.delete({ where: { id, userId } });
       return created;
     });
@@ -1639,6 +1643,7 @@ export class TransactionService {
    */
   static async deleteTransaction(id: string, userId: string) {
     return runInTransaction(async (db) => {
+      await TripRepository.detachBankTransactionsTx(db, userId, [id], "deleted");
       const counterparts = await counterpartsOf(db, userId, [id]);
       const result = await TransactionRepository.delete(id, userId);
       await refreshAfterDelete(db, userId, counterparts);
@@ -1651,6 +1656,7 @@ export class TransactionService {
    */
   static async deleteTransactions(ids: string[], userId: string) {
     return runInTransaction(async (db) => {
+      await TripRepository.detachBankTransactionsTx(db, userId, ids, "deleted");
       const counterparts = await counterpartsOf(db, userId, ids);
       const result = await TransactionRepository.deleteMany(ids, userId);
       await refreshAfterDelete(db, userId, counterparts);
@@ -1687,6 +1693,7 @@ export class TransactionService {
     ];
     for (const id of affected) await assertSavedLinksFit(db, userId, id);
     await syncTransactionCaches(db, userId, affected);
+    await TripRepository.syncBankTransactionAmountsTx(db, userId, ids);
   }
 
   static async bulkUpdateByIds(
@@ -1748,6 +1755,7 @@ export class TransactionService {
   ) {
     return runInTransaction(async (db) => {
       const ids = await TransactionRepository.findIdsByFilter(userId, filters, excludeIds);
+      await TripRepository.detachBankTransactionsTx(db, userId, ids, "deleted");
       const counterparts = await counterpartsOf(db, userId, ids);
       const result = await TransactionRepository.deleteManyByFilter(
         userId,

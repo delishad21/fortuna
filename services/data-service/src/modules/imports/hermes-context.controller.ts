@@ -161,17 +161,18 @@ hermesContextRouter.get("/trips/:tripId/funding-candidates", requireAccountAuth(
     const payload = row.currentPayload as Record<string, any>;
     const date = new Date(String(payload.date || payload.transactionDate));
     if (Number.isNaN(date.getTime())) return response.status(400).json({ error: "Draft row date is invalid" });
-    const amount = Number(payload.amountOut || payload.amountIn || payload.localAmount || 0);
-    const from = new Date(date.getTime() - 3 * 24 * 60 * 60 * 1000);
-    const to = new Date(date.getTime() + 3 * 24 * 60 * 60 * 1000);
+    // Same rules as the web importer: a bank debit within a week of the top-up that
+    // no trip has used yet.
+    const amount = Number(payload.amountIn || payload.amountOut || payload.localAmount || 0);
+    const from = new Date(date.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const to = new Date(date.getTime() + 7 * 24 * 60 * 60 * 1000);
     const transactions = await prisma.transaction.findMany({
       where: {
         userId,
         date: { gte: from, lte: to },
-        OR: [
-          { amountOut: { gte: Math.max(0, amount - 0.02), lte: amount + 0.02 } },
-          { amountIn: { gte: Math.max(0, amount - 0.02), lte: amount + 0.02 } },
-        ],
+        amountOut: { gte: Math.max(0, amount - 0.02), lte: amount + 0.02 },
+        tripFundings: { none: {} },
+        tripEntries: { none: {} },
       },
       select: { id: true, date: true, description: true, amountIn: true, amountOut: true, currency: true, accountIdentifier: true },
       orderBy: { date: "desc" },
@@ -192,19 +193,21 @@ hermesContextRouter.get("/trips/:tripId/reimbursement-candidates", requireAccoun
     const userId = authenticatedUserId(request);
     const input = z.object({ draftRowId: z.string().min(1), limit: z.coerce.number().int().min(1).max(50).default(20) }).parse(request.query);
     const [trip, row] = await Promise.all([
-      prisma.trip.findFirst({ where: { id: request.params.tripId, userId }, select: { id: true, name: true } }),
+      prisma.trip.findFirst({ where: { id: request.params.tripId, userId }, select: { id: true, name: true, baseCurrency: true } }),
       prisma.importDraftRow.findFirst({ where: { id: input.draftRowId, draft: { userId } } }),
     ]);
     if (!trip || !row) return response.status(404).json({ error: "Trip or draft row not found" });
     const payload = row.currentPayload as Record<string, any>;
     const date = new Date(String(payload.date || payload.transactionDate));
-    const reimbursementAmount = Number(payload.amountIn || payload.localAmount || 0);
+    // Trip amounts are in the trip's currency; a row in another currency has no comparable amount.
+    const rowCurrency = String(payload.currency || payload.metadata?.currency || trip.baseCurrency).toUpperCase();
+    const reimbursementAmount =
+      rowCurrency === trip.baseCurrency.toUpperCase() ? Number(payload.amountIn || payload.localAmount || 0) : null;
     const candidates = await prisma.tripEntry.findMany({
       where: {
         tripId: trip.id,
         type: "spending",
         ...(Number.isNaN(date.getTime()) ? {} : { transactionDate: { lte: new Date(date.getTime() + 7 * 24 * 60 * 60 * 1000) } }),
-        ...(reimbursementAmount > 0 ? { baseAmount: { lte: reimbursementAmount } } : {}),
       },
       select: { id: true, transactionDate: true, description: true, label: true, localCurrency: true, localAmount: true, baseAmount: true, walletId: true, categoryId: true, reimbursementAllocationsAsTarget: { select: { amountBase: true } } },
       orderBy: { transactionDate: "desc" },
@@ -212,10 +215,21 @@ hermesContextRouter.get("/trips/:tripId/reimbursement-candidates", requireAccoun
     });
     return response.json({
       trip,
-      candidates: candidates.map((candidate) => ({
-        ...candidate,
-        alreadyReimbursedBase: candidate.reimbursementAllocationsAsTarget.reduce((sum, allocation) => sum + Number(allocation.amountBase), 0),
-      })),
+      candidates: candidates
+        .map(({ reimbursementAllocationsAsTarget, ...candidate }) => {
+          const alreadyReimbursedBase = reimbursementAllocationsAsTarget.reduce(
+            (sum, allocation) => sum + Number(allocation.amountBase),
+            0,
+          );
+          return {
+            ...candidate,
+            alreadyReimbursedBase,
+            remainingBase: Math.max(Number(candidate.baseAmount) - alreadyReimbursedBase, 0),
+          };
+        })
+        .filter((candidate) => candidate.remainingBase > 0.0001),
+      // A repayment can cover part of a larger expense; this is the most it can cover.
+      reimbursementBaseAmount: reimbursementAmount,
     });
   } catch (error) {
     return failure(response, error);
