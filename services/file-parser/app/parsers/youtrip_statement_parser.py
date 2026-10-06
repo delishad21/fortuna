@@ -6,6 +6,8 @@ from typing import Optional
 import pdfplumber
 from dateutil import parser as date_parser
 
+from .revolut_statement_parser import classify_incoming_transfer, extract_account_holder
+
 
 def _parse_money(value: str) -> Optional[float]:
     raw_value = (value or "").strip()
@@ -47,20 +49,34 @@ def _transaction_type(description: str) -> str:
     if "smartexchange" in desc:
         return "conversion"
     if "top up" in desc or "transfer in" in desc:
+        # "Transfer in from <name>" is refined against the account holder in parse().
         return "topup"
+    if "transfer out" in desc:
+        return "transfer"
     if "metro" in desc or "transport" in desc:
         return "transport"
     return "card_payment"
 
 
-def _apply_embedded_fee_amount(transaction: dict) -> dict:
+def _apply_embedded_fee_amount(
+    transaction: dict, neighbour_balances: Optional[list[Optional[float]]] = None
+) -> dict:
+    """Fold the fee into the row so exactly one of amountIn/amountOut is positive.
+
+    * Outgoing: the fee is extra outflow -> amountOut = amount + fee.
+    * Incoming: the fee is netted, not emitted as amountOut. amountIn is what
+      the wallet actually received and the fee stays in metadata.feeAmount;
+      the importer's topup path then books destination = amountIn and
+      source = amountIn + fee, and a reimbursement books amountIn. The
+      displayed amount is normally the net credit; if the running balance
+      shows it was the gross amount instead, the fee is subtracted.
+    """
     metadata_raw = transaction.get("metadata")
     metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
     if metadata.get("feeEmbeddedApplied"):
         return transaction
 
     fee_amount = _parse_money(str(metadata.get("feeAmount") or ""))
-    source_tag = str(metadata.get("source") or "").lower()
     amount_in = _parse_money(str(transaction.get("amountIn") or ""))
     amount_out = _parse_money(str(transaction.get("amountOut") or ""))
     if not (fee_amount and fee_amount > 0):
@@ -68,12 +84,23 @@ def _apply_embedded_fee_amount(transaction: dict) -> dict:
 
     if amount_out and amount_out > 0:
         transaction["amountOut"] = round(amount_out + fee_amount, 4)
-
-    if amount_in and amount_in > 0:
-        if source_tag == "pdf":
-            transaction["amountIn"] = round(amount_in + fee_amount, 4)
-        if not (amount_out and amount_out > 0):
-            transaction["amountOut"] = fee_amount
+    elif amount_in and amount_in > 0:
+        balance = transaction.get("balance")
+        displayed_is_gross = False
+        if balance is not None:
+            for neighbour in neighbour_balances or []:
+                if neighbour is None:
+                    continue
+                delta = balance - neighbour
+                if abs(delta - amount_in) <= 0.005:
+                    break
+                if abs(delta - (amount_in - fee_amount)) <= 0.005:
+                    displayed_is_gross = True
+                    break
+        if displayed_is_gross:
+            transaction["amountIn"] = round(amount_in - fee_amount, 4)
+        transaction["amountOut"] = None
+        metadata["feeHandling"] = "netted"
     metadata["feeEmbeddedApplied"] = True
     transaction["metadata"] = metadata
     return transaction
@@ -100,6 +127,8 @@ def parse(content: bytes) -> list[dict]:
     currency_match = re.search(r"My\s+([A-Z]{3})\s+Statement", all_text)
     if currency_match:
         statement_currency = currency_match.group(1)
+
+    holder = extract_account_holder(lines, window=15)
 
     money_pattern = r"((?:[-+]?\s*\$[\d,]*\.\d{2})|(?:\(\$[\d,]*\.\d{2}\)))"
     tx_pattern_with_desc = re.compile(
@@ -273,4 +302,14 @@ def parse(content: bytes) -> list[dict]:
         previous_line = line
 
     finalize_current()
-    return [_apply_embedded_fee_amount(transaction) for transaction in transactions]
+    for index, transaction in enumerate(transactions):
+        neighbours = [
+            transactions[i].get("balance")
+            for i in (index - 1, index + 1)
+            if 0 <= i < len(transactions)
+        ]
+        _apply_embedded_fee_amount(transaction, neighbours)
+        classify_incoming_transfer(
+            transaction, holder, transaction["metadata"].get("transactionType")
+        )
+    return transactions
