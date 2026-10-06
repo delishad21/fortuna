@@ -362,7 +362,8 @@ export class TripService {
     input: {
       transactionIds: string[];
       categoryId?: string | null;
-      entryType?: "spending" | "reimbursement" | "funding_out";
+      entryType?: "spending" | "reimbursement" | "funding_out" | "settlement";
+      counterpartyId?: string | null;
       fundingOut?: {
         destinationType?: "bank" | "trip" | "wallet" | "external";
         destinationTripId?: string | null;
@@ -377,6 +378,10 @@ export class TripService {
     },
   ) {
     return TripRepository.addEntriesFromSourceTransactions(userId, tripId, input);
+  }
+
+  static setSettlementAllocations(...args: Parameters<typeof TripRepository.setSettlementAllocations>) {
+    return TripRepository.setSettlementAllocations(...args);
   }
 
   static updateWallet(...args: Parameters<typeof TripRepository.updateWallet>) {
@@ -425,7 +430,9 @@ export class TripService {
     tripId: string,
     input: {
       walletId?: string | null;
-      type: "spending" | "reimbursement" | "funding_out";
+      type: "spending" | "reimbursement" | "funding_out" | "settlement";
+      paidByParticipantId?: string | null;
+      counterpartyId?: string | null;
       date: Date;
       description: string;
       label?: string | null;

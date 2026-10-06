@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { TripService } from "./trips.service";
+import { TripIouRepository } from "./trips.ious";
 import { buildFundingUpdatePayload } from "./trips.accounting";
 
 export const walletAccountsRouter = Router();
@@ -306,7 +307,8 @@ const AddEntriesFromSourceSchema = z.object({
   userId: z.string(),
   transactionIds: z.array(z.string()).min(1),
   categoryId: z.string().optional().nullable(),
-  entryType: z.enum(["spending", "reimbursement", "funding_out"]).optional(),
+  entryType: z.enum(["spending", "reimbursement", "funding_out", "settlement"]).optional(),
+  counterpartyId: z.string().optional().nullable(),
   fundingOut: z
     .object({
       destinationType: z.enum(["bank", "trip", "wallet", "external"]).optional(),
@@ -326,7 +328,10 @@ const AddEntriesFromSourceSchema = z.object({
 const TripEntryCreateSchema = z.object({
   userId: z.string(),
   walletId: z.string().optional().nullable(),
-  type: z.enum(["spending", "reimbursement", "funding_out"]),
+  type: z.enum(["spending", "reimbursement", "funding_out", "settlement"]),
+  // Spending someone else paid for (an IOU), and the person a settlement paid back.
+  paidByParticipantId: z.string().optional().nullable(),
+  counterpartyId: z.string().optional().nullable(),
   date: z.string().transform((value) => new Date(value)),
   description: z.string().min(1),
   label: z.string().optional().nullable(),
@@ -847,6 +852,7 @@ tripsRouter.post("/:id/entries/from-main", async (req: Request, res: Response) =
         transactionIds: input.transactionIds,
         categoryId: input.categoryId ?? null,
         entryType: input.entryType,
+        counterpartyId: input.counterpartyId ?? null,
         fundingOut: input.fundingOut ?? null,
       },
     );
@@ -866,6 +872,8 @@ tripsRouter.post("/:id/entries", async (req: Request, res: Response) => {
     const entry = await TripService.createTripEntry(input.userId, tripId, {
       walletId: input.walletId ?? null,
       type: input.type,
+      paidByParticipantId: input.paidByParticipantId ?? null,
+      counterpartyId: input.counterpartyId ?? null,
       date: input.date,
       description: input.description,
       label: input.label ?? null,
@@ -1135,6 +1143,76 @@ tripsRouter.patch("/:id/entries/:entryId", async (req: Request, res: Response) =
     res.json(result);
   } catch (error: any) {
     res.status(400).json({ error: error.message || "Failed to update trip entry" });
+  }
+});
+
+tripsRouter.get("/:id/participants", async (req: Request, res: Response) => {
+  try {
+    const { userId } = z.object({ userId: z.string() }).parse(req.query);
+    res.json({ participants: await TripIouRepository.listParticipants(userId, String(req.params.id)) });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to load people" });
+  }
+});
+
+tripsRouter.post("/:id/participants", async (req: Request, res: Response) => {
+  try {
+    const { userId, name } = z.object({ userId: z.string(), name: z.string().trim().min(1) }).parse(req.body);
+    res.json({ participant: await TripIouRepository.createParticipant(userId, String(req.params.id), name) });
+  } catch (error: any) {
+    res.status(error.status || 400).json({ error: error.message || "Failed to add person" });
+  }
+});
+
+tripsRouter.patch("/:id/participants/:participantId", async (req: Request, res: Response) => {
+  try {
+    const { userId, name } = z.object({ userId: z.string(), name: z.string().trim().min(1) }).parse(req.body);
+    res.json({
+      participant: await TripIouRepository.renameParticipant(
+        userId,
+        String(req.params.id),
+        String(req.params.participantId),
+        name,
+      ),
+    });
+  } catch (error: any) {
+    res.status(error.status || 400).json({ error: error.message || "Failed to rename person" });
+  }
+});
+
+tripsRouter.delete("/:id/participants/:participantId", async (req: Request, res: Response) => {
+  try {
+    const { userId } = z.object({ userId: z.string() }).parse(req.body);
+    res.json(
+      await TripIouRepository.deleteParticipant(userId, String(req.params.id), String(req.params.participantId)),
+    );
+  } catch (error: any) {
+    res.status(error.status || 400).json({ error: error.message || "Failed to remove person" });
+  }
+});
+
+tripsRouter.get("/:id/balances", async (req: Request, res: Response) => {
+  try {
+    const { userId } = z.object({ userId: z.string() }).parse(req.query);
+    res.json(await TripIouRepository.getBalances(userId, String(req.params.id)));
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to load balances" });
+  }
+});
+
+tripsRouter.put("/:id/settlements/:entryId/allocations", async (req: Request, res: Response) => {
+  try {
+    const { userId, items } = z
+      .object({
+        userId: z.string(),
+        items: z.array(z.object({ iouEntryId: z.string(), localAmount: z.number().positive() })),
+      })
+      .parse(req.body);
+    res.json(
+      await TripService.setSettlementAllocations(userId, String(req.params.id), String(req.params.entryId), items),
+    );
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to update the settlement" });
   }
 });
 

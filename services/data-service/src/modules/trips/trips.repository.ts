@@ -14,6 +14,7 @@ import {
   validateFundingInBankMatch,
   validateFundingOutFeeCurrency,
 } from "./trips.accounting";
+import { TripIouRepository } from "./trips.ious";
 import {
   deleteRoleLinks,
   replaceLinks,
@@ -3555,7 +3556,7 @@ export class TripRepository {
               ELSE te.local_amount
             END
           WHEN te.type = 'reimbursement' THEN te.local_amount
-          WHEN te.type IN ('spending', 'funding_out') THEN -te.local_amount
+          WHEN te.type IN ('spending', 'funding_out', 'settlement') THEN -te.local_amount
           ELSE 0::numeric
         END
       ), 0) AS balance
@@ -3777,7 +3778,7 @@ export class TripRepository {
           AND te.wallet_id = ${walletId}
           AND t.id = te.trip_id
           AND t.user_id = ${userId}
-          AND te.type IN ('spending', 'funding_out', 'reimbursement')
+          AND te.type IN ('spending', 'funding_out', 'reimbursement', 'settlement')
           AND UPPER(te.local_currency) = UPPER(${wallet.currency})
           AND NOT ${TripRepository.LOCKED_BASE_SQL}
         RETURNING te.id
@@ -3799,7 +3800,9 @@ export class TripRepository {
       }
 
       const ids = rows.map((row) => row.id);
-      const touched = await TripRepository.reconcileReimbursementAllocationsTx(tx, tripId, ids);
+      // Settlements paid from this wallet changed value, and so did the IOUs they settled.
+      const ious = await TripIouRepository.reallocateSettlementsTx(tx, tripId, ids);
+      const touched = await TripRepository.reconcileReimbursementAllocationsTx(tx, tripId, [...ids, ...ious]);
       await TripRepository.rebuildEntryLinkageCachesTx(tx, tripId, touched);
       await TripRepository.resyncTripSyncedBankTransactionsTx(tx, userId, tripId, touched);
       return ids;
@@ -6150,7 +6153,9 @@ export class TripRepository {
     input: {
       transactionIds: string[];
       categoryId?: string | null;
-      entryType?: "spending" | "reimbursement" | "funding_out";
+      entryType?: "spending" | "reimbursement" | "funding_out" | "settlement";
+      /** For settlements: the person this bank payment paid back. */
+      counterpartyId?: string | null;
       fundingOut?: {
         destinationType?: "bank" | "trip" | "wallet" | "external";
         destinationTripId?: string | null;
@@ -6167,6 +6172,10 @@ export class TripRepository {
     const uniqueIds = Array.from(new Set(input.transactionIds.filter(Boolean)));
     if (uniqueIds.length === 0) {
       throw new Error("No transactions selected");
+    }
+    if (input.entryType === "settlement") {
+      if (!input.counterpartyId) throw new Error("Choose who this payment settled up with.");
+      await TripIouRepository.assertParticipant(prisma, tripId, input.counterpartyId);
     }
 
     const [trip] = await prisma.$queryRaw<Array<{ id: string; name: string; baseCurrency: string }>>`
@@ -6249,6 +6258,9 @@ export class TripRepository {
 
         if (!resolvedType) continue;
 
+        if (resolvedType === "settlement" && !(amountOut > 0)) {
+          throw new Error("A settlement must be a payment out of the bank account.");
+        }
         if (resolvedType === "spending" && !(amountOut > 0)) {
           throw new Error(
             "Selected bank transaction must be a debit (amount out) to add as trip spending.",
@@ -6266,7 +6278,7 @@ export class TripRepository {
         }
 
         const baseAmount =
-          resolvedType === "spending" ? amountOut : amountIn;
+          resolvedType === "spending" || resolvedType === "settlement" ? amountOut : amountIn;
         if (!(baseAmount > 0)) continue;
 
         let fundingOutMetadata: Record<string, unknown> | null = null;
@@ -6350,6 +6362,7 @@ export class TripRepository {
             fee_currency,
             category_id,
             linked_entry_id,
+            counterparty_id,
             metadata,
             created_at
           )
@@ -6359,7 +6372,9 @@ export class TripRepository {
             NULL,
             ${resolvedType === "funding_out"
               ? "external_bank_funding_out"
-              : "external_bank"},
+              : resolvedType === "settlement"
+                ? "external_bank_settlement"
+                : "external_bank"},
             ${source.id},
             ${resolvedType},
             ${source.date},
@@ -6373,10 +6388,17 @@ export class TripRepository {
             ${normalizedFundingOut?.feeCurrency ?? null},
             ${resolvedType === "spending" ? input.categoryId ?? null : null},
             NULL,
+            ${resolvedType === "settlement" ? input.counterpartyId : null},
             ${metadataPayload},
             NOW()
           )
         `;
+
+        if (resolvedType === "settlement") {
+          const ious = await TripIouRepository.allocateSettlementTx(tx, tripId, entryId);
+          const touched = await TripRepository.reconcileReimbursementAllocationsTx(tx, tripId, ious);
+          await TripRepository.rebuildEntryLinkageCachesTx(tx, tripId, touched);
+        }
 
         if (
           resolvedType === "funding_out" &&
@@ -6477,6 +6499,19 @@ export class TripRepository {
         `This wallet has no funding to take a rate from yet. Enter the ${baseCurrency} amount or a rate.`,
       );
     }
+    // Without a wallet (e.g. an IOU), a wallet holding that currency gives an estimate.
+    if (!input.walletId) {
+      const [sameCurrencyWallet] = await prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM wallets WHERE trip_id = ${input.tripId} AND UPPER(currency) = ${localCurrency}
+        ORDER BY created_at ASC LIMIT 1
+      `;
+      const rate = sameCurrencyWallet
+        ? await TripRepository.getWalletWeightedFxRate(input.tripId, sameCurrencyWallet.id).catch(() => null)
+        : null;
+      if (rate) {
+        return { localCurrency, baseAmount: TripRepository.roundMoney(localAmount * rate), fxRate: rate, locked: false };
+      }
+    }
     throw new Error(`Enter the ${baseCurrency} amount or a rate for an amount in ${localCurrency}.`);
   }
 
@@ -6485,7 +6520,11 @@ export class TripRepository {
     tripId: string,
     input: {
       walletId?: string | null;
-      type: "spending" | "reimbursement" | "funding_out";
+      type: "spending" | "reimbursement" | "funding_out" | "settlement";
+      /** Spending someone else paid for: makes the entry an IOU to that person. */
+      paidByParticipantId?: string | null;
+      /** The person a settlement paid back. */
+      counterpartyId?: string | null;
       date: Date;
       description: string;
       label?: string | null;
@@ -6520,6 +6559,21 @@ export class TripRepository {
     if (!trip) {
       throw new Error("Trip not found or unauthorized");
     }
+
+    const isIou = input.type === "spending" && !!input.paidByParticipantId;
+    if (isIou) {
+      if (input.walletId) throw new Error("An IOU isn't paid from your wallets; leave the wallet empty.");
+      await TripIouRepository.assertParticipant(prisma, tripId, input.paidByParticipantId as string);
+    }
+    if (input.type === "settlement") {
+      if (!input.counterpartyId) throw new Error("Choose who this settlement paid back.");
+      await TripIouRepository.assertParticipant(prisma, tripId, input.counterpartyId);
+    }
+    const counterpartyId = isIou
+      ? (input.paidByParticipantId as string)
+      : input.type === "settlement"
+        ? (input.counterpartyId as string)
+        : null;
 
     let walletCurrency: string | null = null;
     if (input.walletId) {
@@ -6627,13 +6681,15 @@ export class TripRepository {
       input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata)
         ? { ...(input.metadata as Record<string, unknown>) }
         : {};
-    for (const key of ["linkage", "fundingOut", "baseAmountLocked", "manualEntry"]) {
+    for (const key of ["linkage", "fundingOut", "baseAmountLocked", "manualEntry", "iou"]) {
       delete clientMetadata[key];
     }
     const metadataPayload = {
       ...clientMetadata,
       manualEntry: true,
-      ...(valuation.locked ? { baseAmountLocked: true } : {}),
+      // An IOU's value is an estimate until it is settled.
+      ...(isIou ? { iou: { estimateFxRate: valuation.fxRate } } : {}),
+      ...(valuation.locked && !isIou ? { baseAmountLocked: true } : {}),
       ...(input.type === "funding_out" && fundingOutMetadata
         ? {
             fundingOut: fundingOutMetadata,
@@ -6662,6 +6718,7 @@ export class TripRepository {
           fee_currency,
           category_id,
           linked_entry_id,
+          counterparty_id,
           metadata,
           created_at
         )
@@ -6669,7 +6726,13 @@ export class TripRepository {
           ${id},
           ${tripId},
           ${input.walletId ?? null},
-          ${input.type === "funding_out"
+          ${isIou
+            ? "iou"
+            : input.type === "settlement"
+              ? input.walletId
+                ? "manual_settlement_wallet"
+                : "manual_settlement"
+              : input.type === "funding_out"
             ? normalizedFundingOut?.destinationType === "wallet"
               ? "wallet_conversion_out"
               : input.walletId
@@ -6695,10 +6758,17 @@ export class TripRepository {
             : (input.feeCurrency ?? null)},
           ${input.type === "spending" ? input.categoryId ?? null : null},
           NULL,
+          ${counterpartyId},
           ${metadataPayload as Prisma.InputJsonValue},
           NOW()
         )
       `;
+
+      if (input.type === "settlement") {
+        const ious = await TripIouRepository.allocateSettlementTx(tx, tripId, id);
+        const touched = await TripRepository.reconcileReimbursementAllocationsTx(tx, tripId, ious);
+        await TripRepository.rebuildEntryLinkageCachesTx(tx, tripId, touched);
+      }
 
       if (input.walletId) {
         touchedWallets.set(`${tripId}:${input.walletId}`, {
@@ -6759,6 +6829,22 @@ export class TripRepository {
     }
 
     return { id };
+  }
+
+  /** Chooses which IOUs a settlement pays off, and how much of each. */
+  static async setSettlementAllocations(
+    userId: string,
+    tripId: string,
+    settlementId: string,
+    items: Array<{ iouEntryId: string; localAmount: number }>,
+  ) {
+    await TripIouRepository.assertTripOwned(prisma, userId, tripId);
+    await prisma.$transaction(async (tx) => {
+      const ious = await TripIouRepository.allocateSettlementTx(tx, tripId, settlementId, items);
+      const touched = await TripRepository.reconcileReimbursementAllocationsTx(tx, tripId, ious);
+      await TripRepository.rebuildEntryLinkageCachesTx(tx, tripId, touched);
+    });
+    return TripIouRepository.getBalances(userId, tripId);
   }
 
   /**
@@ -6849,6 +6935,19 @@ export class TripRepository {
     if (entry.sourceTransactionId && amountChanged) {
       throw new Error("This entry comes from a bank transaction. Change the amount on the bank transaction instead.");
     }
+    const isIou = entry.sourceType === "iou";
+    if (isIou && nextWalletId) throw new Error("An IOU isn't paid from your wallets.");
+    if (isIou && amountChanged) {
+      const [settled] = await prisma.$queryRaw<Array<{ local: unknown }>>`
+        SELECT COALESCE(SUM(iou_local_amount), 0) AS local FROM trip_settlement_allocations WHERE iou_entry_id = ${entryId}
+      `;
+      if (nextLocal - Number(settled.local) < -0.0001) {
+        throw new Error(`${Number(settled.local)} ${nextCurrency} of this IOU is already settled; it can't be smaller.`);
+      }
+      if (nextCurrency !== entry.localCurrency.toUpperCase() && Number(settled.local) > 0) {
+        throw new Error("A partly settled IOU can't change currency.");
+      }
+    }
     if (input.categoryId !== undefined && input.categoryId !== null) {
       if (entry.type !== "spending") throw new Error("Only spending has a category.");
       await TripRepository.assertCategoryOwned(userId, input.categoryId);
@@ -6882,7 +6981,9 @@ export class TripRepository {
       fxRate = valuation.fxRate;
       delete metadata.manualBaseAmount;
       delete metadata.manualFxRate;
-      if (valuation.locked) metadata.baseAmountLocked = true;
+      if (isIou) {
+        metadata.iou = { ...((metadata.iou as Record<string, unknown>) || {}), estimateFxRate: valuation.fxRate };
+      } else if (valuation.locked) metadata.baseAmountLocked = true;
       else delete metadata.baseAmountLocked;
     }
 
@@ -7002,7 +7103,13 @@ export class TripRepository {
         }
       }
 
-      const touched = await TripRepository.reconcileReimbursementAllocationsTx(tx, tripId, [entryId]);
+      const ious =
+        entry.type === "settlement"
+          ? await TripIouRepository.reallocateSettlementsTx(tx, tripId, [entryId])
+          : isIou
+            ? (await TripIouRepository.recomputeIouCostsTx(tx, tripId, [entryId]), [entryId])
+            : [];
+      const touched = await TripRepository.reconcileReimbursementAllocationsTx(tx, tripId, [entryId, ...ious]);
       await TripRepository.rebuildEntryLinkageCachesTx(tx, tripId, [entryId, ...touched]);
       await TripRepository.resyncTripSyncedBankTransactionsTx(tx, userId, tripId, [entryId, ...touched]);
     });
@@ -7072,6 +7179,7 @@ export class TripRepository {
               WHEN te.type = 'reimbursement' THEN te.local_amount
               WHEN te.type = 'spending' THEN -te.local_amount
               WHEN te.type = 'funding_out' THEN -te.local_amount
+              WHEN te.type = 'settlement' THEN -te.local_amount
               ELSE 0::numeric
             END
           ) AS amount
@@ -7234,7 +7342,7 @@ export class TripRepository {
     const entries = await prisma.$queryRaw<
       Array<{
         id: string;
-        type: "spending" | "reimbursement" | "funding_out" | "funding_in";
+        type: "spending" | "reimbursement" | "funding_out" | "funding_in" | "settlement";
         date: Date;
         label: string | null;
         description: string;
@@ -7258,6 +7366,8 @@ export class TripRepository {
         fundingBankTransactionId: string | null;
         fundingBankTransactionDate: Date | null;
         fundingBankTransactionDescription: string | null;
+        counterpartyId: string | null;
+        counterpartyName: string | null;
         metadata: unknown;
       }>
     >`
@@ -7287,10 +7397,13 @@ export class TripRepository {
         bt.id AS "fundingBankTransactionId",
         bt.date AS "fundingBankTransactionDate",
         bt.description AS "fundingBankTransactionDescription",
+        te.counterparty_id AS "counterpartyId",
+        tp.name AS "counterpartyName",
         te.metadata
       FROM trip_entries te
       LEFT JOIN wallets w ON w.id = te.wallet_id
       LEFT JOIN categories c ON c.id = te.category_id
+      LEFT JOIN trip_participants tp ON tp.id = te.counterparty_id
       LEFT JOIN trip_fundings tf ON tf.entry_id = te.id
       LEFT JOIN transactions bt ON bt.id = tf.bank_transaction_id
       INNER JOIN trips t ON t.id = te.trip_id
@@ -7331,6 +7444,12 @@ export class TripRepository {
                 name: "Funding Out",
                 color: "#f59e0b",
               }
+          : item.type === "settlement"
+            ? {
+                id: "__settlement__",
+                name: "Settlement",
+                color: "#8b5cf6",
+              }
           : item.categoryId
             ? {
                 id: item.categoryId,
@@ -7344,6 +7463,8 @@ export class TripRepository {
       fxRate: Number(item.fxRate),
       feeAmount: item.feeAmount !== null ? Number(item.feeAmount) : null,
       feeCurrency: item.feeCurrency,
+      counterparty: item.counterpartyId ? { id: item.counterpartyId, name: item.counterpartyName } : null,
+      isIou: item.sourceType === "iou",
       metadata: {
         ...(item.metadata && typeof item.metadata === "object"
           ? (item.metadata as Record<string, unknown>)
@@ -7803,6 +7924,10 @@ export class TripRepository {
         AND (reimbursement_entry_id = ANY(${existingIds}) OR reimbursed_entry_id = ANY(${existingIds}))
     `;
     await TripRepository.releaseTripSyncedBankTransactionsTx(tx, userId, tripId, existingIds);
+    // IOUs paid off by deleted settlements are owed again.
+    const settledIous = (await TripIouRepository.linkedIouIdsTx(tx, tripId, existingIds)).filter(
+      (id) => !existingIds.includes(id),
+    );
 
     const linkedTargets = await TripRepository.deleteLinkedFundingsFromTripOutgoingTx(tx, userId, existingIds);
     await tx.$executeRaw`
@@ -7815,9 +7940,12 @@ export class TripRepository {
         WHERE trip_id = ${tripId} AND id = ANY(${existingIds})
       `,
     );
-    const remainingCounterparts = counterparts
-      .map((row) => row.id)
-      .filter((id) => !existingIds.includes(id));
+    await TripIouRepository.recomputeIouCostsTx(tx, tripId, settledIous);
+    const repricedIous = await TripRepository.reconcileReimbursementAllocationsTx(tx, tripId, settledIous);
+    const remainingCounterparts = [
+      ...counterparts.map((row) => row.id).filter((id) => !existingIds.includes(id)),
+      ...repricedIous,
+    ];
     await TripRepository.rebuildEntryLinkageCachesTx(tx, tripId, remainingCounterparts);
     await TripRepository.resyncTripSyncedBankTransactionsTx(tx, userId, tripId, remainingCounterparts);
 

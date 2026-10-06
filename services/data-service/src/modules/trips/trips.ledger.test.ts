@@ -555,3 +555,83 @@ test("statement imports find the provider's wallet even after it was renamed", (
       assert.equal(await db.wallet.count({ where: { tripId: trip.id } }), 1, "no duplicate wallet");
     }),
   ));
+
+test("IOUs count when incurred and take their real cost once settled", () =>
+  withChatDb((db) =>
+    withDatabase(db, async () => {
+      const { user, trip, wallet, fund, food } = await seed(db);
+      const { TripIouRepository } = await import("./trips.ious");
+      const jpy = await wallet("Revolut JPY", "JPY");
+      await fund(jpy.id, 1000, 100000, "JPY");
+      const alice = await TripIouRepository.createParticipant(user.id, trip.id, "Alice");
+
+      const iou = entryIdOf(
+        await TripRepository.createTripEntry(user.id, trip.id, {
+          type: "spending",
+          paidByParticipantId: alice.id,
+          date: new Date("2026-09-02"),
+          description: "Dinner Alice paid",
+          categoryId: food.id,
+          localCurrency: "JPY",
+          localAmount: 12000,
+        } as never),
+      );
+      const before = await db.tripEntry.findUniqueOrThrow({ where: { id: iou } });
+      assert.equal(Number(before.baseAmount), 120, "estimated from the JPY wallet's rate");
+      let { totals } = await TripRepository.getTripAnalytics(user.id, trip.id);
+      assert.equal(totals.totalSpent, 120, "counted as spending when incurred");
+
+      // Paid Alice back S$110 by PayNow from DBS.
+      const payNow = await db.transaction.create({
+        data: { userId: user.id, date: new Date("2026-09-10"), description: "PayNow to Alice", amountOut: 110, accountIdentifier: "DBS" },
+      });
+      await TripRepository.addEntriesFromSourceTransactions(user.id, trip.id, {
+        transactionIds: [payNow.id],
+        entryType: "settlement",
+        counterpartyId: alice.id,
+      });
+      const settled = await db.tripEntry.findUniqueOrThrow({ where: { id: iou } });
+      assert.equal(Number(settled.baseAmount), 110, "the real cost is what was paid back");
+      ({ totals } = await TripRepository.getTripAnalytics(user.id, trip.id));
+      assert.equal(totals.totalSpent, 110, "the settlement itself is not spending");
+      let balances = await TripIouRepository.getBalances(user.id, trip.id);
+      assert.equal(balances.people[0].currencies[0].open, 0);
+      assert.equal(balances.people[0].paidBase, 110);
+
+      // A second IOU, then a partial settlement from the JPY wallet.
+      const taxi = entryIdOf(
+        await TripRepository.createTripEntry(user.id, trip.id, {
+          type: "spending",
+          paidByParticipantId: alice.id,
+          date: new Date("2026-09-03"),
+          description: "Taxi",
+          localCurrency: "JPY",
+          localAmount: 4000,
+        } as never),
+      );
+      const cashBack = entryIdOf(
+        await TripRepository.createTripEntry(user.id, trip.id, {
+          walletId: jpy.id,
+          type: "settlement",
+          counterpartyId: alice.id,
+          date: new Date("2026-09-04"),
+          description: "Paid Alice for the taxi",
+          localCurrency: "JPY",
+          localAmount: 2000,
+        } as never),
+      );
+      await TripRepository.setSettlementAllocations(user.id, trip.id, cashBack, [
+        { iouEntryId: taxi, localAmount: 2000 },
+      ]);
+      const taxiAfter = await db.tripEntry.findUniqueOrThrow({ where: { id: taxi } });
+      assert.equal(Number(taxiAfter.baseAmount), 40, "20 settled plus 20 still estimated");
+      balances = await TripIouRepository.getBalances(user.id, trip.id);
+      assert.equal(balances.people[0].currencies[0].open, 2000);
+
+      // Deleting the settlement makes the taxi fully owed again.
+      await TripRepository.bulkDeleteEntriesByIds(user.id, trip.id, [cashBack]);
+      balances = await TripIouRepository.getBalances(user.id, trip.id);
+      assert.equal(balances.people[0].currencies[0].open, 4000);
+      await assert.rejects(TripIouRepository.deleteParticipant(user.id, trip.id, alice.id), /still has/);
+    }),
+  ));

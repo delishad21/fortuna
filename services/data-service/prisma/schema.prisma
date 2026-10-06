@@ -69,6 +69,7 @@ model User {
   trips                  Trip[]
   walletAccounts         WalletAccount[]
   wallets                Wallet[]
+  tripParticipants       TripParticipant[]
   importRules            ImportRule[]
   classificationPatterns ClassificationPattern[]
   apiTokens              ApiToken[]
@@ -517,6 +518,8 @@ model Trip {
   fundings                 TripFunding[]
   entries                  TripEntry[]
   reimbursementAllocations TripReimbursementAllocation[]
+  participants             TripParticipant[]
+  settlementAllocations    TripSettlementAllocation[]
 
   @@index([userId, startDate])
   @@map("trips")
@@ -612,6 +615,8 @@ model TripEntry {
   feeCurrency         String?  @map("fee_currency")
   categoryId          String?  @map("category_id")
   linkedEntryId       String?  @map("linked_entry_id")
+  /// IOU: who paid for me. Settlement: who I paid back.
+  counterpartyId      String?  @map("counterparty_id")
   metadata            Json?
   createdAt           DateTime @default(now()) @map("created_at")
 
@@ -624,13 +629,56 @@ model TripEntry {
   fundingRecord                    TripFunding?                  @relation("TripFundingEntry")
   reimbursementAllocationsAsSource TripReimbursementAllocation[] @relation("TripReimbursementSource")
   reimbursementAllocationsAsTarget TripReimbursementAllocation[] @relation("TripReimbursementTarget")
+  counterparty                     TripParticipant?              @relation(fields: [counterpartyId], references: [id], onDelete: SetNull)
+  settlementAllocationsAsSettlement TripSettlementAllocation[]   @relation("TripSettlementSource")
+  settlementAllocationsAsIou        TripSettlementAllocation[]   @relation("TripSettlementIou")
 
   @@index([tripId])
   @@index([tripId, type])
   @@index([linkedEntryId])
   @@index([sourceType])
   @@index([sourceTransactionId])
+  @@index([counterpartyId])
   @@map("trip_entries")
+}
+
+/// Someone on a trip: a friend who paid for me, or a Fortuna user sharing the trip.
+model TripParticipant {
+  id        String   @id @default(cuid())
+  tripId    String   @map("trip_id")
+  name      String
+  userId    String?  @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  trip    Trip        @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user    User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  entries TripEntry[]
+
+  @@unique([tripId, name])
+  @@unique([tripId, userId])
+  @@map("trip_participants")
+}
+
+/// How much of an IOU a settlement paid off. The settlement's base value is split
+/// across its IOUs by weight, which sets each IOU's real cost.
+model TripSettlementAllocation {
+  id                String   @id @default(cuid())
+  tripId            String   @map("trip_id")
+  settlementEntryId String   @map("settlement_entry_id")
+  iouEntryId        String   @map("iou_entry_id")
+  iouLocalAmount    Decimal  @map("iou_local_amount") @db.Decimal(14, 4)
+  weightBase        Decimal  @map("weight_base") @db.Decimal(14, 4)
+  amountBase        Decimal  @map("amount_base") @db.Decimal(14, 4)
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  trip            Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  settlementEntry TripEntry @relation("TripSettlementSource", fields: [settlementEntryId], references: [id], onDelete: Cascade)
+  iouEntry        TripEntry @relation("TripSettlementIou", fields: [iouEntryId], references: [id], onDelete: Cascade)
+
+  @@unique([settlementEntryId, iouEntryId])
+  @@index([tripId])
+  @@index([iouEntryId])
+  @@map("trip_settlement_allocations")
 }
 
 model TripReimbursementAllocation {
