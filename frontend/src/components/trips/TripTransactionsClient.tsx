@@ -8,6 +8,7 @@ import {
   MoreHorizontal,
   Plus,
   Trash2,
+  Users,
   WalletCards,
 } from "lucide-react";
 import { format } from "date-fns";
@@ -47,6 +48,19 @@ import {
   updateTripFunding,
   addFundingsFromOutgoingEntries,
 } from "@/lib/tripMutations";
+import type {
+  TripParticipant,
+  TripSharedOverview,
+} from "@/app/actions/tripSharing";
+import {
+  addBankSettlements,
+  asPeopleEntry,
+  createTripParticipant,
+  createTripPeopleEntry,
+  getTripParticipants,
+  getTripSharedOverview,
+  tripSharingOf,
+} from "@/lib/tripSharingMutations";
 import { createCategory, type Category } from "@/app/actions/categories";
 import { getCurrencyOptions } from "@/lib/currencies";
 import { normalizeFundingEditInput } from "@/lib/fundingMath";
@@ -68,7 +82,10 @@ import { ExpandableTransactionList } from "@/components/transactions/ExpandableT
 import type { TransactionCardTransaction } from "@/components/transactions/TransactionCard";
 import { ExistingTransactionsSelector } from "@/components/ui/ExistingTransactionsSelector";
 import { TransactionTable } from "@/components/transaction-table/TransactionTable";
-import { TripAddFromBankModal } from "@/components/trips/TripAddFromBankModal";
+import {
+  TripAddFromBankModal,
+  type TripBankEntryType,
+} from "@/components/trips/TripAddFromBankModal";
 import { TripEditFundingModal } from "@/components/trips/TripEditFundingModal";
 import { TripTransactionsFundingModal } from "@/components/trips/TripTransactionsFundingModal";
 import { TripTransactionsSideRail } from "@/components/trips/TripTransactionsSideRail";
@@ -78,6 +95,8 @@ import {
 } from "@/components/trips/TripManualEntryModal";
 import type { FundingOutDestinationType } from "@/components/trips/TripFundingOutDestinationFields";
 import { TripReimbursementSelectorModal } from "@/components/trips/TripReimbursementSelectorModal";
+import { TripSettleModal } from "@/components/trips/TripSettleModal";
+import { TripShareCostModal } from "@/components/trips/TripShareCostModal";
 import { TripWalletModal } from "@/components/trips/TripWalletModal";
 import type {
   Transaction as ImportTransaction,
@@ -95,6 +114,8 @@ interface TripTransactionsClientProps {
   initialEntriesTotal: number;
   initialFundingCandidates: FundingCandidatesResponse;
   allTrips: Trip[];
+  /** People on the trip, for IOUs and settlements. Loaded on mount when left out. */
+  initialParticipants?: TripParticipant[];
 }
 
 interface EntryFilters {
@@ -238,6 +259,8 @@ const parseTripEntryLinkage = (
 const buildEmptyEntryForm = (baseCurrency: string): TripEntryForm => ({
   walletId: "__none__",
   type: "spending",
+  paidByParticipantId: "",
+  counterpartyId: "",
   date: format(new Date(), "yyyy-MM-dd"),
   description: "",
   label: "",
@@ -282,9 +305,13 @@ const buildEntryEditForm = (
     metadata.manualBaseAmount !== undefined ||
     metadata.manualFxRate !== undefined;
   const destinationAmount = toFormNumber(fundingOut.destinationAmount);
+  const people = asPeopleEntry(entry);
   return {
     walletId: entry.wallet.id === "__external__" ? "__none__" : entry.wallet.id,
-    type: entry.type === "funding_in" ? "spending" : entry.type,
+    type: people.type === "funding_in" ? "spending" : people.type,
+    paidByParticipantId: people.isIou ? people.counterparty?.id || "" : "",
+    counterpartyId:
+      people.type === "settlement" ? people.counterparty?.id || "" : "",
     date: String(entry.date).slice(0, 10),
     description: entry.description,
     label: entry.label || "",
@@ -402,9 +429,21 @@ export function TripTransactionsClient({
   initialEntriesTotal,
   initialFundingCandidates,
   allTrips,
+  initialParticipants,
 }: TripTransactionsClientProps) {
   const { setHeaderConfig } = useHeaderConfig();
   const router = useRouter();
+  const sharing = tripSharingOf(trip);
+  // Viewers of a shared trip can't change it; the server rejects their writes.
+  const isViewer = sharing?.role === "viewer";
+  const [participants, setParticipants] = useState<TripParticipant[]>(
+    initialParticipants || [],
+  );
+  const [sharedOverview, setSharedOverview] =
+    useState<TripSharedOverview | null>(null);
+  const [settlingEntryId, setSettlingEntryId] = useState<string | null>(null);
+  const [sharingEntryId, setSharingEntryId] = useState<string | null>(null);
+  const [sourceCounterpartyId, setSourceCounterpartyId] = useState("");
 
   const [fundings, setFundings] = useState(initialFundings);
   const [wallets, setWallets] = useState(initialWallets);
@@ -516,9 +555,8 @@ export function TripTransactionsClient({
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(
     new Set(),
   );
-  const [sourceEntryType, setSourceEntryType] = useState<
-    "spending" | "reimbursement" | "funding_out"
-  >("spending");
+  const [sourceEntryType, setSourceEntryType] =
+    useState<TripBankEntryType>("spending");
   const [sourceFundingOut, setSourceFundingOut] = useState({
     destinationType: "bank" as FundingOutDestinationType,
     destinationTripId: "",
@@ -670,13 +708,25 @@ export function TripTransactionsClient({
     ],
     [fundings, fundingOutEntries, trip.baseCurrency],
   );
+  const sharesByEntryId = useMemo(
+    () =>
+      new Map(
+        (sharedOverview?.entries || [])
+          .filter((item) => item.shares.length > 0)
+          .map((item) => [item.id, item.shares]),
+      ),
+    [sharedOverview],
+  );
   const tripTransactions = useMemo<TransactionCardTransaction[]>(
     () =>
       entries.map((entry) => {
+        const people = asPeopleEntry(entry);
         const isInflow =
           entry.type === "reimbursement" || entry.type === "funding_in";
         const isOutflow =
-          entry.type === "spending" || entry.type === "funding_out";
+          people.type === "spending" ||
+          people.type === "funding_out" ||
+          people.type === "settlement";
         const hasForeignWalletAmount =
           String(entry.localCurrency || "").toUpperCase() !==
           String(trip.baseCurrency || "").toUpperCase();
@@ -718,6 +768,29 @@ export function TripTransactionsClient({
           noWalletSource || bankLinkedSource
             ? "#ffffff"
             : walletColorMap[entry.wallet.id] || "#ffffff";
+        // IOUs, settlements and shares say who else is involved next to the category.
+        const personName = people.counterparty?.name || "someone";
+        const shares = sharesByEntryId.get(entry.id);
+        const peopleNote =
+          people.type === "settlement"
+            ? `Paid ${personName}`
+            : people.isIou
+              ? `Owed to ${personName}`
+              : shares
+                ? `Shared with ${shares.map((share) => share.name).join(", ")}`
+                : null;
+        const category =
+          people.type === "settlement"
+            ? {
+                id: entry.category?.id || "__settlement__",
+                name: peopleNote as string,
+                color: entry.category?.color || "#8b5cf6",
+              }
+            : peopleNote
+              ? entry.category
+                ? { ...entry.category, name: `${entry.category.name} · ${peopleNote}` }
+                : { id: "__iou__", name: peopleNote, color: "#8b5cf6" }
+              : entry.category || undefined;
 
         return {
           id: entry.id,
@@ -728,7 +801,7 @@ export function TripTransactionsClient({
           amountOut: isOutflow ? primaryAmount : null,
           balance: null,
           displayCurrency: primaryCurrency,
-          category: entry.category || undefined,
+          category,
           secondaryAmount: hasForeignWalletAmount
             ? {
                 value: entry.localAmount,
@@ -760,12 +833,13 @@ export function TripTransactionsClient({
                   }`,
                 }
               : {}),
+            ...(peopleNote ? { people: peopleNote } : {}),
             ...entryMetadata,
           },
           linkage: parsedLinkage || undefined,
         };
       }),
-    [entries, trip.baseCurrency, walletColorMap],
+    [entries, trip.baseCurrency, walletColorMap, sharesByEntryId],
   );
 
   const activeReimbursementEntry = useMemo(
@@ -1058,6 +1132,35 @@ export function TripTransactionsClient({
     },
     [trip.id, pageSize],
   );
+
+  useEffect(() => {
+    if (initialParticipants) return;
+    getTripParticipants(trip.id)
+      .then(setParticipants)
+      .catch(() => undefined);
+  }, [initialParticipants, trip.id]);
+
+  const sharingGroupId = sharing?.groupId;
+  const refreshSharedOverview = useCallback(async () => {
+    if (!sharingGroupId) return;
+    try {
+      setSharedOverview(await getTripSharedOverview(trip.id));
+    } catch {
+      // Share labels are extra; the list works without them.
+    }
+  }, [sharingGroupId, trip.id]);
+
+  useEffect(() => {
+    void refreshSharedOverview();
+  }, [refreshSharedOverview]);
+
+  const handleAddPerson = async (name: string) => {
+    const person = await createTripParticipant(trip.id, name);
+    setParticipants((prev) =>
+      [...prev, person].sort((a, b) => a.name.localeCompare(b.name)),
+    );
+    return person;
+  };
 
   const buildEntryFilterPayload = useCallback(
     () => ({
@@ -2040,10 +2143,24 @@ export function TripTransactionsClient({
       );
       return;
     }
+    if (sourceEntryType === "settlement" && !sourceCounterpartyId) {
+      showModal(
+        "warning",
+        "Who did you pay?",
+        "Choose the person this payment paid back.",
+      );
+      return;
+    }
 
     setIsBusy(true);
     try {
-      const result = await addEntriesFromSourceTransactions(trip.id, {
+      const result =
+        sourceEntryType === "settlement"
+          ? await addBankSettlements(trip.id, {
+              transactionIds: Array.from(selectedSourceIds),
+              counterpartyId: sourceCounterpartyId,
+            })
+          : await addEntriesFromSourceTransactions(trip.id, {
         transactionIds: Array.from(selectedSourceIds),
         categoryId:
           sourceEntryType === "spending" ? sourceCategoryId || null : null,
@@ -2082,6 +2199,7 @@ export function TripTransactionsClient({
       setSelectedSourceIds(new Set());
       setSourceCategoryId("");
       setSourceEntryType("spending");
+      setSourceCounterpartyId("");
       setSourceFundingOut({
         destinationType: "bank",
         destinationTripId: "",
@@ -2128,39 +2246,76 @@ export function TripTransactionsClient({
       return;
     }
 
+    if (manualEntryForm.type === "settlement" && !manualEntryForm.counterpartyId) {
+      showModal(
+        "warning",
+        "Who did you pay?",
+        "Choose the person this settlement pays back.",
+      );
+      return;
+    }
+
     const baseAmount = Number(manualEntryForm.baseAmount) || null;
     const fxRate = Number(manualEntryForm.fxRate) || null;
+    const isIou =
+      manualEntryForm.type === "spending" &&
+      !!manualEntryForm.paidByParticipantId;
 
     setIsBusy(true);
     try {
-      await createTripEntry(trip.id, {
-        walletId:
-          manualEntryForm.walletId === "__none__"
-            ? null
-            : manualEntryForm.walletId,
-        type: manualEntryForm.type,
-        date: manualEntryForm.date,
-        description,
-        label: manualEntryForm.label.trim() || null,
-        categoryId:
-          manualEntryForm.type === "spending"
-            ? manualEntryForm.categoryId || null
-            : null,
-        localCurrency: manualEntryForm.localCurrency.trim().toUpperCase(),
-        localAmount: Number(manualEntryForm.localAmount),
-        // Left blank, the server values a wallet entry at the wallet's average rate.
-        baseAmount,
-        fxRate,
-        feeAmount: null,
-        feeCurrency: null,
-        fundingOut:
-          manualEntryForm.type === "funding_out"
-            ? buildFundingOutPayload(manualEntryForm, trip.baseCurrency)
-            : null,
-        metadata: {
-          source: "manual_trip_entry_modal",
-        },
-      });
+      if (isIou || manualEntryForm.type === "settlement") {
+        await createTripPeopleEntry(trip.id, {
+          // Someone else paid for an IOU, so it never comes out of a wallet.
+          walletId:
+            isIou || manualEntryForm.walletId === "__none__"
+              ? null
+              : manualEntryForm.walletId,
+          type: manualEntryForm.type,
+          paidByParticipantId: isIou ? manualEntryForm.paidByParticipantId : null,
+          counterpartyId:
+            manualEntryForm.type === "settlement"
+              ? manualEntryForm.counterpartyId
+              : null,
+          date: manualEntryForm.date,
+          description,
+          label: manualEntryForm.label.trim() || null,
+          categoryId: isIou ? manualEntryForm.categoryId || null : null,
+          localCurrency: manualEntryForm.localCurrency.trim().toUpperCase(),
+          localAmount: Number(manualEntryForm.localAmount),
+          baseAmount,
+          fxRate,
+          metadata: { source: "manual_trip_entry_modal" },
+        });
+      } else {
+        await createTripEntry(trip.id, {
+          walletId:
+            manualEntryForm.walletId === "__none__"
+              ? null
+              : manualEntryForm.walletId,
+          type: manualEntryForm.type,
+          date: manualEntryForm.date,
+          description,
+          label: manualEntryForm.label.trim() || null,
+          categoryId:
+            manualEntryForm.type === "spending"
+              ? manualEntryForm.categoryId || null
+              : null,
+          localCurrency: manualEntryForm.localCurrency.trim().toUpperCase(),
+          localAmount: Number(manualEntryForm.localAmount),
+          // Left blank, the server values a wallet entry at the wallet's average rate.
+          baseAmount,
+          fxRate,
+          feeAmount: null,
+          feeCurrency: null,
+          fundingOut:
+            manualEntryForm.type === "funding_out"
+              ? buildFundingOutPayload(manualEntryForm, trip.baseCurrency)
+              : null,
+          metadata: {
+            source: "manual_trip_entry_modal",
+          },
+        });
+      }
 
       await Promise.all([
         refreshEntries(1, filters),
@@ -2193,6 +2348,13 @@ export function TripTransactionsClient({
         ? entries.find((entry) => entry.id === editingEntryId) || null
         : null,
     [editingEntryId, entries],
+  );
+  const sharingEntry = useMemo(
+    () =>
+      sharingEntryId
+        ? entries.find((entry) => entry.id === sharingEntryId) || null
+        : null,
+    [sharingEntryId, entries],
   );
   const editingEntryFromBank = Boolean(
     toRecord(editingEntry?.metadata)?.sourceTransactionId,
@@ -2282,6 +2444,7 @@ export function TripTransactionsClient({
       await Promise.all([
         refreshEntries(page, filters),
         refreshFundingsAndWallets(),
+        refreshSharedOverview(),
       ]);
       closeEntryEditor();
       showModal("success", "Entry Updated", "Trip entry saved.");
@@ -2547,8 +2710,12 @@ export function TripTransactionsClient({
               ),
             }))}
           walletSummaries={walletSummaries}
-          onEditFunding={handleOpenEditFunding}
-          onDeleteFunding={(fundingId) => void handleDeleteFunding(fundingId)}
+          onEditFunding={isViewer ? undefined : handleOpenEditFunding}
+          onDeleteFunding={
+            isViewer
+              ? undefined
+              : (fundingId) => void handleDeleteFunding(fundingId)
+          }
           onManageWallets={() => router.push(`/trips/${trip.id}/manage/wallets`)}
           formatCurrencyValue={formatCurrencyValue}
         />
@@ -2564,30 +2731,48 @@ export function TripTransactionsClient({
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => setIsAddFromMainModalOpen(true)}
-                leftIcon={<Link2 className="h-4 w-4" />}
-              >
-                Add from bank
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => setIsManualEntryModalOpen(true)}
-                leftIcon={<Plus className="h-4 w-4" />}
-              >
-                Add entry
-              </Button>
-              <Button
-                variant="primary"
-                size="md"
-                onClick={() => router.push(`/trips/${trip.id}/import`)}
-                leftIcon={<FileUp className="h-4 w-4" />}
-              >
-                Import statement
-              </Button>
+              {sharing && (
+                <Button
+                  variant="secondary"
+                  onClick={() => router.push(`/trips/${trip.id}/shared`)}
+                  leftIcon={<Users className="h-4 w-4" />}
+                >
+                  Shared trip
+                </Button>
+              )}
+              {!isViewer && (
+                <>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setIsAddFromMainModalOpen(true)}
+                    leftIcon={<Link2 className="h-4 w-4" />}
+                  >
+                    Add from bank
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setIsManualEntryModalOpen(true)}
+                    leftIcon={<Plus className="h-4 w-4" />}
+                  >
+                    Add entry
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="md"
+                    onClick={() => router.push(`/trips/${trip.id}/import`)}
+                    leftIcon={<FileUp className="h-4 w-4" />}
+                  >
+                    Import statement
+                  </Button>
+                </>
+              )}
             </div>
           </div>
+          {isViewer && (
+            <p className="rounded-lg bg-gray-1 px-3 py-2 text-xs text-dark-5 dark:bg-dark-3 dark:text-dark-6">
+              You can only view this shared trip.
+            </p>
+          )}
 
           <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
             <Pagination
@@ -2707,116 +2892,120 @@ export function TripTransactionsClient({
                 onPageChange={handleChangePage}
                 compact
                 leftContent={
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      checked={
-                        allFilteredSelected && deselectedEntryIds.size === 0
-                      }
-                      indeterminate={
-                        allFilteredSelected && deselectedEntryIds.size > 0
-                      }
-                      onChange={(checked) => {
-                        if (checked) {
-                          setAllFilteredSelected(true);
-                          setDeselectedEntryIds(new Set());
-                          setSelectedEntryIds(new Set());
-                        } else {
-                          clearEntrySelection();
+                  isViewer ? undefined : (
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        checked={
+                          allFilteredSelected && deselectedEntryIds.size === 0
                         }
-                      }}
-                    />
-                    <span className="text-sm font-medium text-dark dark:text-white">
-                      Select all
-                    </span>
-                    <span className="text-xs text-dark-5 dark:text-dark-6">
-                      {selectedCount} selected
-                    </span>
-                  </div>
+                        indeterminate={
+                          allFilteredSelected && deselectedEntryIds.size > 0
+                        }
+                        onChange={(checked) => {
+                          if (checked) {
+                            setAllFilteredSelected(true);
+                            setDeselectedEntryIds(new Set());
+                            setSelectedEntryIds(new Set());
+                          } else {
+                            clearEntrySelection();
+                          }
+                        }}
+                      />
+                      <span className="text-sm font-medium text-dark dark:text-white">
+                        Select all
+                      </span>
+                      <span className="text-xs text-dark-5 dark:text-dark-6">
+                        {selectedCount} selected
+                      </span>
+                    </div>
+                  )
                 }
                 rightContent={
-                  <div className="relative" ref={bulkMenuRef}>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        onClick={() => void handleBulkDeleteEntries()}
-                        disabled={selectedCount === 0 || bulkLoading}
-                        title="Delete selected"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setShowBulkMenu((prev) => !prev)}
-                        className="border border-stroke dark:border-dark-3"
-                      >
-                        <MoreHorizontal className="w-4 h-4" />
-                      </Button>
-                    </div>
-
-                    {showBulkMenu && (
-                      <div className="absolute right-0 z-20 mt-2 w-72 rounded-lg border border-stroke dark:border-dark-3 bg-white dark:bg-dark-2 shadow-dropdown p-3">
-                        <div className="text-xs font-semibold text-dark-5 dark:text-dark-6 uppercase tracking-wide mb-2">
-                          Bulk Actions
-                        </div>
-
-                        <div className="space-y-3">
-                          <div className="space-y-2">
-                            <Select
-                              value={bulkCategoryId}
-                              onChange={(value) => setBulkCategoryId(value)}
-                              options={[
-                                { value: "", label: "Set Category" },
-                                ...localCategories.map((category) => ({
-                                  value: category.id,
-                                  label: category.name,
-                                })),
-                              ]}
-                              className="w-full"
-                              buttonClassName="w-full"
-                            />
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() =>
-                                void handleBulkCategoryUpdateEntries()
-                              }
-                              disabled={
-                                !bulkCategoryId ||
-                                selectedCount === 0 ||
-                                bulkLoading
-                              }
-                              className="w-full"
-                            >
-                              Apply Category
-                            </Button>
-                          </div>
-
-                          <div className="space-y-2">
-                            <div className="w-full h-11 rounded-lg border border-stroke dark:border-dark-3 bg-white dark:bg-dark-3">
-                              <DatePicker
-                                value={bulkDate}
-                                onChange={(value) => setBulkDate(value)}
-                                className="h-full"
-                              />
-                            </div>
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() => void handleBulkDateUpdateEntries()}
-                              disabled={
-                                !bulkDate || selectedCount === 0 || bulkLoading
-                              }
-                              className="w-full"
-                            >
-                              Apply Date
-                            </Button>
-                          </div>
-                        </div>
+                  isViewer ? undefined : (
+                    <div className="relative" ref={bulkMenuRef}>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={() => void handleBulkDeleteEntries()}
+                          disabled={selectedCount === 0 || bulkLoading}
+                          title="Delete selected"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setShowBulkMenu((prev) => !prev)}
+                          className="border border-stroke dark:border-dark-3"
+                        >
+                          <MoreHorizontal className="w-4 h-4" />
+                        </Button>
                       </div>
-                    )}
-                  </div>
+
+                      {showBulkMenu && (
+                        <div className="absolute right-0 z-20 mt-2 w-72 rounded-lg border border-stroke dark:border-dark-3 bg-white dark:bg-dark-2 shadow-dropdown p-3">
+                          <div className="text-xs font-semibold text-dark-5 dark:text-dark-6 uppercase tracking-wide mb-2">
+                            Bulk Actions
+                          </div>
+
+                          <div className="space-y-3">
+                            <div className="space-y-2">
+                              <Select
+                                value={bulkCategoryId}
+                                onChange={(value) => setBulkCategoryId(value)}
+                                options={[
+                                  { value: "", label: "Set Category" },
+                                  ...localCategories.map((category) => ({
+                                    value: category.id,
+                                    label: category.name,
+                                  })),
+                                ]}
+                                className="w-full"
+                                buttonClassName="w-full"
+                              />
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() =>
+                                  void handleBulkCategoryUpdateEntries()
+                                }
+                                disabled={
+                                  !bulkCategoryId ||
+                                  selectedCount === 0 ||
+                                  bulkLoading
+                                }
+                                className="w-full"
+                              >
+                                Apply Category
+                              </Button>
+                            </div>
+
+                            <div className="space-y-2">
+                              <div className="w-full h-11 rounded-lg border border-stroke dark:border-dark-3 bg-white dark:bg-dark-3">
+                                <DatePicker
+                                  value={bulkDate}
+                                  onChange={(value) => setBulkDate(value)}
+                                  className="h-full"
+                                />
+                              </div>
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => void handleBulkDateUpdateEntries()}
+                                disabled={
+                                  !bulkDate || selectedCount === 0 || bulkLoading
+                                }
+                                className="w-full"
+                              >
+                                Apply Date
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
                 }
               />
 
@@ -2843,8 +3032,8 @@ export function TripTransactionsClient({
                       )
                     : selectedEntryIds
                 }
-                onToggleSelect={toggleEntrySelection}
-                onEdit={handleOpenEntryEditor}
+                onToggleSelect={isViewer ? undefined : toggleEntrySelection}
+                onEdit={isViewer ? undefined : handleOpenEntryEditor}
               />
             </>
           )}
@@ -2968,6 +3157,10 @@ export function TripTransactionsClient({
         onSourceCandidatesPageChange={handleSourceCandidatesPageChange}
         sourceEntryType={sourceEntryType}
         onSourceEntryTypeChange={setSourceEntryType}
+        sourceCounterpartyId={sourceCounterpartyId}
+        onSourceCounterpartyIdChange={setSourceCounterpartyId}
+        participants={participants}
+        onAddPerson={handleAddPerson}
         sourceCategoryId={sourceCategoryId}
         onSourceCategoryIdChange={setSourceCategoryId}
         sourceFundingOut={sourceFundingOut}
@@ -2998,6 +3191,8 @@ export function TripTransactionsClient({
         setForm={setManualEntryForm}
         resetForm={resetManualEntryForm}
         availableTrips={allTrips.filter((item) => item.id !== trip.id)}
+        participants={participants}
+        onAddPerson={handleAddPerson}
       />
 
       <TripManualEntryModal
@@ -3024,7 +3219,62 @@ export function TripTransactionsClient({
               }
             : undefined
         }
+        participants={participants}
+        onChooseSettlementIous={
+          editingEntry && asPeopleEntry(editingEntry).type === "settlement"
+            ? () => {
+                setSettlingEntryId(editingEntry.id);
+                closeEntryEditor();
+              }
+            : undefined
+        }
+        onShareCost={
+          sharing &&
+          editingEntry &&
+          editingEntry.type === "spending" &&
+          !asPeopleEntry(editingEntry).isIou
+            ? () => {
+                setSharingEntryId(editingEntry.id);
+                closeEntryEditor();
+              }
+            : undefined
+        }
       />
+
+      <TripSettleModal
+        isOpen={!!settlingEntryId}
+        onClose={() => setSettlingEntryId(null)}
+        tripId={trip.id}
+        baseCurrency={trip.baseCurrency}
+        settlementEntryId={settlingEntryId}
+        onSaved={() => {
+          void refreshEntries(page, filters);
+          showModal("success", "Settlement Updated", "Saved what this settlement pays off.");
+        }}
+      />
+
+      {sharingEntry && (
+        <TripShareCostModal
+          key={sharingEntry.id}
+          isOpen={true}
+          onClose={() => setSharingEntryId(null)}
+          tripId={trip.id}
+          entry={{
+            id: sharingEntry.id,
+            title: sharingEntry.label?.trim() || sharingEntry.description,
+            localAmount: sharingEntry.localAmount,
+            localCurrency: sharingEntry.localCurrency,
+            baseAmount: sharingEntry.baseAmount,
+          }}
+          members={sharedOverview?.members || []}
+          existingShares={sharesByEntryId.get(sharingEntry.id) || []}
+          onSaved={(overview) => {
+            setSharedOverview(overview);
+            void refreshEntries(page, filters);
+            showModal("success", "Cost Shared", "Shares saved. They show up as IOUs for the others.");
+          }}
+        />
+      )}
 
       <Modal
         isOpen={fundingInNoticeOpen}

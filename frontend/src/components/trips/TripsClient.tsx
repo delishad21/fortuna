@@ -11,6 +11,9 @@ import { TextInput } from "@/components/ui/TextInput";
 import { type Trip } from "@/app/actions/trips";
 import { getCurrencyOptions } from "@/lib/currencies";
 import { createTrip } from "@/lib/tripMutations";
+import type { CarryOverSource } from "@/app/actions/tripWallets";
+import { getCarryOverSources } from "@/lib/tripWalletMutations";
+import { TripCarryOverPrompt } from "@/components/trips/TripCarryOverPrompt";
 
 interface TripsClientProps {
   trips: Trip[];
@@ -83,6 +86,10 @@ export function TripsClient({ trips, baseCurrency }: TripsClientProps) {
   const [form, setForm] = useState(() => emptyForm(baseCurrency));
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [carryOver, setCarryOver] = useState<{
+    trip: Trip;
+    sources: CarryOverSource[];
+  } | null>(null);
   const currencyOptions = useMemo(() => getCurrencyOptions(), []);
   const endBeforeStart = Boolean(
     form.startDate && form.endDate && form.endDate < form.startDate,
@@ -112,6 +119,11 @@ export function TripsClient({ trips, baseCurrency }: TripsClientProps) {
       setItems((prev) => [trip, ...prev]);
       setShowCreate(false);
       setForm(emptyForm(baseCurrency));
+      if (items.length > 0) {
+        // Offering carry-over is a nice-to-have, so a failed lookup stays quiet.
+        const sources = await getCarryOverSources(trip.id).catch(() => []);
+        if (sources.length > 0) setCarryOver({ trip, sources });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create trip.");
     } finally {
@@ -321,6 +333,12 @@ export function TripsClient({ trips, baseCurrency }: TripsClientProps) {
           </div>
         </div>
       )}
+
+      <TripCarryOverPrompt
+        trip={carryOver?.trip ?? null}
+        sources={carryOver?.sources ?? []}
+        onClose={() => setCarryOver(null)}
+      />
 
       <Modal
         isOpen={Boolean(error)}

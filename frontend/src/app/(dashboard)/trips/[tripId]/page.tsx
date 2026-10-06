@@ -3,6 +3,7 @@ import {
   getTripAnalytics,
   getTripWalletSummaries,
 } from "@/app/actions/trips";
+import { getTripBalances } from "@/app/actions/tripSharing";
 import { TripOverviewClient } from "@/components/trips/TripOverviewClient";
 
 interface TripFundingPageProps {
@@ -11,10 +12,11 @@ interface TripFundingPageProps {
 
 export default async function TripFundingPage({ params }: TripFundingPageProps) {
   const { tripId } = await params;
-  const [trip, analytics, walletSummaries] = await Promise.all([
+  const [trip, analytics, walletSummaries, balances] = await Promise.all([
     getTrip(tripId),
     getTripAnalytics(tripId),
     getTripWalletSummaries(tripId),
+    getTripBalances(tripId),
   ]);
 
   return (
@@ -22,6 +24,7 @@ export default async function TripFundingPage({ params }: TripFundingPageProps) 
       trip={trip}
       initialAnalytics={analytics}
       initialWallets={walletSummaries}
+      initialBalances={balances.ok ? balances.data : null}
     />
   );
 }

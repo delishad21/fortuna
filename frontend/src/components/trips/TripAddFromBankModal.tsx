@@ -6,6 +6,7 @@ import type {
   Trip,
   Wallet,
 } from "@/app/actions/trips";
+import type { TripParticipant } from "@/app/actions/tripSharing";
 import { Button } from "@/components/ui/Button";
 import { CategorySelect } from "@/components/ui/CategorySelect";
 import { Checkbox } from "@/components/ui/Checkbox";
@@ -16,6 +17,13 @@ import {
   TripFundingOutDestinationFields,
   type FundingOutDestinationType,
 } from "@/components/trips/TripFundingOutDestinationFields";
+import { TripPeoplePicker } from "@/components/trips/TripPeoplePicker";
+
+export type TripBankEntryType =
+  | "spending"
+  | "reimbursement"
+  | "funding_out"
+  | "settlement";
 
 interface TripAddFromBankModalProps {
   isOpen: boolean;
@@ -31,10 +39,13 @@ interface TripAddFromBankModalProps {
   sourceCandidatesPage: number;
   sourceCandidatesPageSize: number;
   onSourceCandidatesPageChange: (nextPage: number) => void;
-  sourceEntryType: "spending" | "reimbursement" | "funding_out";
-  onSourceEntryTypeChange: (
-    value: "spending" | "reimbursement" | "funding_out",
-  ) => void;
+  sourceEntryType: TripBankEntryType;
+  onSourceEntryTypeChange: (value: TripBankEntryType) => void;
+  /** For settlements: the person the bank payment paid back. */
+  sourceCounterpartyId?: string;
+  onSourceCounterpartyIdChange?: (participantId: string) => void;
+  participants?: TripParticipant[];
+  onAddPerson?: (name: string) => Promise<TripParticipant>;
   sourceCategoryId: string;
   onSourceCategoryIdChange: (value: string) => void;
   sourceFundingOut: {
@@ -82,6 +93,10 @@ export function TripAddFromBankModal({
   onSourceEntryTypeChange,
   sourceCategoryId,
   onSourceCategoryIdChange,
+  sourceCounterpartyId = "",
+  onSourceCounterpartyIdChange,
+  participants = [],
+  onAddPerson,
   sourceFundingOut,
   setSourceFundingOut,
   sourceFundingOutInputMode,
@@ -100,7 +115,9 @@ export function TripAddFromBankModal({
   const displayedSourceCandidates = sourceCandidates.filter((candidate) => {
     const amountIn = Number(candidate.amountIn || 0);
     const amountOut = Number(candidate.amountOut || 0);
-    if (sourceEntryType === "spending") return amountOut > 0;
+    if (sourceEntryType === "spending" || sourceEntryType === "settlement") {
+      return amountOut > 0;
+    }
     return amountIn > 0;
   });
 
@@ -149,7 +166,7 @@ export function TripAddFromBankModal({
               pageSize={sourceCandidatesPageSize}
               onPageChange={onSourceCandidatesPageChange}
               emptyMessage={
-                sourceEntryType === "spending"
+                sourceEntryType === "spending" || sourceEntryType === "settlement"
                   ? "No debit (amount out) bank transactions available."
                   : "No credit (amount in) bank transactions available."
               }
@@ -164,9 +181,7 @@ export function TripAddFromBankModal({
               <Select
                 value={sourceEntryType}
                 onChange={(value) =>
-                  onSourceEntryTypeChange(
-                    value as "spending" | "reimbursement" | "funding_out",
-                  )
+                  onSourceEntryTypeChange(value as TripBankEntryType)
                 }
                 className="w-full"
                 buttonClassName="w-full"
@@ -175,9 +190,30 @@ export function TripAddFromBankModal({
                   { value: "spending", label: "Spending" },
                   { value: "reimbursement", label: "Reimbursement" },
                   { value: "funding_out", label: "Funding Out" },
+                  ...(onSourceCounterpartyIdChange
+                    ? [{ value: "settlement", label: "Settlement" }]
+                    : []),
                 ]}
               />
             </div>
+            {sourceEntryType === "settlement" && onSourceCounterpartyIdChange ? (
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
+                  Paid to
+                </label>
+                <TripPeoplePicker
+                  value={sourceCounterpartyId}
+                  onChange={onSourceCounterpartyIdChange}
+                  participants={participants}
+                  onAddPerson={onAddPerson}
+                  menuPlacement="up"
+                />
+                <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
+                  A payment paying someone back, like a PayNow to a friend. It
+                  isn&apos;t counted as spending again.
+                </p>
+              </div>
+            ) : (
             <div className={sourceEntryType === "spending" ? "" : "opacity-60"}>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
                 Trip category
@@ -196,6 +232,7 @@ export function TripAddFromBankModal({
                 />
               </div>
             </div>
+            )}
           </div>
 
           {sourceEntryType === "funding_out" && (

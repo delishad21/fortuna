@@ -9,6 +9,7 @@ import {
   Plane,
   ReceiptText,
   TrendingDown,
+  Users,
   Wallet,
   WalletCards,
 } from "lucide-react";
@@ -30,6 +31,9 @@ import {
   type TripAnalytics,
   type WalletSummary,
 } from "@/app/actions/trips";
+import type { TripBalances } from "@/app/actions/tripSharing";
+import { tripSharingOf } from "@/lib/tripSharingMutations";
+import { TripPeoplePanel } from "@/components/trips/TripPeoplePanel";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { useHeaderConfig } from "@/components/Layouts/header-context";
@@ -38,6 +42,8 @@ interface TripOverviewClientProps {
   trip: Trip;
   initialAnalytics: TripAnalytics;
   initialWallets: WalletSummary[];
+  /** What you owe the people on this trip. */
+  initialBalances?: TripBalances | null;
 }
 
 const formatCurrency = (amount: number, currency: string) =>
@@ -67,8 +73,10 @@ export function TripOverviewClient({
   trip,
   initialAnalytics,
   initialWallets = [],
+  initialBalances = null,
 }: TripOverviewClientProps) {
   const { setHeaderConfig } = useHeaderConfig();
+  const sharing = tripSharingOf(trip);
 
   useEffect(() => {
     setHeaderConfig({
@@ -218,6 +226,18 @@ export function TripOverviewClient({
               Transactions
             </Button>
           </Link>
+          {sharing && (
+            <Link href={`/trips/${trip.id}/shared`} className="block">
+              <Button
+                variant="secondary"
+                className="w-full"
+                leftIcon={<Users className="h-4 w-4" />}
+              >
+                Shared trip · {sharing.memberCount}{" "}
+                {sharing.memberCount === 1 ? "member" : "members"}
+              </Button>
+            </Link>
+          )}
         </div>
 
         <Card className="flex h-full min-h-[220px] flex-col rounded-xl border border-stroke dark:border-dark-3">
@@ -278,6 +298,15 @@ export function TripOverviewClient({
           </CardContent>
         </Card>
       </section>
+
+      {initialBalances && (
+        <TripPeoplePanel
+          tripId={trip.id}
+          baseCurrency={trip.baseCurrency}
+          initialBalances={initialBalances}
+          readOnly={sharing?.role === "viewer"}
+        />
+      )}
 
       <section className="grid items-stretch gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.95fr)]">
         <div className="grid min-h-[680px] grid-rows-3 gap-4">

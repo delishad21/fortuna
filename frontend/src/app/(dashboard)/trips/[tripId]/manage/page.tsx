@@ -8,6 +8,7 @@ import {
   getTripWalletSummaries,
 } from "@/app/actions/trips";
 import { getCategories } from "@/app/actions/categories";
+import { getTripParticipants } from "@/app/actions/tripSharing";
 import { TripTransactionsClient } from "@/components/trips/TripTransactionsClient";
 
 interface TripManagePageProps {
@@ -26,6 +27,7 @@ export default async function TripManagePage({ params }: TripManagePageProps) {
     categories,
     fundingCandidates,
     allTrips,
+    participants,
   ] = await Promise.all([
     getTrip(tripId),
     getTripFundings(tripId),
@@ -40,6 +42,7 @@ export default async function TripManagePage({ params }: TripManagePageProps) {
     getCategories({ scope: "trips" }),
     getFundingCandidates(tripId, { limit: 20, offset: 0 }),
     getTrips(),
+    getTripParticipants(tripId),
   ]);
 
   return (
@@ -54,6 +57,7 @@ export default async function TripManagePage({ params }: TripManagePageProps) {
       initialEntriesTotal={entries.total}
       initialFundingCandidates={fundingCandidates}
       allTrips={allTrips}
+      initialParticipants={participants.ok ? participants.data : undefined}
     />
   );
 }

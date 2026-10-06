@@ -7384,6 +7384,7 @@ export class TripRepository {
         fundingBankTransactionDescription: string | null;
         counterpartyId: string | null;
         counterpartyName: string | null;
+        iouSettledLocal: unknown;
         metadata: unknown;
       }>
     >`
@@ -7415,6 +7416,10 @@ export class TripRepository {
         bt.description AS "fundingBankTransactionDescription",
         te.counterparty_id AS "counterpartyId",
         tp.name AS "counterpartyName",
+        (
+          SELECT COALESCE(SUM(sa.iou_local_amount), 0)
+          FROM trip_settlement_allocations sa WHERE sa.iou_entry_id = te.id
+        ) AS "iouSettledLocal",
         te.metadata
       FROM trip_entries te
       LEFT JOIN wallets w ON w.id = te.wallet_id
@@ -7481,6 +7486,8 @@ export class TripRepository {
       feeCurrency: item.feeCurrency,
       counterparty: item.counterpartyId ? { id: item.counterpartyId, name: item.counterpartyName } : null,
       isIou: item.sourceType === "iou",
+      // How much of an IOU's local amount settlements have paid off.
+      iouSettledLocal: item.sourceType === "iou" ? Number(item.iouSettledLocal || 0) : null,
       metadata: {
         ...(item.metadata && typeof item.metadata === "object"
           ? (item.metadata as Record<string, unknown>)

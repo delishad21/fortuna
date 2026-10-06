@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { format } from "date-fns";
 import {
   getTripEntries,
@@ -21,6 +22,8 @@ import {
   recalculateWalletEntriesToBase,
   updateTripFunding,
 } from "@/lib/tripMutations";
+import type { TripWallet, WalletAccount } from "@/app/actions/tripWallets";
+import { getTripWallets, getWalletAccounts } from "@/lib/tripWalletMutations";
 import { useHeaderConfig } from "@/components/Layouts/header-context";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent } from "@/components/ui/Card";
@@ -33,8 +36,11 @@ import { TextInput } from "@/components/ui/TextInput";
 import { TripEditFundingModal } from "@/components/trips/TripEditFundingModal";
 import { getCurrencyOptions } from "@/lib/currencies";
 import { normalizeFundingEditInput } from "@/lib/fundingMath";
-import { Wallet as WalletIcon } from "lucide-react";
+import { ArrowRightLeft, Landmark, Wallet as WalletIcon } from "lucide-react";
 import { TripPropagationTraceCard } from "@/components/trips/TripPropagationTraceCard";
+import { TripWalletSettingsCard } from "@/components/trips/TripWalletSettingsCard";
+import { TripWalletAccountsModal } from "@/components/trips/TripWalletAccountsModal";
+import { TripCarryOverModal } from "@/components/trips/TripCarryOverModal";
 
 interface TripWalletsManagementClientProps {
   trip: Trip;
@@ -78,6 +84,16 @@ const getDetachedBankNote = (funding: TripFunding) => {
   return "Bank transaction removed — relink or delete";
 };
 
+// The page passes the plain wallet list; account fields come along at runtime.
+const withAccount = (wallet: Wallet): TripWallet => {
+  const extra = wallet as Partial<TripWallet>;
+  return {
+    ...wallet,
+    accountId: extra.accountId ?? null,
+    accountName: extra.accountName ?? null,
+  };
+};
+
 export function TripWalletsManagementClient({
   trip,
   wallets: initialWallets,
@@ -86,8 +102,19 @@ export function TripWalletsManagementClient({
   initialSourceCandidates,
 }: TripWalletsManagementClientProps) {
   const { setHeaderConfig } = useHeaderConfig();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const carryFromParam = searchParams.get("carryFrom");
 
-  const [wallets] = useState(initialWallets);
+  const [wallets, setWallets] = useState<TripWallet[]>(() =>
+    initialWallets.map(withAccount),
+  );
+  const [accounts, setAccounts] = useState<WalletAccount[]>([]);
+  const [isAccountsOpen, setIsAccountsOpen] = useState(false);
+  const [isCarryOverOpen, setIsCarryOverOpen] = useState(Boolean(carryFromParam));
+  const [selectedWalletEntryCount, setSelectedWalletEntryCount] = useState<
+    number | null
+  >(null);
   const [walletSummaries, setWalletSummaries] = useState(initialWalletSummaries);
   const [fundings, setFundings] = useState(initialFundings);
   const [walletOutflows, setWalletOutflows] = useState<TripEntry[]>([]);
@@ -247,6 +274,7 @@ export function TripWalletsManagementClient({
     ]);
     setWalletSummaries(nextSummaries);
     setFundings(nextFundings);
+    setSelectedWalletEntryCount(walletId ? nextWalletEntries.total || 0 : null);
     setWalletOutflows(
       (nextWalletEntries.items || []).filter(
         (entry) => entry.type === "funding_out",
@@ -255,6 +283,7 @@ export function TripWalletsManagementClient({
   };
 
   useEffect(() => {
+    setSelectedWalletEntryCount(null);
     if (!selectedWalletId) {
       setWalletOutflows([]);
       return;
@@ -262,6 +291,54 @@ export function TripWalletsManagementClient({
     void refreshWalletData(selectedWalletId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedWalletId, trip.id]);
+
+  useEffect(() => {
+    getWalletAccounts()
+      .then(setAccounts)
+      .catch(() => setAccounts([]));
+  }, []);
+
+  /** Reloads wallets after a rename, merge, delete or carry-over. */
+  const reloadWallets = async (selectWalletId?: string) => {
+    const nextWallets = await getTripWallets(trip.id);
+    setWallets(nextWallets);
+    const nextSelected =
+      selectWalletId !== undefined &&
+      nextWallets.some((wallet) => wallet.id === selectWalletId)
+        ? selectWalletId
+        : nextWallets.some((wallet) => wallet.id === selectedWalletId)
+          ? selectedWalletId
+          : nextWallets[0]?.id || "";
+    if (nextSelected === selectedWalletId) {
+      await refreshWalletData(nextSelected);
+    } else {
+      setSelectedWalletId(nextSelected);
+    }
+  };
+
+  const handleAccountsChanged = async (nextAccounts: WalletAccount[]) => {
+    setAccounts(nextAccounts);
+    // Renaming an account can rename this trip's wallets.
+    await reloadWallets().catch(() => undefined);
+  };
+
+  const closeCarryOver = () => {
+    setIsCarryOverOpen(false);
+    if (carryFromParam) {
+      router.replace(`/trips/${trip.id}/manage/wallets`, { scroll: false });
+    }
+  };
+
+  const handleCarryOverDone = async (createdCount: number) => {
+    closeCarryOver();
+    await reloadWallets().catch(() => undefined);
+    router.refresh();
+    showModal(
+      "success",
+      "Money Carried Over",
+      `Carried over ${createdCount} ${createdCount === 1 ? "wallet" : "wallets"}.`,
+    );
+  };
 
   const searchSourceCandidates = async (page = sourceCandidatesPage) => {
     setIsLoadingSourceCandidates(true);
@@ -562,9 +639,28 @@ export function TripWalletsManagementClient({
   return (
     <div className="grid h-full min-h-0 gap-6 lg:grid-cols-[20rem_minmax(0,1fr)]">
       <section className="min-h-0 p-1">
-        <h3 className="px-1 pb-2 text-sm font-semibold text-dark dark:text-white">
-          Wallets
-        </h3>
+        <div className="flex items-center justify-between gap-2 px-1 pb-2">
+          <h3 className="text-sm font-semibold text-dark dark:text-white">Wallets</h3>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              leftIcon={<ArrowRightLeft className="h-3.5 w-3.5" />}
+              onClick={() => setIsCarryOverOpen(true)}
+              title="Carry over from a previous trip"
+            >
+              Carry over
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              leftIcon={<Landmark className="h-3.5 w-3.5" />}
+              onClick={() => setIsAccountsOpen(true)}
+            >
+              Accounts
+            </Button>
+          </div>
+        </div>
         <div className="space-y-2 overflow-y-auto max-h-[calc(100vh-14rem)] pr-1">
           {wallets.map((wallet) => {
             const isSelected = wallet.id === selectedWalletId;
@@ -593,6 +689,9 @@ export function TripWalletsManagementClient({
                   <span className="shrink-0 rounded-full border border-stroke px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-dark-5 dark:border-dark-3 dark:text-dark-6">
                     {wallet.currency}
                   </span>
+                </div>
+                <div className="mt-0.5 truncate text-[11px] text-dark-5 dark:text-dark-6">
+                  {wallet.accountName ? `${wallet.accountName} account` : "No account"}
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
                   {summary?.balances.length ? (
@@ -638,7 +737,9 @@ export function TripWalletsManagementClient({
         {!selectedWallet && (
           <Card>
             <CardContent className="p-6 text-sm text-dark-5 dark:text-dark-6">
-              Select a wallet to manage funding and FX recalculation.
+              {wallets.length
+                ? "Select a wallet to manage funding and FX recalculation."
+                : "No wallets yet. Carry over money from a previous trip, or add a wallet from Transactions."}
             </CardContent>
           </Card>
         )}
@@ -654,6 +755,9 @@ export function TripWalletsManagementClient({
                     </h3>
                     <p className="text-xs text-dark-5 dark:text-dark-6">
                       Base currency: {trip.baseCurrency}
+                      {selectedWallet.accountName
+                        ? ` • ${selectedWallet.accountName} account`
+                        : ""}
                     </p>
                   </div>
                   <Button
@@ -734,6 +838,25 @@ export function TripWalletsManagementClient({
                 </div>
               </CardContent>
             </Card>
+
+            <TripWalletSettingsCard
+              tripId={trip.id}
+              wallet={selectedWallet}
+              wallets={wallets}
+              accounts={accounts}
+              usage={
+                selectedWalletEntryCount === null
+                  ? null
+                  : {
+                      entries: selectedWalletEntryCount,
+                      fundings: walletFundings.length,
+                    }
+              }
+              onAccountsChanged={setAccounts}
+              onChanged={reloadWallets}
+              onError={(title, message) => showModal("error", title, message)}
+              onSuccess={(title, message) => showModal("success", title, message)}
+            />
 
             <Card className="min-h-0">
               <CardContent className="p-4">
@@ -1020,6 +1143,22 @@ export function TripWalletsManagementClient({
           </div>
         </div>
       )}
+
+      <TripWalletAccountsModal
+        isOpen={isAccountsOpen}
+        onClose={() => setIsAccountsOpen(false)}
+        accounts={accounts}
+        onChanged={handleAccountsChanged}
+      />
+
+      <TripCarryOverModal
+        isOpen={isCarryOverOpen}
+        onClose={closeCarryOver}
+        trip={trip}
+        wallets={wallets}
+        initialSourceTripId={carryFromParam}
+        onDone={handleCarryOverDone}
+      />
 
       <TripEditFundingModal
         isOpen={isEditFundingModalOpen}

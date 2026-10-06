@@ -2,6 +2,7 @@
 
 import type { Category } from "@/app/actions/categories";
 import type { Trip, Wallet } from "@/app/actions/trips";
+import type { TripParticipant } from "@/app/actions/tripSharing";
 import { Button } from "@/components/ui/Button";
 import { CategorySelect } from "@/components/ui/CategorySelect";
 import { Checkbox } from "@/components/ui/Checkbox";
@@ -9,14 +10,25 @@ import { DatePicker } from "@/components/ui/DatePicker";
 import { NumberInput } from "@/components/ui/NumberInput";
 import { Select } from "@/components/ui/Select";
 import { TextInput } from "@/components/ui/TextInput";
+import { TripPeoplePicker } from "@/components/trips/TripPeoplePicker";
 import {
   TripFundingOutDestinationFields,
   type FundingOutDestinationType,
 } from "@/components/trips/TripFundingOutDestinationFields";
 
+export type TripEntryFormType =
+  | "spending"
+  | "reimbursement"
+  | "funding_out"
+  | "settlement";
+
 export interface TripEntryForm {
   walletId: string;
-  type: "spending" | "reimbursement" | "funding_out";
+  type: TripEntryFormType;
+  /** For spending: the person who paid (an IOU). "" means you paid. */
+  paidByParticipantId: string;
+  /** For settlements: the person this pays back. */
+  counterpartyId: string;
   date: string;
   description: string;
   label: string;
@@ -55,6 +67,13 @@ interface TripManualEntryModalProps {
   /** The entry comes from a bank transaction, so its amount and currency are fixed. */
   lockAmounts?: boolean;
   onEditReimbursementLinks?: () => void;
+  /** People on the trip, for "Paid by" and settlements. */
+  participants?: TripParticipant[];
+  onAddPerson?: (name: string) => Promise<TripParticipant>;
+  /** Edit mode, on your own spending in a shared trip. */
+  onShareCost?: () => void;
+  /** Edit mode, on a settlement: choose which IOUs it pays off. */
+  onChooseSettlementIous?: () => void;
 }
 
 export function TripManualEntryModal({
@@ -74,14 +93,23 @@ export function TripManualEntryModal({
   mode = "create",
   lockAmounts = false,
   onEditReimbursementLinks,
+  participants = [],
+  onAddPerson,
+  onShareCost,
+  onChooseSettlementIous,
 }: TripManualEntryModalProps) {
   if (!isOpen) return null;
 
   const isEdit = mode === "edit";
+  const isIou = form.type === "spending" && !!form.paidByParticipantId;
+  const payer = participants.find(
+    (person) => person.id === form.paidByParticipantId,
+  );
+  const payee = participants.find((person) => person.id === form.counterpartyId);
   const localCurrencyLabel =
     form.type === "reimbursement"
       ? "Received currency"
-      : form.type === "funding_out"
+      : form.type === "funding_out" || form.type === "settlement"
         ? "Outgoing currency"
         : "Spent currency";
   const localAmountLabel =
@@ -89,7 +117,9 @@ export function TripManualEntryModal({
       ? "Received amount"
       : form.type === "funding_out"
         ? "Outgoing amount"
-        : "Spent amount";
+        : form.type === "settlement"
+          ? "Paid amount"
+          : "Spent amount";
   const selectedWallet = wallets.find((wallet) => wallet.id === form.walletId);
   const localCurrency = form.localCurrency.toUpperCase();
   const isBaseCurrency = localCurrency === baseCurrency.toUpperCase();
@@ -97,7 +127,9 @@ export function TripManualEntryModal({
     ? "Amounts come from the bank transaction. Change them there."
     : isBaseCurrency
       ? `Already in ${baseCurrency}.`
-      : selectedWallet && selectedWallet.currency.toUpperCase() === localCurrency
+      : isIou
+        ? `Leave blank to estimate with the average rate of a ${localCurrency} wallet. The real cost is set when you pay them back.`
+        : selectedWallet && selectedWallet.currency.toUpperCase() === localCurrency
         ? "Leave blank to use this wallet's average rate."
         : `Leave blank to use the average rate of a ${localCurrency} wallet, or enter the ${baseCurrency} amount or a rate.`;
 
@@ -132,8 +164,12 @@ export function TripManualEntryModal({
                 onChange={(value) =>
                   setForm((prev) => ({
                     ...prev,
-                    type: value as "spending" | "reimbursement" | "funding_out",
-                    categoryId: value === "reimbursement" ? "" : prev.categoryId,
+                    type: value as TripEntryFormType,
+                    categoryId: value === "spending" ? prev.categoryId : "",
+                    paidByParticipantId:
+                      value === "spending" ? prev.paidByParticipantId : "",
+                    counterpartyId:
+                      value === "settlement" ? prev.counterpartyId : "",
                   }))
                 }
                 disabled={isEdit}
@@ -144,6 +180,7 @@ export function TripManualEntryModal({
                   { value: "spending", label: "Spending" },
                   { value: "reimbursement", label: "Reimbursement" },
                   { value: "funding_out", label: "Funding Out" },
+                  { value: "settlement", label: "Settle up" },
                 ]}
               />
             </div>
@@ -159,7 +196,7 @@ export function TripManualEntryModal({
                     walletId: value,
                   }))
                 }
-                disabled={lockAmounts}
+                disabled={lockAmounts || isIou}
                 className="w-full"
                 buttonClassName="w-full"
                 menuPlacement="down"
@@ -173,6 +210,59 @@ export function TripManualEntryModal({
               />
             </div>
           </div>
+
+          {form.type === "spending" && (
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
+                  Paid by
+                </label>
+                <TripPeoplePicker
+                  value={form.paidByParticipantId}
+                  onChange={(participantId) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      paidByParticipantId: participantId,
+                      walletId: participantId ? "__none__" : prev.walletId,
+                    }))
+                  }
+                  participants={participants}
+                  onAddPerson={isEdit ? undefined : onAddPerson}
+                  meLabel="Me"
+                  disabled={isEdit}
+                />
+              </div>
+              {isIou && (
+                <p className="self-end pb-2 text-xs text-dark-5 dark:text-dark-6">
+                  You owe {payer?.name || "them"}; it counts as spending now.
+                </p>
+              )}
+            </div>
+          )}
+
+          {form.type === "settlement" && (
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
+                  Paid to
+                </label>
+                <TripPeoplePicker
+                  value={form.counterpartyId}
+                  onChange={(participantId) =>
+                    setForm((prev) => ({ ...prev, counterpartyId: participantId }))
+                  }
+                  participants={participants}
+                  onAddPerson={isEdit ? undefined : onAddPerson}
+                  disabled={isEdit}
+                />
+              </div>
+              <p className="self-end pb-2 text-xs text-dark-5 dark:text-dark-6">
+                {payee
+                  ? `Pays back what you owe ${payee.name}. It isn't counted as spending again.`
+                  : "Paying someone back isn't counted as spending again."}
+              </p>
+            </div>
+          )}
 
           <div className="grid gap-3 md:grid-cols-2">
             <div>
@@ -245,6 +335,32 @@ export function TripManualEntryModal({
                   }}
                 />
               </div>
+            </div>
+          )}
+
+          {isEdit && form.type === "settlement" && onChooseSettlementIous && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-stroke dark:border-dark-3 p-3">
+              <p className="text-sm text-dark-5 dark:text-dark-6">
+                By default this clears everything you owe {payee?.name || "them"}.
+              </p>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={onChooseSettlementIous}
+              >
+                Choose what it pays off
+              </Button>
+            </div>
+          )}
+
+          {isEdit && onShareCost && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-stroke dark:border-dark-3 p-3">
+              <p className="text-sm text-dark-5 dark:text-dark-6">
+                Split this cost with others on the trip.
+              </p>
+              <Button variant="secondary" size="sm" onClick={onShareCost}>
+                Share cost...
+              </Button>
             </div>
           )}
 

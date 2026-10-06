@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Trash2 } from "lucide-react";
 import { type Trip } from "@/app/actions/trips";
 import { deleteTrip, updateTrip } from "@/lib/tripMutations";
+import { tripSharingOf } from "@/lib/tripSharingMutations";
 import { useHeaderConfig } from "@/components/Layouts/header-context";
 import { Button } from "@/components/ui/Button";
 import { DatePicker } from "@/components/ui/DatePicker";
@@ -26,6 +27,9 @@ interface TripDetailsClientProps {
 }
 
 export function TripDetailsClient({ trip, hasActivity }: TripDetailsClientProps) {
+  // In a shared trip the owner manages the name, dates, status, cover and currency.
+  const sharing = tripSharingOf(trip);
+  const sharedLocked = !!sharing && sharing.role !== "owner";
   const router = useRouter();
   const { setHeaderConfig } = useHeaderConfig();
   const [isSaving, setIsSaving] = useState(false);
@@ -87,6 +91,12 @@ export function TripDetailsClient({ trip, hasActivity }: TripDetailsClientProps)
 
     setIsSaving(true);
     try {
+      if (sharedLocked) {
+        await updateTrip(trip.id, { notes: form.notes.trim() || null });
+        showModal("success", "Saved", "Notes updated.");
+        router.refresh();
+        return;
+      }
       await updateTrip(trip.id, {
         name: form.name.trim(),
         ...(form.baseCurrency !== trip.baseCurrency
@@ -130,6 +140,11 @@ export function TripDetailsClient({ trip, hasActivity }: TripDetailsClientProps)
 
   return (
     <div className="max-w-3xl space-y-4">
+      {sharedLocked && (
+        <p className="rounded-lg border border-stroke bg-gray-1 px-4 py-3 text-sm text-dark-5 dark:border-dark-3 dark:bg-dark-3 dark:text-dark-6">
+          The trip owner manages its name, dates, status and cover. Your notes are your own.
+        </p>
+      )}
       <div className="rounded-lg border border-stroke bg-white p-5 dark:border-dark-3 dark:bg-dark-2">
         <div className="grid gap-4 md:grid-cols-2">
           <div>
@@ -137,6 +152,7 @@ export function TripDetailsClient({ trip, hasActivity }: TripDetailsClientProps)
               Trip name
             </label>
             <TextInput
+              disabled={sharedLocked}
               value={form.name}
               onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
               placeholder="Trip name"
@@ -150,7 +166,7 @@ export function TripDetailsClient({ trip, hasActivity }: TripDetailsClientProps)
               value={form.baseCurrency}
               onChange={(value) => setForm((prev) => ({ ...prev, baseCurrency: value }))}
               options={currencyOptions}
-              disabled={hasActivity}
+              disabled={hasActivity || sharedLocked}
               className="w-full"
               buttonClassName="w-full"
             />
@@ -170,6 +186,7 @@ export function TripDetailsClient({ trip, hasActivity }: TripDetailsClientProps)
                 onChange={(value: string) =>
                   setForm((prev) => ({ ...prev, startDate: value }))
                 }
+                disabled={sharedLocked}
                 className="h-full"
               />
             </div>
@@ -184,6 +201,7 @@ export function TripDetailsClient({ trip, hasActivity }: TripDetailsClientProps)
                 onChange={(value: string) =>
                   setForm((prev) => ({ ...prev, endDate: value }))
                 }
+                disabled={sharedLocked}
                 className="h-full"
               />
             </div>
@@ -196,6 +214,7 @@ export function TripDetailsClient({ trip, hasActivity }: TripDetailsClientProps)
               value={form.status}
               onChange={(value) => setForm((prev) => ({ ...prev, status: value }))}
               options={TRIP_STATUS_OPTIONS}
+              disabled={sharedLocked}
               className="w-full"
               buttonClassName="w-full"
             />
@@ -204,7 +223,7 @@ export function TripDetailsClient({ trip, hasActivity }: TripDetailsClientProps)
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
               Cover photo
             </label>
-            <div className="flex items-center gap-2">
+            <div className={`flex items-center gap-2 ${sharedLocked ? "pointer-events-none opacity-50" : ""}`}>
               <TripCoverUploadButton
                 onSelect={(dataUrl) =>
                   setForm((prev) => ({ ...prev, coverImageUrl: dataUrl }))
@@ -258,6 +277,9 @@ export function TripDetailsClient({ trip, hasActivity }: TripDetailsClientProps)
           </Button>
         </div>
         <div className="flex items-center gap-2">
+          <Link href={`/trips/${trip.id}/manage/wallets`}>
+            <Button variant="secondary">Wallets</Button>
+          </Link>
           <Link href={`/trips/${trip.id}/manage`}>
             <Button variant="secondary">Go to Transactions</Button>
           </Link>
