@@ -167,7 +167,7 @@ services:
       - finance-network
 
   finance-mcp:
-    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-finance-mcp:${IMAGE_TAG:-latest}
+    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-finance-mcp:${MCP_IMAGE_TAG:-${IMAGE_TAG:-latest}}
     container_name: fortuna-finance-mcp
     restart: always
     ports:
