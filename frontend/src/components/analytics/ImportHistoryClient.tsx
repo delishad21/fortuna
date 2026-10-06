@@ -165,28 +165,26 @@ export function ImportHistoryClient({
       {tab === "staged" && (
         <>
           {showTogether ? (
-            <>
-              <div className="flex justify-end">
+            <AgentDraftReviewClient
+              initialDrafts={detailedDrafts as any}
+              embedded
+              reviewActionLeft={
                 <Button
                   variant="secondary"
                   onClick={() => setShowTogether(false)}
                 >
                   Change staged imports
                 </Button>
-              </div>
-              <AgentDraftReviewClient
-                initialDrafts={detailedDrafts as any}
-                embedded
-                onCommitted={() => {
-                  setShowTogether(false);
-                  setDetailedDrafts([]);
-                  setSelectedDraftIds(new Set());
-                  setCommitNotice("Selected staged imports committed successfully.");
-                  setTab("history");
-                  router.refresh();
-                }}
-              />
-            </>
+              }
+              onCommitted={() => {
+                setShowTogether(false);
+                setDetailedDrafts([]);
+                setSelectedDraftIds(new Set());
+                setCommitNotice("Selected staged imports committed successfully.");
+                setTab("history");
+                router.refresh();
+              }}
+            />
           ) : (
             <Card className="overflow-hidden p-0">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stroke px-5 py-3 dark:border-dark-3">

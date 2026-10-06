@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, Bot, Check, RefreshCw, X } from "lucide-react";
@@ -75,6 +76,7 @@ export function AgentDraftReviewClient({
   onCommitted,
   returnTo,
   fill = false,
+  reviewActionLeft,
 }: {
   initialDraft?: Draft;
   initialDrafts?: Draft[];
@@ -84,6 +86,8 @@ export function AgentDraftReviewClient({
   returnTo?: string;
   /** Embedded in a container that sets the height, such as the chat's side panel. */
   fill?: boolean;
+  /** Rendered just left of the "Validate & commit" button. */
+  reviewActionLeft?: ReactNode;
 }) {
   const router = useRouter();
   const [drafts, setDrafts] = useState<Draft[]>(
@@ -556,6 +560,7 @@ export function AgentDraftReviewClient({
         }
         onImport={() => void commitSelectedDrafts()}
         primaryActionLabel={`Validate & commit (${selectedIndices.size})`}
+        reviewActionLeft={reviewActionLeft}
         onSelectAll={() => void setAllSelected(true)}
         onDeselectAll={() => void setAllSelected(false)}
         onToggleSelection={(index) =>
