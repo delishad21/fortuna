@@ -83,6 +83,7 @@ type FundingUpdatePayloadInput = {
   fxRate?: number | null;
   feeAmount?: number | null;
   feeCurrency?: string | null;
+  baseAmount?: number | null;
   metadata?: Record<string, any> | null;
 };
 
@@ -367,6 +368,7 @@ export const buildFundingUpdatePayload = (input: FundingUpdatePayloadInput) => (
   fxRate: input.fxRate,
   feeAmount: input.feeAmount,
   feeCurrency: input.feeCurrency,
+  baseAmount: input.baseAmount,
   metadata: input.metadata,
 });
 

@@ -47,7 +47,11 @@ const FundingCreateSchema = z.object({
   tripId: z.string(),
   walletId: z.string().optional().nullable(),
   bankTransactionId: z.string().optional().nullable(),
-  sourceType: z.string().default("manual"),
+  // Conversions, transfers between trips and statement top-ups are created by the
+  // server together with the records they depend on.
+  sourceType: z
+    .enum(["manual", "transfer", "bank_wallet_topup", "opening_balance"])
+    .default("manual"),
   sourceCurrency: z.string().default("SGD"),
   sourceAmount: z.number(),
   destinationCurrency: z.string(),
@@ -55,6 +59,8 @@ const FundingCreateSchema = z.object({
   fxRate: z.number().optional().nullable(),
   feeAmount: z.number().optional().nullable(),
   feeCurrency: z.string().optional().nullable(),
+  // Required when neither currency is the trip's base currency.
+  baseAmount: z.number().positive().optional().nullable(),
   metadata: z.record(z.any()).optional().nullable(),
 });
 
@@ -79,6 +85,7 @@ const FundingUpdateSchema = z.object({
   fxRate: z.number().optional().nullable(),
   feeAmount: z.number().optional().nullable(),
   feeCurrency: z.string().optional().nullable(),
+  baseAmount: z.number().positive().optional().nullable(),
   metadata: z.record(z.any()).optional().nullable(),
 });
 
@@ -300,8 +307,9 @@ const AddEntriesFromSourceSchema = z.object({
   entryType: z.enum(["spending", "reimbursement", "funding_out"]).optional(),
   fundingOut: z
     .object({
-      destinationType: z.enum(["bank", "trip", "external"]).optional(),
+      destinationType: z.enum(["bank", "trip", "wallet", "external"]).optional(),
       destinationTripId: z.string().optional().nullable(),
+      destinationWalletId: z.string().optional().nullable(),
       bankTransactionId: z.string().optional().nullable(),
       destinationCurrency: z.string().optional().nullable(),
       destinationAmount: z.number().optional().nullable(),
@@ -321,16 +329,18 @@ const TripEntryCreateSchema = z.object({
   description: z.string().min(1),
   label: z.string().optional().nullable(),
   categoryId: z.string().optional().nullable(),
-  localCurrency: z.string().min(1),
+  localCurrency: z.string().trim().length(3),
   localAmount: z.number().positive(),
-  baseAmount: z.number().positive(),
-  fxRate: z.number().optional().nullable(),
+  // Omit to value a wallet entry at the wallet's average rate.
+  baseAmount: z.number().positive().optional().nullable(),
+  fxRate: z.number().positive().optional().nullable(),
   feeAmount: z.number().optional().nullable(),
   feeCurrency: z.string().optional().nullable(),
   fundingOut: z
     .object({
-      destinationType: z.enum(["bank", "trip", "external"]).optional(),
+      destinationType: z.enum(["bank", "trip", "wallet", "external"]).optional(),
       destinationTripId: z.string().optional().nullable(),
+      destinationWalletId: z.string().optional().nullable(),
       bankTransactionId: z.string().optional().nullable(),
       destinationCurrency: z.string().optional().nullable(),
       destinationAmount: z.number().optional().nullable(),
@@ -528,6 +538,7 @@ tripsRouter.post("/:id/fundings", async (req: Request, res: Response) => {
       fxRate: input.fxRate ?? null,
       feeAmount: input.feeAmount ?? null,
       feeCurrency: input.feeCurrency ?? null,
+      baseAmount: input.baseAmount ?? null,
       metadata: input.metadata ?? null,
     });
     res.json({
@@ -602,6 +613,7 @@ tripsRouter.patch("/:id/fundings/:fundingId", async (req: Request, res: Response
       fxRate: input.fxRate,
       feeAmount: input.feeAmount,
       feeCurrency: input.feeCurrency,
+      baseAmount: input.baseAmount,
       metadata: input.metadata,
     }));
     res.json({

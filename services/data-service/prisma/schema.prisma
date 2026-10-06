@@ -548,7 +548,7 @@ model TripFunding {
   sourceAmount        Decimal  @map("source_amount") @db.Decimal(14, 4)
   destinationCurrency String   @map("destination_currency")
   destinationAmount   Decimal  @map("destination_amount") @db.Decimal(14, 4)
-  fxRate              Decimal? @map("fx_rate") @db.Decimal(14, 6)
+  fxRate              Decimal? @map("fx_rate") @db.Decimal(20, 10)
   baseAmount          Decimal? @map("base_amount") @db.Decimal(14, 4)
   feeAmount           Decimal? @map("fee_amount") @db.Decimal(14, 4)
   feeCurrency         String?  @map("fee_currency")
@@ -577,7 +577,7 @@ model TripEntry {
   label               String?
   localCurrency       String   @map("local_currency")
   localAmount         Decimal  @map("local_amount") @db.Decimal(14, 4)
-  fxRate              Decimal  @map("fx_rate") @db.Decimal(14, 6)
+  fxRate              Decimal  @map("fx_rate") @db.Decimal(20, 10)
   baseAmount          Decimal  @map("base_amount") @db.Decimal(14, 4)
   feeAmount           Decimal? @map("fee_amount") @db.Decimal(14, 4)
   feeCurrency         String?  @map("fee_currency")
@@ -612,8 +612,8 @@ model TripReimbursementAllocation {
   amountBase             Decimal  @map("amount_base") @db.Decimal(14, 4)
   reimbursingLocalAmount Decimal  @map("reimbursing_local_amount") @db.Decimal(14, 4)
   reimbursedLocalAmount  Decimal  @map("reimbursed_local_amount") @db.Decimal(14, 4)
-  reimbursingFxRate      Decimal  @map("reimbursing_fx_rate") @db.Decimal(14, 6)
-  reimbursedFxRate       Decimal  @map("reimbursed_fx_rate") @db.Decimal(14, 6)
+  reimbursingFxRate      Decimal  @map("reimbursing_fx_rate") @db.Decimal(20, 10)
+  reimbursedFxRate       Decimal  @map("reimbursed_fx_rate") @db.Decimal(20, 10)
   createdAt              DateTime @default(now()) @map("created_at")
 
   trip               Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)

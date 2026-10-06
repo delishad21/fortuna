@@ -57,6 +57,7 @@ export class TripService {
     fxRate?: number | null;
     feeAmount?: number | null;
     feeCurrency?: string | null;
+    baseAmount?: number | null;
     metadata?: Record<string, any> | null;
   }) {
     return TripRepository.createFunding(userId, input);
@@ -101,6 +102,7 @@ export class TripService {
       fxRate?: number | null;
       feeAmount?: number | null;
       feeCurrency?: string | null;
+      baseAmount?: number | null;
       metadata?: Record<string, any> | null;
     },
   ) {
@@ -165,8 +167,9 @@ export class TripService {
       amountIn?: number | null;
       amountOut?: number | null;
       fundingOut?: {
-        destinationType?: "bank" | "trip" | "external";
+        destinationType?: "bank" | "trip" | "wallet" | "external";
         destinationTripId?: string | null;
+        destinationWalletId?: string | null;
         bankTransactionId?: string | null;
         destinationCurrency?: string | null;
         destinationAmount?: number | null;
@@ -361,8 +364,9 @@ export class TripService {
       categoryId?: string | null;
       entryType?: "spending" | "reimbursement" | "funding_out";
       fundingOut?: {
-        destinationType?: "bank" | "trip" | "external";
+        destinationType?: "bank" | "trip" | "wallet" | "external";
         destinationTripId?: string | null;
+        destinationWalletId?: string | null;
         bankTransactionId?: string | null;
         destinationCurrency?: string | null;
         destinationAmount?: number | null;
@@ -387,13 +391,14 @@ export class TripService {
       categoryId?: string | null;
       localCurrency: string;
       localAmount: number;
-      baseAmount: number;
+      baseAmount?: number | null;
       fxRate?: number | null;
       feeAmount?: number | null;
       feeCurrency?: string | null;
       fundingOut?: {
-        destinationType?: "bank" | "trip" | "external";
+        destinationType?: "bank" | "trip" | "wallet" | "external";
         destinationTripId?: string | null;
+        destinationWalletId?: string | null;
         bankTransactionId?: string | null;
         destinationCurrency?: string | null;
         destinationAmount?: number | null;
