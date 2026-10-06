@@ -3,6 +3,7 @@ import { z } from "zod";
 import { TripService } from "./trips.service";
 import { buildFundingUpdatePayload } from "./trips.accounting";
 
+export const walletAccountsRouter = Router();
 export const tripsRouter = Router();
 
 const TripCreateSchema = z.object({
@@ -95,6 +96,7 @@ const FundingDeleteSchema = z.object({
 
 const WalletCreateSchema = z.object({
   userId: z.string(),
+  accountId: z.string().optional().nullable(),
   name: z.string().min(1),
   currency: z
     .string()
@@ -427,6 +429,7 @@ tripsRouter.post("/:id/wallets", async (req: Request, res: Response) => {
       name: input.name,
       currency: input.currency,
       color: input.color ?? null,
+      accountId: input.accountId ?? null,
     });
     res.json({ wallet });
   } catch (error: any) {
@@ -461,6 +464,80 @@ tripsRouter.post(
     }
   },
 );
+
+const WalletUpdateSchema = z.object({
+  userId: z.string(),
+  name: z.string().trim().min(1).optional(),
+  color: z.string().trim().min(1).optional(),
+  accountId: z.string().optional().nullable(),
+});
+
+tripsRouter.patch("/:id/wallets/:walletId", async (req: Request, res: Response) => {
+  try {
+    const { userId, ...data } = WalletUpdateSchema.parse(req.body);
+    const wallet = await TripService.updateWallet(userId, String(req.params.id), String(req.params.walletId), data);
+    res.json({ wallet });
+  } catch (error: any) {
+    res.status(error.status || 400).json({ error: error.message || "Failed to update wallet" });
+  }
+});
+
+tripsRouter.delete("/:id/wallets/:walletId", async (req: Request, res: Response) => {
+  try {
+    const { userId } = z.object({ userId: z.string() }).parse(req.body);
+    res.json(await TripService.deleteWallet(userId, String(req.params.id), String(req.params.walletId)));
+  } catch (error: any) {
+    res.status(error.status || 400).json({ error: error.message || "Failed to delete wallet", usage: error.usage });
+  }
+});
+
+tripsRouter.post("/:id/wallets/:walletId/merge", async (req: Request, res: Response) => {
+  try {
+    const { userId, targetWalletId } = z
+      .object({ userId: z.string(), targetWalletId: z.string() })
+      .parse(req.body);
+    const wallet = await TripService.mergeWallet(userId, String(req.params.id), String(req.params.walletId), targetWalletId);
+    res.json({ wallet });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to merge wallets" });
+  }
+});
+
+tripsRouter.get("/:id/carry-over/candidates", async (req: Request, res: Response) => {
+  try {
+    const { userId, sourceTripId } = z
+      .object({ userId: z.string(), sourceTripId: z.string() })
+      .parse(req.query);
+    res.json(await TripService.getCarryOverCandidates(userId, String(req.params.id), sourceTripId));
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to load carry-over candidates" });
+  }
+});
+
+const CarryOverSchema = z.object({
+  userId: z.string(),
+  sourceTripId: z.string(),
+  date: z.string().transform((value) => new Date(value)).optional(),
+  items: z
+    .array(
+      z.object({
+        sourceWalletId: z.string(),
+        amount: z.number().positive().optional().nullable(),
+        destinationWalletId: z.string().optional().nullable(),
+        fxRate: z.number().positive().optional().nullable(),
+      }),
+    )
+    .min(1),
+});
+
+tripsRouter.post("/:id/carry-over", async (req: Request, res: Response) => {
+  try {
+    const { userId, ...input } = CarryOverSchema.parse(req.body);
+    res.json(await TripService.carryOverWallets(userId, String(req.params.id), input));
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to carry money over" });
+  }
+});
 
 tripsRouter.get("/:id", async (req: Request, res: Response) => {
   try {
@@ -1072,5 +1149,41 @@ tripsRouter.get("/:id/analytics", async (req: Request, res: Response) => {
     res.json(analytics);
   } catch (error: any) {
     res.status(400).json({ error: error.message || "Failed to fetch trip analytics" });
+  }
+});
+
+walletAccountsRouter.get("/", async (req: Request, res: Response) => {
+  try {
+    const { userId } = z.object({ userId: z.string() }).parse(req.query);
+    res.json({ accounts: await TripService.listWalletAccounts(userId) });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to load wallet accounts" });
+  }
+});
+
+walletAccountsRouter.post("/", async (req: Request, res: Response) => {
+  try {
+    const { userId, ...data } = z
+      .object({ userId: z.string(), name: z.string().trim().min(1), color: z.string().optional().nullable() })
+      .parse(req.body);
+    res.json({ account: await TripService.createWalletAccount(userId, data) });
+  } catch (error: any) {
+    res.status(error.status || 400).json({ error: error.message || "Failed to create wallet account" });
+  }
+});
+
+walletAccountsRouter.patch("/:accountId", async (req: Request, res: Response) => {
+  try {
+    const { userId, ...data } = z
+      .object({
+        userId: z.string(),
+        name: z.string().trim().min(1).optional(),
+        color: z.string().trim().min(1).optional(),
+        archived: z.boolean().optional(),
+      })
+      .parse(req.body);
+    res.json({ account: await TripService.updateWalletAccount(userId, String(req.params.accountId), data) });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to update wallet account" });
   }
 });

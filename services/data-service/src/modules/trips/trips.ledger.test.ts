@@ -483,3 +483,75 @@ test("highlights recognise common category names", () =>
       assert.equal(highlights.flights, 600);
     }),
   ));
+
+test("wallets can be renamed, merged, deleted when unused, and carried into the next trip", () =>
+  withChatDb((db) =>
+    withDatabase(db, async () => {
+      const { user, trip, fund, spend } = await seed(db);
+      const revolut = await TripRepository.createWalletAccount(user.id, { name: "Revolut" });
+      const usd = await TripRepository.createWallet(user.id, trip.id, {
+        name: "Revolut USD",
+        currency: "USD",
+        accountId: revolut!.id,
+      });
+      await fund(usd.id, 1350, 1000);
+      await spend(usd.id, 600);
+
+      const renamed = await TripRepository.updateWallet(user.id, trip.id, usd.id, { name: "Main card" });
+      assert.equal(renamed?.name, "Main card");
+
+      const stray = await TripRepository.createWallet(user.id, trip.id, { name: "Trip Transfer USD", currency: "USD" });
+      await fund(stray.id, 135, 100);
+      await assert.rejects(TripRepository.deleteWallet(user.id, trip.id, stray.id), /still has/);
+      await TripRepository.mergeWallet(user.id, trip.id, stray.id, usd.id);
+      assert.equal(await db.wallet.count({ where: { id: stray.id } }), 0);
+      assert.equal(await db.tripFunding.count({ where: { walletId: usd.id } }), 2);
+
+      const empty = await TripRepository.createWallet(user.id, trip.id, { name: "Unused", currency: "EUR" });
+      await TripRepository.deleteWallet(user.id, trip.id, empty.id);
+
+      // 1,100 USD funded for 1,485 SGD (1.35); 600 spent leaves 500 USD worth 675 SGD.
+      const next = await TripRepository.createTrip(user.id, {
+        name: "USA",
+        baseCurrency: "SGD",
+        startDate: new Date("2026-11-01"),
+      });
+      const { candidates } = await TripRepository.getCarryOverCandidates(user.id, next.id, trip.id);
+      assert.equal(candidates.length, 1);
+      assert.equal(candidates[0].balance, 500);
+      assert.equal(candidates[0].baseValue, 675);
+      await TripRepository.carryOverWallets(user.id, next.id, {
+        sourceTripId: trip.id,
+        items: [{ sourceWalletId: usd.id }],
+      });
+      const carried = await db.tripFunding.findFirstOrThrow({ where: { tripId: next.id } });
+      assert.equal(Number(carried.destinationAmount), 500);
+      assert.equal(Number(carried.baseAmount), 675, "the leftover keeps its exact cost");
+      const nextWallet = await db.wallet.findUniqueOrThrow({ where: { id: carried.walletId as string } });
+      assert.equal(nextWallet.accountId, revolut!.id, "the new trip's wallet belongs to the same account");
+      const { candidates: after } = await TripRepository.getCarryOverCandidates(user.id, next.id, trip.id);
+      assert.equal(after.length, 0, "nothing left to carry over");
+    }),
+  ));
+
+test("statement imports find the provider's wallet even after it was renamed", () =>
+  withChatDb((db) =>
+    withDatabase(db, async () => {
+      const { user, trip } = await seed(db);
+      const row = {
+        date: "2026-09-03",
+        description: "Coffee",
+        amountOut: 5,
+        metadata: { currency: "USD", fxRate: 1.35, fxBaseCurrency: "USD", fxQuoteCurrency: "SGD" },
+      };
+      await TripRepository.importTripSpendings(user.id, trip.id, null, "revolut_statement", [row] as never);
+      const wallet = await db.wallet.findFirstOrThrow({ where: { tripId: trip.id } });
+      assert.equal(wallet.name, "Revolut USD");
+      assert.ok(wallet.accountId, "linked to the Revolut account");
+      await TripRepository.updateWallet(user.id, trip.id, wallet.id, { name: "Travel card" });
+      await TripRepository.importTripSpendings(user.id, trip.id, null, "revolut_statement", [
+        { ...row, description: "Lunch", amountOut: 12, metadata: { ...row.metadata } },
+      ] as never);
+      assert.equal(await db.wallet.count({ where: { tripId: trip.id } }), 1, "no duplicate wallet");
+    }),
+  ));

@@ -116,7 +116,7 @@ export class TripService {
   static createWallet(
     userId: string,
     tripId: string,
-    data: { name: string; currency: string; color?: string | null },
+    data: { name: string; currency: string; color?: string | null; accountId?: string | null },
   ) {
     return TripRepository.createWallet(userId, tripId, data);
   }
@@ -377,6 +377,38 @@ export class TripService {
     },
   ) {
     return TripRepository.addEntriesFromSourceTransactions(userId, tripId, input);
+  }
+
+  static updateWallet(...args: Parameters<typeof TripRepository.updateWallet>) {
+    return TripRepository.updateWallet(...args);
+  }
+
+  static deleteWallet(...args: Parameters<typeof TripRepository.deleteWallet>) {
+    return TripRepository.deleteWallet(...args);
+  }
+
+  static mergeWallet(...args: Parameters<typeof TripRepository.mergeWallet>) {
+    return TripRepository.mergeWallet(...args);
+  }
+
+  static getCarryOverCandidates(...args: Parameters<typeof TripRepository.getCarryOverCandidates>) {
+    return TripRepository.getCarryOverCandidates(...args);
+  }
+
+  static carryOverWallets(...args: Parameters<typeof TripRepository.carryOverWallets>) {
+    return TripRepository.carryOverWallets(...args);
+  }
+
+  static listWalletAccounts(userId: string) {
+    return TripRepository.listWalletAccounts(userId);
+  }
+
+  static createWalletAccount(...args: Parameters<typeof TripRepository.createWalletAccount>) {
+    return TripRepository.createWalletAccount(...args);
+  }
+
+  static updateWalletAccount(...args: Parameters<typeof TripRepository.updateWalletAccount>) {
+    return TripRepository.updateWalletAccount(...args);
   }
 
   static updateTripEntry(

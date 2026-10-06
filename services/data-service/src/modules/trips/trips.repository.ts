@@ -858,6 +858,15 @@ export class TripRepository {
     `;
 
     let destinationWalletId = input.destinationWalletId || existingLinkedFunding?.walletId || null;
+    // Money moving between trips stays in the same account (Revolut USD to Revolut USD).
+    const [sourceAccount] = await tx.$queryRaw<Array<{ id: string | null; name: string | null }>>`
+      SELECT a.id, a.name
+      FROM trip_entries te
+      LEFT JOIN wallets w ON w.id = te.wallet_id
+      LEFT JOIN wallet_accounts a ON a.id = w.account_id
+      WHERE te.id = ${input.sourceEntryId}
+      LIMIT 1
+    `;
     if (input.destinationWalletId) {
       const [wallet] = await tx.$queryRaw<Array<{ currency: string }>>`
         SELECT currency FROM wallets
@@ -874,16 +883,21 @@ export class TripRepository {
         SELECT id
         FROM wallets
         WHERE trip_id = ${input.destinationTripId} AND currency = ${destinationCurrency}
-        ORDER BY created_at ASC
+        ORDER BY (account_id IS NOT DISTINCT FROM ${sourceAccount?.id ?? null}) DESC, created_at ASC
         LIMIT 1
       `;
       if (existingWallet) {
         destinationWalletId = existingWallet.id;
       } else {
+        const walletName = sourceAccount?.name
+          ? `${sourceAccount.name} ${destinationCurrency}`
+          : `Trip Transfer ${destinationCurrency}`;
         const [createdWallet] = await tx.$queryRaw<Array<{ id: string }>>`
           INSERT INTO wallets (
             id,
             trip_id,
+            user_id,
+            account_id,
             name,
             currency,
             color,
@@ -893,14 +907,17 @@ export class TripRepository {
           VALUES (
             ${randomUUID()},
             ${input.destinationTripId},
-            ${`Trip Transfer ${destinationCurrency}`},
+            ${userId},
+            ${sourceAccount?.id ?? null},
+            ${walletName},
             ${destinationCurrency},
             ${TripRepository.pickWalletColor(
-              `${input.destinationTripId}::Trip Transfer ${destinationCurrency}::${destinationCurrency}`,
+              `${input.destinationTripId}::${walletName}::${destinationCurrency}`,
             )},
             NOW(),
             NOW()
           )
+          ON CONFLICT (trip_id, name, currency) DO UPDATE SET updated_at = NOW()
           RETURNING id
         `;
         destinationWalletId = createdWallet.id;
@@ -1055,6 +1072,8 @@ export class TripRepository {
     return {
       id: row.id,
       tripId: row.tripId,
+      accountId: row.accountId ?? null,
+      accountName: row.accountName ?? null,
       name: row.name,
       currency: row.currency,
       color: row.color ?? "#60a5fa",
@@ -3235,10 +3254,36 @@ export class TripRepository {
     return { success: true, propagationTrace };
   }
 
+  /** The user's account for a statement provider (e.g. Revolut), created on first use. */
+  private static async ensureProviderAccountTx(
+    tx: Prisma.TransactionClient | typeof prisma,
+    userId: string,
+    providerName: string,
+  ) {
+    const provider = providerName.trim().toLowerCase();
+    const [existing] = await tx.$queryRaw<Array<{ id: string; name: string }>>`
+      SELECT id, name FROM wallet_accounts
+      WHERE user_id = ${userId} AND (provider = ${provider} OR LOWER(name) = ${provider})
+      ORDER BY (provider = ${provider}) DESC NULLS LAST, created_at ASC
+      LIMIT 1
+    `;
+    if (existing) return existing;
+    const [created] = await tx.$queryRaw<Array<{ id: string; name: string }>>`
+      INSERT INTO wallet_accounts (id, user_id, name, provider, color, created_at, updated_at)
+      VALUES (
+        ${randomUUID()}, ${userId}, ${providerName.trim()}, ${provider},
+        ${TripRepository.pickWalletColor(`${userId}::${provider}`)}, NOW(), NOW()
+      )
+      ON CONFLICT (user_id, name) DO UPDATE SET provider = COALESCE(wallet_accounts.provider, EXCLUDED.provider)
+      RETURNING id, name
+    `;
+    return created;
+  }
+
   static async createWallet(
     userId: string,
     tripId: string,
-    data: { name: string; currency: string; color?: string | null },
+    data: { name: string; currency: string; color?: string | null; accountId?: string | null },
   ) {
     const tripRows = await prisma.$queryRaw<Array<{ id: string }>>`
       SELECT id
@@ -3254,11 +3299,20 @@ export class TripRepository {
       ? String(data.color).trim()
       : TripRepository.pickWalletColor(`${tripId}::${data.name}::${data.currency}`);
 
+    if (data.accountId) {
+      const [account] = await prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM wallet_accounts WHERE id = ${data.accountId} AND user_id = ${userId} LIMIT 1
+      `;
+      if (!account) throw new Error("Wallet account not found or unauthorized");
+    }
+
     const id = randomUUID();
     const [wallet] = await prisma.$queryRaw<any[]>`
       INSERT INTO wallets (
         id,
         trip_id,
+        user_id,
+        account_id,
         name,
         currency,
         color,
@@ -3268,8 +3322,10 @@ export class TripRepository {
       VALUES (
         ${id},
         ${tripId},
-        ${data.name},
-        ${data.currency},
+        ${userId},
+        ${data.accountId ?? null},
+        ${data.name.trim()},
+        ${normalizeCurrencyCode(data.currency)},
         ${resolvedColor},
         NOW(),
         NOW()
@@ -3277,6 +3333,7 @@ export class TripRepository {
       RETURNING
         id,
         trip_id AS "tripId",
+        account_id AS "accountId",
         name,
         currency,
         color,
@@ -3291,6 +3348,8 @@ export class TripRepository {
       SELECT
         w.id,
         w.trip_id AS "tripId",
+        w.account_id AS "accountId",
+        a.name AS "accountName",
         w.name,
         w.currency,
         w.color,
@@ -3298,10 +3357,316 @@ export class TripRepository {
         w.updated_at AS "updatedAt"
       FROM wallets w
       INNER JOIN trips t ON t.id = w.trip_id
+      LEFT JOIN wallet_accounts a ON a.id = w.account_id
       WHERE w.trip_id = ${tripId} AND t.user_id = ${userId}
-      ORDER BY name ASC
+      ORDER BY w.name ASC
     `;
     return rows.map(TripRepository.mapWallet);
+  }
+
+  private static async getOwnedWallet(userId: string, tripId: string, walletId: string) {
+    const [wallet] = await prisma.$queryRaw<Array<{ id: string; name: string; currency: string }>>`
+      SELECT w.id, w.name, w.currency
+      FROM wallets w
+      INNER JOIN trips t ON t.id = w.trip_id
+      WHERE w.id = ${walletId} AND w.trip_id = ${tripId} AND t.user_id = ${userId}
+      LIMIT 1
+    `;
+    if (!wallet) throw new Error("Wallet not found or unauthorized");
+    return wallet;
+  }
+
+  /** Rename, recolour or link a wallet to an account. Its currency never changes. */
+  static async updateWallet(
+    userId: string,
+    tripId: string,
+    walletId: string,
+    data: { name?: string; color?: string; accountId?: string | null },
+  ) {
+    await TripRepository.getOwnedWallet(userId, tripId, walletId);
+    if (data.accountId) {
+      const [account] = await prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM wallet_accounts WHERE id = ${data.accountId} AND user_id = ${userId} LIMIT 1
+      `;
+      if (!account) throw new Error("Wallet account not found or unauthorized");
+    }
+    const name = data.name?.trim();
+    if (data.name !== undefined && !name) throw new Error("A wallet needs a name.");
+    try {
+      await prisma.$executeRaw`
+        UPDATE wallets
+        SET
+          name = COALESCE(${name ?? null}, name),
+          color = COALESCE(${data.color?.trim() || null}, color),
+          account_id = ${data.accountId === undefined ? Prisma.sql`account_id` : data.accountId},
+          updated_at = NOW()
+        WHERE id = ${walletId} AND trip_id = ${tripId}
+      `;
+    } catch (error) {
+      if (String(error).includes("wallets_trip_id_name_currency_key")) {
+        throw Object.assign(new Error("This trip already has a wallet with that name and currency."), { status: 409 });
+      }
+      throw error;
+    }
+    const wallets = await TripRepository.findWallets(userId, tripId);
+    return wallets.find((wallet) => wallet.id === walletId);
+  }
+
+  /**
+   * Deletes a wallet nothing uses. Its foreign keys are SET NULL, so deleting a wallet
+   * with history would quietly move that history out of any wallet.
+   */
+  static async deleteWallet(userId: string, tripId: string, walletId: string) {
+    await TripRepository.getOwnedWallet(userId, tripId, walletId);
+    const [usage] = await prisma.$queryRaw<Array<{ entries: number; fundings: number; references: number }>>`
+      SELECT
+        (SELECT COUNT(*)::int FROM trip_entries WHERE wallet_id = ${walletId}) AS entries,
+        (SELECT COUNT(*)::int FROM trip_fundings WHERE wallet_id = ${walletId}) AS fundings,
+        (SELECT COUNT(*)::int FROM trip_entries WHERE metadata->'fundingOut'->>'destinationWalletId' = ${walletId}) AS "references"
+    `;
+    if (usage.entries || usage.fundings || usage.references) {
+      throw Object.assign(
+        new Error(
+          `This wallet still has ${usage.entries} entries and ${usage.fundings} fundings. Move them or merge the wallet instead.`,
+        ),
+        { status: 409, usage },
+      );
+    }
+    await prisma.$executeRaw`DELETE FROM wallets WHERE id = ${walletId} AND trip_id = ${tripId}`;
+    return { success: true };
+  }
+
+  /** Moves everything from one wallet into another wallet of the same currency and trip. */
+  static async mergeWallet(userId: string, tripId: string, walletId: string, targetWalletId: string) {
+    if (walletId === targetWalletId) throw new Error("Choose a different wallet to merge into.");
+    const [source, target] = await Promise.all([
+      TripRepository.getOwnedWallet(userId, tripId, walletId),
+      TripRepository.getOwnedWallet(userId, tripId, targetWalletId),
+    ]);
+    if (source.currency.toUpperCase() !== target.currency.toUpperCase()) {
+      throw new Error("Only wallets with the same currency can be merged.");
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`UPDATE trip_entries SET wallet_id = ${targetWalletId} WHERE wallet_id = ${walletId}`;
+      await tx.$executeRaw`UPDATE trip_fundings SET wallet_id = ${targetWalletId} WHERE wallet_id = ${walletId}`;
+      await tx.$executeRaw`
+        UPDATE trip_entries
+        SET metadata = jsonb_set(metadata, '{fundingOut,destinationWalletId}', to_jsonb(${targetWalletId}::text))
+        WHERE metadata->'fundingOut'->>'destinationWalletId' = ${walletId}
+      `;
+      const fundings = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM trip_fundings WHERE wallet_id = ${targetWalletId}
+      `;
+      for (const funding of fundings) {
+        await TripRepository.upsertFundingEntryTx(tx, userId, tripId, funding.id);
+      }
+      await tx.$executeRaw`DELETE FROM wallets WHERE id = ${walletId} AND trip_id = ${tripId}`;
+    });
+    await TripRepository.recalculateWalletEntriesToBase(userId, tripId, targetWalletId, {
+      mode: "weighted",
+    }).catch(TripRepository.recalcFailed);
+    const wallets = await TripRepository.findWallets(userId, tripId);
+    return wallets.find((wallet) => wallet.id === targetWalletId);
+  }
+
+  static async listWalletAccounts(userId: string) {
+    return prisma.$queryRaw<
+      Array<{ id: string; name: string; provider: string | null; color: string; archivedAt: Date | null; walletCount: number }>
+    >`
+      SELECT
+        a.id, a.name, a.provider, a.color, a.archived_at AS "archivedAt",
+        COUNT(w.id)::int AS "walletCount"
+      FROM wallet_accounts a
+      LEFT JOIN wallets w ON w.account_id = a.id
+      WHERE a.user_id = ${userId}
+      GROUP BY a.id
+      ORDER BY a.archived_at NULLS FIRST, a.name ASC
+    `;
+  }
+
+  static async createWalletAccount(userId: string, data: { name: string; color?: string | null }) {
+    const name = data.name.trim();
+    if (!name) throw new Error("An account needs a name.");
+    const provider = ["revolut", "youtrip"].includes(name.toLowerCase()) ? name.toLowerCase() : null;
+    const [account] = await prisma.$queryRaw<Array<{ id: string }>>`
+      INSERT INTO wallet_accounts (id, user_id, name, provider, color, created_at, updated_at)
+      VALUES (
+        ${randomUUID()}, ${userId}, ${name}, ${provider},
+        ${data.color?.trim() || TripRepository.pickWalletColor(`${userId}::${name}`)}, NOW(), NOW()
+      )
+      ON CONFLICT (user_id, name) DO NOTHING
+      RETURNING id
+    `;
+    if (!account) throw Object.assign(new Error("You already have an account with that name."), { status: 409 });
+    return (await TripRepository.listWalletAccounts(userId)).find((item) => item.id === account.id);
+  }
+
+  /** Renaming an account also renames trip wallets still named after it ("Revolut JPY"). */
+  static async updateWalletAccount(
+    userId: string,
+    accountId: string,
+    data: { name?: string; color?: string; archived?: boolean },
+  ) {
+    const [account] = await prisma.$queryRaw<Array<{ id: string; name: string }>>`
+      SELECT id, name FROM wallet_accounts WHERE id = ${accountId} AND user_id = ${userId} LIMIT 1
+    `;
+    if (!account) throw new Error("Wallet account not found or unauthorized");
+    const name = data.name?.trim();
+    if (data.name !== undefined && !name) throw new Error("An account needs a name.");
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        UPDATE wallet_accounts
+        SET
+          name = COALESCE(${name ?? null}, name),
+          color = COALESCE(${data.color?.trim() || null}, color),
+          archived_at = ${data.archived === undefined ? Prisma.sql`archived_at` : data.archived ? Prisma.sql`NOW()` : null},
+          updated_at = NOW()
+        WHERE id = ${accountId}
+      `;
+      if (name && name !== account.name) {
+        await tx.$executeRaw`
+          UPDATE wallets
+          SET name = ${name} || ' ' || currency, updated_at = NOW()
+          WHERE account_id = ${accountId} AND name = ${account.name} || ' ' || currency
+            AND NOT EXISTS (
+              SELECT 1 FROM wallets other
+              WHERE other.trip_id = wallets.trip_id AND other.currency = wallets.currency
+                AND other.name = ${name} || ' ' || wallets.currency
+            )
+        `;
+      }
+    });
+    return (await TripRepository.listWalletAccounts(userId)).find((item) => item.id === accountId);
+  }
+
+  /** Signed balance of a wallet in its own currency, as the wallet summary shows it. */
+  private static async getWalletBalance(walletId: string) {
+    const [row] = await prisma.$queryRaw<Array<{ balance: unknown }>>`
+      SELECT COALESCE(SUM(
+        CASE
+          WHEN te.type = 'funding_in' THEN
+            CASE
+              WHEN te.source_type IN ('funding_in_imported_topup', 'funding_in_opening_balance')
+                AND (
+                  COALESCE(te.metadata->>'matchReviewState', '') = 'rejected'
+                  OR COALESCE(te.metadata->>'matchReviewStatus', '') = 'rejected'
+                )
+              THEN 0::numeric
+              ELSE te.local_amount
+            END
+          WHEN te.type = 'reimbursement' THEN te.local_amount
+          WHEN te.type IN ('spending', 'funding_out') THEN -te.local_amount
+          ELSE 0::numeric
+        END
+      ), 0) AS balance
+      FROM trip_entries te
+      INNER JOIN wallets w ON w.id = te.wallet_id
+      WHERE te.wallet_id = ${walletId} AND UPPER(te.local_currency) = UPPER(w.currency)
+    `;
+    return Number(row?.balance || 0);
+  }
+
+  /** Leftover balances of another trip's wallets that could start this trip. */
+  static async getCarryOverCandidates(userId: string, tripId: string, sourceTripId: string) {
+    const [trips] = await prisma.$queryRaw<Array<{ count: number }>>`
+      SELECT COUNT(*)::int AS count FROM trips WHERE user_id = ${userId} AND id IN (${tripId}, ${sourceTripId})
+    `;
+    if (trips.count !== 2 || tripId === sourceTripId) throw new Error("Trip not found or unauthorized");
+    const wallets = await TripRepository.findWallets(userId, sourceTripId);
+    const destinationWallets = await TripRepository.findWallets(userId, tripId);
+    const [baseRow] = await prisma.$queryRaw<Array<{ source: string; destination: string }>>`
+      SELECT
+        (SELECT base_currency FROM trips WHERE id = ${sourceTripId}) AS source,
+        (SELECT base_currency FROM trips WHERE id = ${tripId}) AS destination
+    `;
+    const candidates = [];
+    for (const wallet of wallets) {
+      const balance = TripRepository.roundMoney(await TripRepository.getWalletBalance(wallet.id));
+      if (!(balance > 0)) continue;
+      const inBase = wallet.currency.toUpperCase() === baseRow.source.toUpperCase();
+      const rate = inBase
+        ? 1
+        : await TripRepository.getWalletWeightedFxRate(sourceTripId, wallet.id).catch(() => null);
+      const match = destinationWallets.find(
+        (candidate) =>
+          candidate.currency === wallet.currency &&
+          (wallet.accountId ? candidate.accountId === wallet.accountId : candidate.name === wallet.name),
+      );
+      candidates.push({
+        sourceWalletId: wallet.id,
+        name: wallet.name,
+        accountId: wallet.accountId,
+        currency: wallet.currency,
+        balance,
+        fxRate: rate,
+        baseValue: rate ? TripRepository.roundMoney(balance * rate) : null,
+        destinationWalletId: match?.id ?? null,
+      });
+    }
+    return {
+      sameBaseCurrency: baseRow.source.toUpperCase() === baseRow.destination.toUpperCase(),
+      candidates,
+    };
+  }
+
+  /**
+   * Carries leftover wallet balances from another trip into this one. Each becomes a
+   * transfer out of the old trip valued at that wallet's average rate, received here
+   * at the same base value, so the money keeps its exact cost.
+   */
+  static async carryOverWallets(
+    userId: string,
+    tripId: string,
+    input: {
+      sourceTripId: string;
+      items: Array<{ sourceWalletId: string; amount?: number | null; destinationWalletId?: string | null; fxRate?: number | null }>;
+      date?: Date;
+    },
+  ) {
+    const { sameBaseCurrency, candidates } = await TripRepository.getCarryOverCandidates(userId, tripId, input.sourceTripId);
+    if (!sameBaseCurrency) throw new Error("Both trips need the same base currency to carry money over.");
+    const [destinationTrip] = await prisma.$queryRaw<Array<{ startDate: Date }>>`
+      SELECT start_date AS "startDate" FROM trips WHERE id = ${tripId}
+    `;
+    const created: Array<{ sourceWalletId: string; entryId: string }> = [];
+    for (const item of input.items) {
+      const candidate = candidates.find((row) => row.sourceWalletId === item.sourceWalletId);
+      if (!candidate) throw new Error("That wallet has no balance to carry over.");
+      const amount = item.amount ?? candidate.balance;
+      if (!(amount > 0) || amount - candidate.balance > 0.0001) {
+        throw new Error(`You can carry over at most ${candidate.balance} ${candidate.currency} from ${candidate.name}.`);
+      }
+      const rate = item.fxRate ?? candidate.fxRate;
+      if (!rate) throw new Error(`${candidate.name} has no funding to value it; enter a rate.`);
+      let destinationWalletId = item.destinationWalletId ?? candidate.destinationWalletId;
+      if (!destinationWalletId) {
+        const wallet = await TripRepository.createWallet(userId, tripId, {
+          name: candidate.name,
+          currency: candidate.currency,
+          accountId: candidate.accountId,
+        });
+        destinationWalletId = wallet.id;
+      }
+      const result = await TripRepository.createTripEntry(userId, input.sourceTripId, {
+        walletId: candidate.sourceWalletId,
+        type: "funding_out",
+        date: input.date ?? destinationTrip.startDate,
+        description: `Carried over to the next trip`,
+        localCurrency: candidate.currency,
+        localAmount: amount,
+        fxRate: rate,
+        fundingOut: {
+          destinationType: "trip",
+          destinationTripId: tripId,
+          destinationWalletId,
+          destinationCurrency: candidate.currency,
+          destinationAmount: amount,
+        },
+        metadata: { carryOver: true },
+      });
+      created.push({ sourceWalletId: candidate.sourceWalletId, entryId: result.id });
+    }
+    return { created };
   }
 
   /**
@@ -3864,12 +4229,22 @@ export class TripRepository {
           return cachedWalletId;
         }
 
+        // Statements route by the provider's account, so renamed wallets are still found.
+        const providerName = String(metadata.provider || parserProvider || "").trim();
+        const account =
+          providerName && providerName !== "Trip"
+            ? await TripRepository.ensureProviderAccountTx(tx, userId, providerName)
+            : null;
         const [existingWallet] = await tx.$queryRaw<Array<{ id: string }>>`
           SELECT id
           FROM wallets
           WHERE trip_id = ${tripId}
-            AND name = ${walletName}
             AND currency = ${normalizedCurrency}
+            AND (
+              (${account?.id ?? null}::text IS NOT NULL AND account_id = ${account?.id ?? null})
+              OR name = ${walletName}
+            )
+          ORDER BY (account_id IS NOT DISTINCT FROM ${account?.id ?? null}) DESC
           LIMIT 1
         `;
 
@@ -3886,6 +4261,8 @@ export class TripRepository {
           INSERT INTO wallets (
             id,
             trip_id,
+            user_id,
+            account_id,
             name,
             currency,
             color,
@@ -3895,6 +4272,8 @@ export class TripRepository {
           VALUES (
             ${randomUUID()},
             ${tripId},
+            ${userId},
+            ${account?.id ?? null},
             ${walletName},
             ${normalizedCurrency},
             ${TripRepository.pickWalletColor(`${tripId}::${walletName}::${normalizedCurrency}`)},
@@ -5084,6 +5463,19 @@ export class TripRepository {
         for (const suggestion of openingBalanceSuggestions.values()) {
           const suggestionKey = `${suggestion.walletId}::${suggestion.destinationCurrency}`;
           if (existingKeySet.has(suggestionKey)) {
+            continue;
+          }
+          // Money carried over from the previous trip already is this opening balance.
+          const [carried] = await tx.$queryRaw<Array<{ id: string }>>`
+            SELECT id FROM trip_fundings
+            WHERE trip_id = ${tripId}
+              AND wallet_id = ${suggestion.walletId}
+              AND source_type = 'from_trip_outgoing'
+              AND ABS(destination_amount - ${suggestion.openingAmount}) <= GREATEST(1, ${suggestion.openingAmount} * 0.01)
+            LIMIT 1
+          `;
+          if (carried) {
+            existingKeySet.add(suggestionKey);
             continue;
           }
           existingKeySet.add(suggestionKey);

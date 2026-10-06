@@ -67,6 +67,8 @@ model User {
   transactions           Transaction[]
   importBatches          ImportBatch[]
   trips                  Trip[]
+  walletAccounts         WalletAccount[]
+  wallets                Wallet[]
   importRules            ImportRule[]
   classificationPatterns ClassificationPattern[]
   apiTokens              ApiToken[]
@@ -520,20 +522,47 @@ model Trip {
   @@map("trips")
 }
 
+/// A wallet the user keeps across trips, e.g. their Revolut account. Each trip has its
+/// own Wallet rows (one per currency) so a trip's exchange rates never change later.
+model WalletAccount {
+  id         String    @id @default(cuid())
+  userId     String    @map("user_id")
+  name       String
+  /// Import routing key for statement providers, e.g. "revolut" or "youtrip".
+  provider   String?
+  color      String    @default("#60a5fa")
+  archivedAt DateTime? @map("archived_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallets Wallet[]
+
+  @@unique([userId, name])
+  @@index([userId, provider])
+  @@map("wallet_accounts")
+}
+
 model Wallet {
   id        String   @id @default(cuid())
   tripId    String   @map("trip_id")
+  userId    String   @map("user_id")
+  accountId String?  @map("account_id")
   name      String
   currency  String
   color     String   @default("#60a5fa")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  trip     Trip          @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  trip     Trip           @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account  WalletAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
   fundings TripFunding[]
   entries  TripEntry[]
 
   @@unique([tripId, name, currency])
+  @@index([accountId])
+  @@index([userId])
   @@map("wallets")
 }
 
