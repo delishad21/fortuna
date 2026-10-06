@@ -20,9 +20,20 @@ import {
   today,
   TransactionRow,
   Txt,
+  useTheme,
 } from "./ui";
 const options = (values: string[]) =>
   values.map((value) => ({ label: value.replaceAll("_", " "), value }));
+// Set by the server when the bank transaction behind an entry is deleted.
+function DetachedNote({ item }: any) {
+  const { colors } = useTheme();
+  if (!item.metadata?.sourceDetached) return null;
+  return (
+    <Txt size={12} style={{ color: colors.red }}>
+      Bank transaction removed — relink or delete
+    </Txt>
+  );
+}
 export function TripsScreen({ navigation }: any) {
   const result = useResource("getTrips");
   return (
@@ -167,7 +178,7 @@ export function TripScreen({ route, navigation }: any) {
               }
             />
             <Button
-              title="Add expense"
+              title="Add entry"
               icon="add"
               onPress={() =>
                 navigation.navigate("TripEntry", { tripId, trip: t })
@@ -328,7 +339,7 @@ export function TripScreen({ route, navigation }: any) {
                 onPress={() => navigation.navigate("TripEditor", { trip: t })}
               />
               <Button
-                title="Add transactions from bank"
+                title="Add from bank"
                 secondary
                 onPress={() =>
                   navigation.navigate("BankPicker", { tripId, mode: "entries" })
@@ -787,20 +798,22 @@ export function TripEntriesScreen({ route, navigation }: any) {
       )}
       <State {...data} />
       {data.data?.items.map((item: any) => (
-        <TransactionRow
-          key={item.id}
-          item={item}
-          selected={selected.includes(item.id)}
-          onPress={() =>
-            selecting
-              ? setSelected((old) =>
-                  old.includes(item.id)
-                    ? old.filter((i) => i !== item.id)
-                    : [...old, item.id],
-                )
-              : navigation.navigate("TripEntry", { tripId, trip, item })
-          }
-        />
+        <View key={item.id}>
+          <TransactionRow
+            item={item}
+            selected={selected.includes(item.id)}
+            onPress={() =>
+              selecting
+                ? setSelected((old) =>
+                    old.includes(item.id)
+                      ? old.filter((i) => i !== item.id)
+                      : [...old, item.id],
+                  )
+                : navigation.navigate("TripEntry", { tripId, trip, item })
+            }
+          />
+          <DetachedNote item={item} />
+        </View>
       ))}
       <View style={styles.between}>
         <Button
@@ -832,78 +845,118 @@ export function TripEntryScreen({ route, navigation }: any) {
   const cats = useResource("getCategories", { scope: "trips" });
   const wallets = useResource("getWallets", tripId);
   const trips = useResource("getTrips");
-  const fields: Field[] = [
-    { key: "date", label: "Date", type: "date", required: true },
+  const bankSourced = !!item?.metadata?.sourceTransactionId;
+  const categoryField: Field = {
+    key: "categoryId",
+    label: "Category",
+    options: [
+      { label: "Uncategorized", value: null },
+      ...(cats.data || []).map((c: any) => ({ label: c.name, value: c.id })),
+    ],
+  };
+  const amountFields: Field[] = [
     {
-      key: "categoryId",
-      label: "Category",
-      options: [
-        { label: "Uncategorized", value: null },
-        ...(cats.data || []).map((c: any) => ({ label: c.name, value: c.id })),
-      ],
+      key: "walletId",
+      label: "Wallet",
+      options: (wallets.data || []).map((w: any) => ({
+        label: w.name,
+        value: w.id,
+      })),
     },
-    ...(!item
-      ? [
-          { key: "description", label: "Description", required: true },
-          { key: "label", label: "Label" },
-          {
-            key: "type",
-            label: "Entry type",
-            options: options(["spending", "reimbursement", "funding_out"]),
-          },
-          {
-            key: "walletId",
-            label: "Wallet",
-            options: (wallets.data || []).map((w: any) => ({
+    { key: "localCurrency", label: "Local currency", required: true },
+    {
+      key: "localAmount",
+      label: "Local amount",
+      type: "number",
+      required: true,
+    },
+    {
+      key: "baseAmount",
+      label: `Amount in ${trip.baseCurrency} (optional)`,
+      type: "number",
+      hint: item
+        ? "Change only the local amount to revalue it for you"
+        : "Leave blank to use this wallet's average rate",
+    },
+    {
+      key: "fxRate",
+      label: `Rate to ${trip.baseCurrency} (optional)`,
+      type: "number",
+    },
+  ];
+  const editInitial = item && {
+    date: item.date.slice(0, 10),
+    description: item.description,
+    label: item.label || "",
+    categoryId: item.category?.id || null,
+    walletId: item.wallet?.id || null,
+    localCurrency: item.localCurrency,
+    localAmount: item.localAmount,
+    baseAmount: item.baseAmount,
+    fxRate: item.fxRate,
+  };
+  const fields: Field[] = item
+    ? [
+        { key: "date", label: "Date", type: "date", required: true },
+        { key: "description", label: "Description", required: true },
+        { key: "label", label: "Label" },
+        ...(item.type === "spending" ? [categoryField] : []),
+        ...(bankSourced ? [] : amountFields),
+      ]
+    : [
+        { key: "date", label: "Date", type: "date", required: true },
+        categoryField,
+        { key: "description", label: "Description", required: true },
+        { key: "label", label: "Label" },
+        {
+          key: "type",
+          label: "Entry type",
+          options: options(["spending", "reimbursement", "funding_out"]),
+        },
+        ...amountFields,
+        { key: "feeAmount", label: "Fee", type: "number" as const },
+        { key: "feeCurrency", label: "Fee currency" },
+        {
+          key: "destinationType",
+          label: "For outgoing funding: destination",
+          options: [
+            { label: "External", value: "external" },
+            { label: "Bank", value: "bank" },
+            { label: "Another trip", value: "trip" },
+            { label: "Another wallet in this trip", value: "wallet" },
+          ],
+        },
+        {
+          key: "destinationWalletId",
+          label: "Destination wallet (if another wallet)",
+          options: [
+            { label: "None", value: "" },
+            ...(wallets.data || []).map((w: any) => ({
               label: w.name,
               value: w.id,
             })),
-          },
-          { key: "localCurrency", label: "Local currency", required: true },
-          {
-            key: "localAmount",
-            label: "Local amount",
-            type: "number" as const,
-            required: true,
-          },
-          {
-            key: "baseAmount",
-            label: `Amount in ${trip.baseCurrency}`,
-            type: "number" as const,
-            required: true,
-          },
-          { key: "fxRate", label: "Exchange rate", type: "number" as const },
-          { key: "feeAmount", label: "Fee", type: "number" as const },
-          { key: "feeCurrency", label: "Fee currency" },
-          {
-            key: "destinationType",
-            label: "For outgoing funding: destination",
-            options: options(["external", "bank", "trip"]),
-          },
-          {
-            key: "destinationTripId",
-            label: "Destination trip (if applicable)",
-            options: [
-              { label: "None", value: "" },
-              ...(trips.data || [])
-                .filter((t: any) => t.id !== tripId)
-                .map((t: any) => ({ label: t.name, value: t.id })),
-            ],
-          },
-          { key: "destinationCurrency", label: "Destination currency" },
-          {
-            key: "destinationAmount",
-            label: "Destination amount",
-            type: "number" as const,
-          },
-        ]
-      : []),
-  ];
+          ],
+        },
+        {
+          key: "destinationTripId",
+          label: "Destination trip (if applicable)",
+          options: [
+            { label: "None", value: "" },
+            ...(trips.data || [])
+              .filter((t: any) => t.id !== tripId)
+              .map((t: any) => ({ label: t.name, value: t.id })),
+          ],
+        },
+        { key: "destinationCurrency", label: "Destination currency" },
+        {
+          key: "destinationAmount",
+          label: "Destination amount",
+          type: "number" as const,
+        },
+      ];
   return (
     <Screen>
-      <Heading
-        title={item ? item.label || item.description : "Add a trip transaction"}
-      />
+      <Heading title={item ? item.label || item.description : "Add entry"} />
       {item && (
         <Card>
           <Txt>
@@ -913,56 +966,117 @@ export function TripEntryScreen({ route, navigation }: any) {
           <Txt muted>
             {item.type} · {item.wallet?.name}
           </Txt>
+          <DetachedNote item={item} />
         </Card>
       )}
-      <Form
-        initial={
-          item
-            ? {
-                date: item.date.slice(0, 10),
-                categoryId: item.category?.id || null,
-              }
-            : {
-                date: today(),
-                type: "spending",
-                localCurrency: trip.baseCurrency,
-                destinationType: "external",
-                feeAmount: 0,
-                feeCurrency: trip.baseCurrency,
-              }
-        }
-        fields={fields}
-        onSave={async (v) => {
-          if (item)
-            await call("bulkUpdateTripEntriesByIds", tripId, [item.id], v);
-          else {
-            if (!(v.localAmount > 0 && v.baseAmount >= 0))
-              throw new Error("Enter valid local and base amounts");
-            const {
-              destinationType,
-              destinationTripId,
-              destinationCurrency,
-              destinationAmount,
-              ...payload
-            } = v;
-            await call("createTripEntry", tripId, {
-              ...payload,
-              ...(v.type === "funding_out"
-                ? {
-                    fundingOut: {
-                      destinationType,
-                      destinationTripId: destinationTripId || null,
-                      destinationCurrency:
-                        destinationCurrency || v.localCurrency,
-                      destinationAmount: destinationAmount || v.localAmount,
-                    },
-                  }
-                : {}),
-            });
+      {item?.type === "funding_in" && (
+        <Txt muted>Edit this funding from the trip's Funding tab.</Txt>
+      )}
+      {item && item.type !== "funding_in" && bankSourced && (
+        <Txt muted>
+          Amount and wallet come from the bank transaction. Change them there.
+        </Txt>
+      )}
+      {item?.type !== "funding_in" && (
+        <Form
+          initial={
+            item
+              ? editInitial
+              : {
+                  date: today(),
+                  type: "spending",
+                  localCurrency: trip.baseCurrency,
+                  destinationType: "external",
+                  feeAmount: 0,
+                  feeCurrency: trip.baseCurrency,
+                }
           }
-          navigation.goBack();
-        }}
-      />
+          fields={fields}
+          onSave={async (v) => {
+            if (item) {
+              // Send only what changed; untouched amounts keep their value.
+              const blank = (x: any) => (x === "" || x == null ? null : x);
+              const changes: Record<string, any> = {};
+              for (const f of fields)
+                if (
+                  String(blank(v[f.key])) !== String(blank(editInitial[f.key]))
+                )
+                  changes[f.key] = blank(v[f.key]);
+              if (changes.localCurrency) {
+                if (!/^[A-Za-z]{3}$/.test(changes.localCurrency.trim()))
+                  throw new Error(
+                    "Use a three-letter currency code, such as SGD",
+                  );
+                changes.localCurrency = changes.localCurrency
+                  .trim()
+                  .toUpperCase();
+              }
+              if ("localAmount" in changes && !(changes.localAmount > 0))
+                throw new Error("Enter a local amount above 0");
+              for (const key of ["baseAmount", "fxRate"])
+                if (changes[key] != null && !(changes[key] > 0))
+                  throw new Error("Amounts and rates must be above 0");
+              if (Object.keys(changes).length)
+                await call("updateTripEntry", tripId, item.id, changes);
+            } else {
+              if (!(v.localAmount > 0))
+                throw new Error("Enter a local amount above 0");
+              if (
+                v.baseAmount !== "" &&
+                v.baseAmount != null &&
+                !(v.baseAmount > 0)
+              )
+                throw new Error(
+                  `Enter a ${trip.baseCurrency} amount above 0, or leave it blank`,
+                );
+              const {
+                destinationType,
+                destinationTripId,
+                destinationWalletId,
+                destinationCurrency,
+                destinationAmount,
+                ...payload
+              } = v;
+              const toWallet =
+                destinationType === "wallet"
+                  ? (wallets.data || []).find(
+                      (w: any) => w.id === destinationWalletId,
+                    )
+                  : null;
+              if (v.type === "funding_out" && destinationType === "wallet") {
+                if (!toWallet) throw new Error("Choose the destination wallet");
+                if (toWallet.id === v.walletId)
+                  throw new Error("Choose a different destination wallet");
+              }
+              const toCurrency =
+                destinationCurrency || toWallet?.currency || v.localCurrency;
+              if (
+                v.type === "funding_out" &&
+                !destinationAmount &&
+                toCurrency.toUpperCase() !== v.localCurrency.toUpperCase()
+              )
+                throw new Error("Enter the destination amount");
+              await call("createTripEntry", tripId, {
+                ...payload,
+                baseAmount: v.baseAmount || null,
+                fxRate: v.fxRate || null,
+                ...(v.type === "funding_out"
+                  ? {
+                      fundingOut: {
+                        destinationType,
+                        destinationTripId: destinationTripId || null,
+                        destinationWalletId: toWallet?.id || null,
+                        destinationCurrency: toCurrency,
+                        destinationAmount: destinationAmount || v.localAmount,
+                      },
+                    }
+                  : {}),
+              });
+            }
+            navigation.goBack();
+          }}
+        />
+      )}
       {item && (
         <>
           <Button
@@ -1031,7 +1145,9 @@ export function BankPickerScreen({ route, navigation }: any) {
         title={
           mode === "outgoing"
             ? "Funding from another trip"
-            : "Choose bank transactions"
+            : mode === "funding"
+              ? "Choose bank transaction"
+              : "Add from bank"
         }
       />
       <Input
@@ -1101,9 +1217,9 @@ export function BankPickerScreen({ route, navigation }: any) {
                 bankTransactionId: selected[0],
               });
             else
+              // No entryType: the server makes debits spending and credits reimbursements.
               await call("addEntriesFromSourceTransactions", tripId, {
                 transactionIds: selected,
-                entryType: "spending",
               });
             navigation.goBack();
           } catch (e) {

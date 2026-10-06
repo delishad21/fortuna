@@ -188,7 +188,7 @@ export function Button({
     </Pressable>
   );
 }
-export function Input({ label, value, onChangeText, ...props }: any) {
+export function Input({ label, value, onChangeText, hint, ...props }: any) {
   const { colors } = useTheme();
   return (
     <View style={{ gap: 7 }}>
@@ -210,6 +210,11 @@ export function Input({ label, value, onChangeText, ...props }: any) {
         ]}
         {...props}
       />
+      {!!hint && (
+        <Txt muted size={12}>
+          {hint}
+        </Txt>
+      )}
     </View>
   );
 }
@@ -430,6 +435,7 @@ export type Field = {
   type?: "number" | "password" | "boolean" | "date";
   options?: { label: string; value: any }[];
   required?: boolean;
+  hint?: string;
 };
 export function Form({
   fields,
@@ -478,6 +484,7 @@ export function Form({
           <Input
             key={field.key}
             label={field.label}
+            hint={field.hint}
             value={String(value[field.key] ?? "")}
             onChangeText={(v: string) => set(field.key, v)}
             autoCapitalize={field.type === "password" ? "none" : "sentences"}
