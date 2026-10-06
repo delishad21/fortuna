@@ -70,6 +70,8 @@ model User {
   walletAccounts         WalletAccount[]
   wallets                Wallet[]
   tripParticipants       TripParticipant[]
+  ownedTripGroups        TripGroup[]        @relation("TripGroupOwner")
+  tripMemberships        TripMember[]       @relation("TripMemberUser")
   importRules            ImportRule[]
   classificationPatterns ClassificationPattern[]
   apiTokens              ApiToken[]
@@ -510,6 +512,7 @@ model Trip {
   endDate       DateTime? @map("end_date")
   status        String    @default("active")
   notes         String?
+  groupId       String?   @map("group_id")
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
@@ -519,9 +522,12 @@ model Trip {
   entries                  TripEntry[]
   reimbursementAllocations TripReimbursementAllocation[]
   participants             TripParticipant[]
+  group                    TripGroup?                    @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  membership               TripMember?                   @relation("TripMemberTrip")
   settlementAllocations    TripSettlementAllocation[]
 
   @@index([userId, startDate])
+  @@index([groupId])
   @@map("trips")
 }
 
@@ -617,6 +623,10 @@ model TripEntry {
   linkedEntryId       String?  @map("linked_entry_id")
   /// IOU: who paid for me. Settlement: who I paid back.
   counterpartyId      String?  @map("counterparty_id")
+  /// A share of another member's entry in a shared trip (that entry's id).
+  sharedFromEntryId   String?  @map("shared_from_entry_id")
+  /// The member who created a share on this member's behalf.
+  createdBy           String?  @map("created_by")
   metadata            Json?
   createdAt           DateTime @default(now()) @map("created_at")
 
@@ -639,7 +649,46 @@ model TripEntry {
   @@index([sourceType])
   @@index([sourceTransactionId])
   @@index([counterpartyId])
+  @@index([sharedFromEntryId])
   @@map("trip_entries")
+}
+
+/// A trip shared between Fortuna users. Each member keeps their own Trip (their own
+/// wallets, funding and entries); the group links them for combined views and shares.
+model TripGroup {
+  id          String   @id @default(cuid())
+  ownerUserId String   @map("owner_user_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  owner   User         @relation("TripGroupOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  trips   Trip[]
+  members TripMember[]
+
+  @@map("trip_groups")
+}
+
+/// A user's place in a shared trip. `tripId` is the member's own trip, set when they accept.
+model TripMember {
+  id        String   @id @default(cuid())
+  groupId   String   @map("group_id")
+  userId    String   @map("user_id")
+  tripId    String?  @unique @map("trip_id")
+  /// owner | editor | viewer
+  role      String
+  /// invited | active | declined
+  status    String   @default("invited")
+  invitedBy String?  @map("invited_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  group TripGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User      @relation("TripMemberUser", fields: [userId], references: [id], onDelete: Cascade)
+  trip  Trip?     @relation("TripMemberTrip", fields: [tripId], references: [id], onDelete: SetNull)
+
+  @@unique([groupId, userId])
+  @@index([userId, status])
+  @@map("trip_members")
 }
 
 /// Someone on a trip: a friend who paid for me, or a Fortuna user sharing the trip.

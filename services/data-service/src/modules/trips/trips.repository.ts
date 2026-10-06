@@ -15,6 +15,7 @@ import {
   validateFundingOutFeeCurrency,
 } from "./trips.accounting";
 import { TripIouRepository } from "./trips.ious";
+import { TripSharingRepository } from "./trips.sharing";
 import {
   deleteRoleLinks,
   replaceLinks,
@@ -1591,7 +1592,11 @@ export class TripRepository {
         AND reimbursed_entry_id = ${reimbursedEntryId}
         AND (${excludeReimbursementEntryId || null}::text IS NULL OR reimbursement_entry_id <> ${excludeReimbursementEntryId || null})
     `;
-    const targetBase = Number(target.baseAmount || 0);
+    // Parts of the entry shared with other members are theirs to be reimbursed for.
+    const [shared] = await tx.$queryRaw<Array<{ shared: unknown }>>`
+      SELECT COALESCE(SUM(base_amount), 0) AS shared FROM trip_entries WHERE shared_from_entry_id = ${reimbursedEntryId}
+    `;
+    const targetBase = Math.max(Number(target.baseAmount || 0) - Number(shared?.shared || 0), 0);
     const allocatedBase = Number(allocated?.allocated || 0);
     return {
       targetBase,
@@ -2221,7 +2226,8 @@ export class TripRepository {
       WHERE user_id = ${userId}
       ORDER BY start_date DESC
     `;
-    return rows.map(TripRepository.mapTrip);
+    const sharing = await TripSharingRepository.sharingSummaries(userId);
+    return rows.map((row) => ({ ...TripRepository.mapTrip(row), sharing: sharing.get(row.id) ?? null }));
   }
 
   static async findById(userId: string, tripId: string) {
@@ -2242,7 +2248,9 @@ export class TripRepository {
       WHERE id = ${tripId} AND user_id = ${userId}
       LIMIT 1
     `;
-    return rows[0] ? TripRepository.mapTrip(rows[0]) : null;
+    if (!rows[0]) return null;
+    const sharing = await TripSharingRepository.sharingSummaries(userId);
+    return { ...TripRepository.mapTrip(rows[0]), sharing: sharing.get(tripId) ?? null };
   }
 
   static async updateTrip(
@@ -2279,6 +2287,10 @@ export class TripRepository {
     }
 
     const baseCurrency = normalizeOptionalCurrencyUpdate(data.baseCurrency);
+    const sharedGroupId = await TripSharingRepository.beforeTripUpdateTx(prisma, userId, tripId, {
+      ...data,
+      baseCurrency,
+    });
     // Stored base amounts are in the trip's currency; relabelling them would be wrong.
     if (
       baseCurrency &&
@@ -2321,6 +2333,9 @@ export class TripRepository {
         created_at AS "createdAt",
         updated_at AS "updatedAt"
     `;
+    if (sharedGroupId) {
+      await prisma.$transaction((tx) => TripSharingRepository.syncSharedDetailsTx(tx, sharedGroupId, tripId));
+    }
 
     return TripRepository.mapTrip(trip);
   }
@@ -2337,6 +2352,7 @@ export class TripRepository {
     }
 
     const recalcTargets = await prisma.$transaction(async (tx) => {
+      await TripSharingRepository.beforeTripDeleteTx(tx, userId, tripId);
       const entryIds = (
         await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM trip_entries WHERE trip_id = ${tripId}`
       ).map((row) => row.id);
@@ -7934,6 +7950,8 @@ export class TripRepository {
       DELETE FROM trip_fundings
       WHERE trip_id = ${tripId} AND entry_id = ANY(${existingIds})
     `;
+    // Shares of these entries in other members' trips go with them.
+    await tx.$executeRaw`DELETE FROM trip_entries WHERE shared_from_entry_id = ANY(${existingIds})`;
     const count = Number(
       await tx.$executeRaw`
         DELETE FROM trip_entries

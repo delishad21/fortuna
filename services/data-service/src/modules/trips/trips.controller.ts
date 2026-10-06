@@ -2,9 +2,11 @@ import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { TripService } from "./trips.service";
 import { TripIouRepository } from "./trips.ious";
+import { TripSharingRepository } from "./trips.sharing";
 import { buildFundingUpdatePayload } from "./trips.accounting";
 
 export const walletAccountsRouter = Router();
+export const tripInvitationsRouter = Router();
 export const tripsRouter = Router();
 
 const TripCreateSchema = z.object({
@@ -1216,6 +1218,86 @@ tripsRouter.put("/:id/settlements/:entryId/allocations", async (req: Request, re
   }
 });
 
+tripsRouter.post("/:id/share/invite", async (req: Request, res: Response) => {
+  try {
+    const { userId, ...input } = z
+      .object({
+        userId: z.string(),
+        usernameOrEmail: z.string().trim().min(1),
+        role: z.enum(["editor", "viewer"]).default("editor"),
+      })
+      .parse(req.body);
+    res.json(await TripSharingRepository.invite(userId, String(req.params.id), input));
+  } catch (error: any) {
+    res.status(error.status || 400).json({ error: error.message || "Failed to invite" });
+  }
+});
+
+tripsRouter.get("/:id/members", async (req: Request, res: Response) => {
+  try {
+    const { userId } = z.object({ userId: z.string() }).parse(req.query);
+    res.json({ members: await TripSharingRepository.listMembers(userId, String(req.params.id)) });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to load members" });
+  }
+});
+
+tripsRouter.patch("/:id/members/:memberUserId", async (req: Request, res: Response) => {
+  try {
+    const { userId, role } = z
+      .object({ userId: z.string(), role: z.enum(["editor", "viewer"]) })
+      .parse(req.body);
+    res.json(
+      await TripSharingRepository.updateMemberRole(userId, String(req.params.id), String(req.params.memberUserId), role),
+    );
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to change role" });
+  }
+});
+
+tripsRouter.delete("/:id/members/:memberUserId", async (req: Request, res: Response) => {
+  try {
+    const { userId } = z.object({ userId: z.string() }).parse(req.body);
+    res.json(await TripSharingRepository.removeMember(userId, String(req.params.id), String(req.params.memberUserId)));
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to remove member" });
+  }
+});
+
+tripsRouter.post("/:id/leave", async (req: Request, res: Response) => {
+  try {
+    const { userId } = z.object({ userId: z.string() }).parse(req.body);
+    res.json(await TripSharingRepository.leave(userId, String(req.params.id)));
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to leave the trip" });
+  }
+});
+
+tripsRouter.get("/:id/shared", async (req: Request, res: Response) => {
+  try {
+    const { userId } = z.object({ userId: z.string() }).parse(req.query);
+    res.json(await TripSharingRepository.getOverview(userId, String(req.params.id)));
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to load the shared trip" });
+  }
+});
+
+tripsRouter.put("/:id/entries/:entryId/shares", async (req: Request, res: Response) => {
+  try {
+    const { userId, shares } = z
+      .object({
+        userId: z.string(),
+        shares: z.array(z.object({ userId: z.string(), localAmount: z.number().nonnegative() })),
+      })
+      .parse(req.body);
+    res.json(
+      await TripSharingRepository.setShares(userId, String(req.params.id), String(req.params.entryId), shares),
+    );
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to share the cost" });
+  }
+});
+
 tripsRouter.get("/:id/analytics", async (req: Request, res: Response) => {
   try {
     const userId = String(req.query.userId || "");
@@ -1263,5 +1345,32 @@ walletAccountsRouter.patch("/:accountId", async (req: Request, res: Response) =>
     res.json({ account: await TripService.updateWalletAccount(userId, String(req.params.accountId), data) });
   } catch (error: any) {
     res.status(400).json({ error: error.message || "Failed to update wallet account" });
+  }
+});
+
+tripInvitationsRouter.get("/", async (req: Request, res: Response) => {
+  try {
+    const { userId } = z.object({ userId: z.string() }).parse(req.query);
+    res.json({ invitations: await TripSharingRepository.listInvitations(userId) });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to load invitations" });
+  }
+});
+
+tripInvitationsRouter.post("/:memberId/accept", async (req: Request, res: Response) => {
+  try {
+    const { userId } = z.object({ userId: z.string() }).parse(req.body);
+    res.json(await TripSharingRepository.acceptInvitation(userId, String(req.params.memberId)));
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to accept the invitation" });
+  }
+});
+
+tripInvitationsRouter.post("/:memberId/decline", async (req: Request, res: Response) => {
+  try {
+    const { userId } = z.object({ userId: z.string() }).parse(req.body);
+    res.json(await TripSharingRepository.declineInvitation(userId, String(req.params.memberId)));
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to decline the invitation" });
   }
 });

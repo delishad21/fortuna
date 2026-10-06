@@ -635,3 +635,94 @@ test("IOUs count when incurred and take their real cost once settled", () =>
       await assert.rejects(TripIouRepository.deleteParticipant(user.id, trip.id, alice.id), /still has/);
     }),
   ));
+
+test("shared trips: members keep their own ledgers, shares become IOUs, and settle-up adds up", () =>
+  withChatDb((db) =>
+    withDatabase(db, async () => {
+      const { user: dad, trip } = await seed(db);
+      const { TripSharingRepository } = await import("./trips.sharing");
+      const { TripIouRepository } = await import("./trips.ious");
+      await db.user.update({ where: { id: dad.id }, data: { name: "Dad" } });
+      const mom = await db.user.create({ data: { username: `mom-${Date.now()}`, name: "Mom", email: `mom-${Date.now()}@example.com` } });
+      const kid = await db.user.create({ data: { username: `kid-${Date.now()}` } });
+
+      await TripSharingRepository.invite(dad.id, trip.id, { usernameOrEmail: mom.email as string, role: "editor" });
+      await TripSharingRepository.invite(dad.id, trip.id, { usernameOrEmail: kid.username, role: "viewer" });
+      const [momInvite] = await TripSharingRepository.listInvitations(mom.id);
+      assert.equal(momInvite.tripName, "Japan");
+      const { tripId: momTrip } = await TripSharingRepository.acceptInvitation(mom.id, momInvite.memberId);
+      const [kidInvite] = await TripSharingRepository.listInvitations(kid.id);
+      const { tripId: kidTrip } = await TripSharingRepository.acceptInvitation(kid.id, kidInvite.memberId);
+
+      await TripRepository.updateTrip(dad.id, trip.id, { name: "Japan 2026" });
+      assert.equal((await db.trip.findUniqueOrThrow({ where: { id: momTrip } })).name, "Japan 2026", "owner edits reach members");
+      await assert.rejects(TripRepository.updateTrip(mom.id, momTrip, { name: "Mine" }), /Only the trip owner/);
+
+      const hotel = entryIdOf(
+        await TripRepository.createTripEntry(dad.id, trip.id, {
+          type: "spending",
+          date: new Date("2026-09-02"),
+          description: "Hotel",
+          localCurrency: "SGD",
+          localAmount: 300,
+        } as never),
+      );
+      await TripSharingRepository.setShares(dad.id, trip.id, hotel, [{ userId: mom.id, localAmount: 150 }]);
+      await assert.rejects(
+        TripSharingRepository.setShares(dad.id, trip.id, hotel, [{ userId: kid.id, localAmount: 50 }]),
+        /Viewers/,
+      );
+
+      // Mom's own ledger has only her share, as an IOU to Dad.
+      const momEntries = await TripRepository.getTripEntries(mom.id, momTrip, {} as never);
+      assert.equal(momEntries.items.length, 1);
+      assert.equal(momEntries.items[0].baseAmount, 150);
+      assert.equal(momEntries.items[0].counterparty?.name, "Dad");
+
+      let overview = await TripSharingRepository.getOverview(mom.id, momTrip);
+      assert.equal(overview.totals.combinedSpent, 300, "a share is not extra spending");
+      const net = Object.fromEntries(overview.totals.members.map((row) => [row.name, row.net]));
+      assert.equal(net.Dad, 150);
+      assert.equal(net.Mom, 150);
+      assert.deepEqual(
+        overview.settleUp.map((row) => [row.from.name, row.to.name, row.amountBase]),
+        [["Mom", "Dad", 150]],
+      );
+      const visible = overview.entries.find((entry) => entry.id === hotel)!;
+      assert.equal(visible.shares[0].name, "Mom");
+      assert.ok(!("metadata" in visible) && !("wallet" in visible), "no private details");
+
+      // Mom pays Dad back from her bank.
+      const payNow = await db.transaction.create({
+        data: { userId: mom.id, date: new Date("2026-09-12"), description: "PayNow to Dad", amountOut: 150, accountIdentifier: "DBS" },
+      });
+      const [dadPerson] = await TripIouRepository.listParticipants(mom.id, momTrip);
+      await TripRepository.addEntriesFromSourceTransactions(mom.id, momTrip, {
+        transactionIds: [payNow.id],
+        entryType: "settlement",
+        counterpartyId: dadPerson.id,
+      });
+      overview = await TripSharingRepository.getOverview(dad.id, trip.id);
+      assert.equal(overview.settleUp.length, 0, "settled");
+
+      // Viewers can't change their trip, whatever the code path.
+      await assert.rejects(
+        TripRepository.createTripEntry(kid.id, kidTrip, {
+          type: "spending",
+          date: new Date("2026-09-03"),
+          description: "Snack",
+          localCurrency: "SGD",
+          localAmount: 5,
+        } as never),
+        /only view/,
+      );
+
+      // Leaving keeps Mom's trip as her own; the owner deleting ends the group.
+      await TripSharingRepository.leave(mom.id, momTrip);
+      assert.equal((await db.trip.findUniqueOrThrow({ where: { id: momTrip } })).groupId, null);
+      assert.equal(await db.tripEntry.count({ where: { tripId: momTrip } }), 2, "her history stays");
+      await TripRepository.deleteTrip(dad.id, trip.id);
+      const kidTripAfter = await db.trip.findUniqueOrThrow({ where: { id: kidTrip } });
+      assert.equal(kidTripAfter.groupId, null, "other members keep a personal copy");
+    }),
+  ));
