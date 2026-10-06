@@ -410,3 +410,76 @@ test("bank rows assigned to a trip in a staged import become trip entries on com
       assert.equal(entry.categoryId, food.id);
     }),
   ));
+
+test("saved entries can be edited, and transfers carry the change to the receiving wallet", () =>
+  withChatDb((db) =>
+    withDatabase(db, async () => {
+      const { user, trip, wallet, fund, spend, entry, food } = await seed(db);
+      const usd = await wallet("Revolut", "USD");
+      const cash = await wallet("Cash", "USD");
+      await fund(usd.id, 135, 100);
+
+      const dinner = entryIdOf(await spend(usd.id, 20));
+      await TripRepository.updateTripEntry(user.id, trip.id, dinner, { localAmount: 30, description: "Dinner for two" });
+      const edited = await entry(dinner);
+      assert.equal(Number(edited.baseAmount), 40.5, "re-valued at the wallet rate");
+      assert.equal(edited.description, "Dinner for two");
+
+      const locked = entryIdOf(await spend(usd.id, 10, { fxRate: 1.5 }));
+      await TripRepository.updateTripEntry(user.id, trip.id, locked, { localAmount: 20 });
+      assert.equal(Number((await entry(locked)).baseAmount), 30, "a locked entry keeps its own rate");
+
+      const withdrawal = entryIdOf(
+        await TripRepository.createTripEntry(user.id, trip.id, {
+          walletId: usd.id,
+          type: "funding_out",
+          date: new Date("2026-09-04"),
+          description: "ATM",
+          localCurrency: "USD",
+          localAmount: 40,
+          fundingOut: { destinationType: "wallet", destinationWalletId: cash.id },
+        } as never),
+      );
+      await TripRepository.updateTripEntry(user.id, trip.id, withdrawal, { localAmount: 50 });
+      const cashFunding = await db.tripFunding.findFirstOrThrow({ where: { walletId: cash.id } });
+      assert.equal(Number(cashFunding.destinationAmount), 50, "the cash wallet receives the new amount");
+
+      const bankDinner = await db.transaction.create({
+        data: { userId: user.id, date: new Date("2026-09-02"), description: "Card dinner", amountOut: 60, accountIdentifier: "DBS" },
+      });
+      await TripRepository.addEntriesFromSourceTransactions(user.id, trip.id, {
+        transactionIds: [bankDinner.id],
+        entryType: "spending",
+        categoryId: food.id,
+      });
+      const bankEntry = await db.tripEntry.findFirstOrThrow({ where: { sourceTransactionId: bankDinner.id } });
+      await assert.rejects(
+        TripRepository.updateTripEntry(user.id, trip.id, bankEntry.id, { localAmount: 70 }),
+        /bank transaction/,
+      );
+      await TripRepository.updateTripEntry(user.id, trip.id, bankEntry.id, { label: "Ramen" });
+      assert.equal((await entry(bankEntry.id)).label, "Ramen");
+    }),
+  ));
+
+test("highlights recognise common category names", () =>
+  withChatDb((db) =>
+    withDatabase(db, async () => {
+      const { user, trip } = await seed(db);
+      const hotel = await db.category.create({ data: { userId: user.id, name: "Hotel", color: "#00f" } });
+      const airfare = await db.category.create({ data: { userId: user.id, name: "Airfare", color: "#0f0" } });
+      for (const [categoryId, amount] of [[hotel.id, 400], [airfare.id, 600]] as const) {
+        await TripRepository.createTripEntry(user.id, trip.id, {
+          type: "spending",
+          date: new Date("2026-09-01"),
+          description: "Booking",
+          categoryId,
+          localCurrency: "SGD",
+          localAmount: amount,
+        } as never);
+      }
+      const { highlights } = await TripRepository.getTripAnalytics(user.id, trip.id);
+      assert.equal(highlights.accommodations, 400);
+      assert.equal(highlights.flights, 600);
+    }),
+  ));

@@ -379,6 +379,15 @@ export class TripService {
     return TripRepository.addEntriesFromSourceTransactions(userId, tripId, input);
   }
 
+  static updateTripEntry(
+    userId: string,
+    tripId: string,
+    entryId: string,
+    input: Parameters<typeof TripRepository.updateTripEntry>[3],
+  ) {
+    return TripRepository.updateTripEntry(userId, tripId, entryId, input);
+  }
+
   static createTripEntry(
     userId: string,
     tripId: string,

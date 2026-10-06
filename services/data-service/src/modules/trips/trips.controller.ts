@@ -1030,6 +1030,37 @@ tripsRouter.delete(
   },
 );
 
+const TripEntryUpdateSchema = z.object({
+  userId: z.string(),
+  date: z.string().transform((value) => new Date(value)).optional(),
+  description: z.string().min(1).optional(),
+  label: z.string().optional().nullable(),
+  categoryId: z.string().optional().nullable(),
+  walletId: z.string().optional().nullable(),
+  localCurrency: z.string().trim().length(3).optional(),
+  localAmount: z.number().positive().optional(),
+  baseAmount: z.number().positive().optional().nullable(),
+  fxRate: z.number().positive().optional().nullable(),
+  fundingOut: TripEntryCreateSchema.shape.fundingOut,
+});
+
+// Registered after the bulk routes so "bulk-by-ids" is never taken for an entry id.
+tripsRouter.patch("/:id/entries/:entryId", async (req: Request, res: Response) => {
+  try {
+    const input = TripEntryUpdateSchema.parse(req.body);
+    const { userId, ...changes } = input;
+    const result = await TripService.updateTripEntry(
+      userId,
+      String(req.params.id || ""),
+      String(req.params.entryId || ""),
+      changes,
+    );
+    res.json(result);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Failed to update trip entry" });
+  }
+});
+
 tripsRouter.get("/:id/analytics", async (req: Request, res: Response) => {
   try {
     const userId = String(req.query.userId || "");
