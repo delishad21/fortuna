@@ -8,6 +8,7 @@ interface CheckboxProps {
   indeterminate?: boolean;
   disabled?: boolean;
   className?: string;
+  "aria-label"?: string;
 }
 
 export function Checkbox({
@@ -16,12 +17,14 @@ export function Checkbox({
   indeterminate = false,
   disabled = false,
   className = "",
+  "aria-label": ariaLabel,
 }: CheckboxProps) {
   return (
     <button
       type="button"
       role="checkbox"
       aria-checked={indeterminate ? "mixed" : checked}
+      aria-label={ariaLabel}
       disabled={disabled}
       onClick={(event) => {
         event.preventDefault();

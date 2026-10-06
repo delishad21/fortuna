@@ -164,3 +164,11 @@ export async function commitAgentDraftSelection(
     { method: "POST", body: JSON.stringify({ items, confirmed: true }) },
   );
 }
+
+/** Discard a staged import: it leaves the staged list, its links are removed, and an unretained statement file is deleted. */
+export async function discardAgentDraft(draftId: string) {
+  return request<{ draft: Record<string, any> }>(
+    `/api/agent/drafts/${encodeURIComponent(draftId)}`,
+    { method: "DELETE" },
+  );
+}

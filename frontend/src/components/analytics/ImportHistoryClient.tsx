@@ -4,11 +4,13 @@ import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { PageTabs } from "@/components/ui/PageTabs";
-import { Bot } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { ImportSummaryCard } from "@/components/analytics/ImportSummaryCard";
-import { getAgentDraft } from "@/app/actions/agentDrafts";
+import { discardAgentDraft, getAgentDraft } from "@/app/actions/agentDrafts";
+import { Modal } from "@/components/ui/Modal";
+import { Checkbox } from "@/components/ui/Checkbox";
 import { AgentDraftReviewClient } from "@/components/import/AgentDraftReviewClient";
 import { ImportClient } from "@/components/import/ImportClient";
 
@@ -58,9 +60,42 @@ export function ImportHistoryClient({
     Array<Record<string, any>>
   >([]);
   const [loadingTogether, setLoadingTogether] = useState(false);
+  const [removedDraftIds, setRemovedDraftIds] = useState<Set<string>>(new Set());
+  const [pendingDelete, setPendingDelete] = useState<string[] | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const staged = agentDrafts.filter(
-    (d) => !["committed", "discarded", "expired"].includes(d.status),
+    (d) =>
+      !["committed", "discarded", "expired"].includes(d.status) &&
+      !removedDraftIds.has(d.id),
   );
+  const deleteTargets = (pendingDelete || [])
+    .map((id) => staged.find((draft) => draft.id === id))
+    .filter((draft): draft is (typeof staged)[number] => !!draft);
+  const deleteDrafts = async (draftIds: string[]) => {
+    setDeleting(true);
+    setDeleteError("");
+    const removed: string[] = [];
+    try {
+      for (const draftId of draftIds) {
+        await discardAgentDraft(draftId);
+        removed.push(draftId);
+      }
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error ? error.message : "Could not delete the staged import",
+      );
+    } finally {
+      setRemovedDraftIds((current) => new Set([...current, ...removed]));
+      setSelectedDraftIds((current) => {
+        const next = new Set(current);
+        removed.forEach((id) => next.delete(id));
+        return next;
+      });
+      setDeleting(false);
+      router.refresh();
+    }
+  };
   const allSelected =
     staged.length > 0 &&
     staged.every((draft) => selectedDraftIds.has(draft.id));
@@ -153,24 +188,39 @@ export function ImportHistoryClient({
               />
             </>
           ) : (
-            <Card>
-              <CardHeader>
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <label className="flex min-h-11 items-center gap-3 text-sm font-medium text-dark dark:text-white">
-                    <input
-                      type="checkbox"
-                      checked={allSelected}
-                      onChange={(event) =>
-                        setSelectedDraftIds(
-                          event.target.checked
-                            ? new Set(staged.map((draft) => draft.id))
-                            : new Set(),
-                        )
-                      }
-                    />
-                    Select all staged imports
-                  </label>
+            <Card className="overflow-hidden p-0">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stroke px-5 py-3 dark:border-dark-3">
+                <div className="flex items-center gap-3 text-sm">
+                  <Checkbox
+                    checked={allSelected}
+                    indeterminate={selectedDraftIds.size > 0 && !allSelected}
+                    disabled={!staged.length}
+                    aria-label="Select all staged imports"
+                    onChange={(checked) =>
+                      setSelectedDraftIds(
+                        checked ? new Set(staged.map((draft) => draft.id)) : new Set(),
+                      )
+                    }
+                  />
+                  <span className="font-medium text-dark dark:text-white">
+                    {selectedDraftIds.size
+                      ? `${selectedDraftIds.size} of ${staged.length} selected`
+                      : `${staged.length} staged ${staged.length === 1 ? "import" : "imports"}`}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
                   <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={!selectedDraftIds.size || deleting}
+                    leftIcon={<Trash2 className="size-4" />}
+                    className="text-dark-5 hover:text-red dark:text-dark-6"
+                    onClick={() => setPendingDelete([...selectedDraftIds])}
+                  >
+                    Delete selected ({selectedDraftIds.size})
+                  </Button>
+                  <Button
+                    size="sm"
                     disabled={!selectedDraftIds.size || loadingTogether}
                     isLoading={loadingTogether}
                     onClick={() => void reviewSelected()}
@@ -178,86 +228,148 @@ export function ImportHistoryClient({
                     Review selected ({selectedDraftIds.size})
                   </Button>
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {missingPartners.length > 0 && (
-                  <div
-                    role="status"
-                    className="space-y-2 rounded-lg border border-yellow-dark/40 bg-yellow-light-4 p-3 text-sm text-dark dark:bg-dark-3 dark:text-white"
-                  >
-                    {missingPartners.map(({ draft, partner }) => (
-                      <div
-                        key={`${draft.id}:${partner.id}`}
-                        className="flex flex-wrap items-center justify-between gap-2"
+              </div>
+              {deleteError && (
+                <p
+                  role="alert"
+                  className="border-b border-stroke bg-red/5 px-5 py-3 text-sm text-red dark:border-dark-3"
+                >
+                  {deleteError}
+                </p>
+              )}
+              {missingPartners.length > 0 && (
+                <div
+                  role="status"
+                  className="space-y-2 border-b border-yellow-dark/30 bg-yellow-light-4 px-5 py-3 text-sm text-dark dark:bg-dark-3 dark:text-white"
+                >
+                  {missingPartners.map(({ draft, partner }) => (
+                    <div
+                      key={`${draft.id}:${partner.id}`}
+                      className="flex flex-wrap items-center justify-between gap-2"
+                    >
+                      <span>
+                        {draft.sourceFilename} has reimbursement links to{" "}
+                        {partner.sourceFilename}. Linked imports must be
+                        committed together.
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() =>
+                          setSelectedDraftIds(
+                            (current) => new Set([...current, partner.id]),
+                          )
+                        }
                       >
-                        <span>
-                          {draft.sourceFilename} has reimbursement links to{" "}
-                          {partner.sourceFilename}. Linked imports must be
-                          committed together.
-                        </span>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() =>
-                            setSelectedDraftIds(
-                              (current) => new Set([...current, partner.id]),
-                            )
-                          }
-                        >
-                          Select {partner.sourceFilename} too
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {!staged.length && (
-                  <p className="py-6 text-center text-dark-5 dark:text-dark-6">
-                    No staged imports. Statements you upload and imports prepared in chat
-                    appear here.
-                  </p>
-                )}
-                {staged.map((d) => (
-                  <div
-                    key={d.id}
-                    className="rounded-lg border border-stroke p-4 dark:border-dark-3"
-                  >
-                    <div className="flex items-start gap-3">
-                      <input
-                        type="checkbox"
-                        checked={selectedDraftIds.has(d.id)}
-                        onChange={() => toggleDraft(d.id)}
-                        aria-label={`Select ${d.sourceFilename}`}
-                        className="mt-1"
-                      />
-                      <Bot className="mt-1 size-5 shrink-0 text-primary" />
-                      <div className="min-w-0">
-                        <p className="break-words font-semibold text-dark dark:text-white">
-                          {d.sourceFilename}
-                        </p>
-                        <p className="mt-1 text-sm text-dark-5 dark:text-dark-6">
-                          {d._count?.rows || 0} transactions · {d.mode} ·{" "}
-                          {d.status}
-                        </p>
-                        <p className="mt-2 text-sm text-primary">
-                          {d.reviewSummary?.labelling || 0} need labelling ·{" "}
-                          {d.reviewSummary?.reconciliation || 0} need
-                          reconciliation · {d.reviewSummary?.ready || 0} ready
-                        </p>
-                        <Link
-                          href={`/imports/drafts/${d.id}`}
-                          className="mt-2 inline-block text-sm font-medium text-primary"
-                        >
-                          Review transactions →
-                        </Link>
-                      </div>
+                        Select {partner.sourceFilename} too
+                      </Button>
                     </div>
-                  </div>
-                ))}
-              </CardContent>
+                  ))}
+                </div>
+              )}
+              {!staged.length ? (
+                <p className="px-5 py-12 text-center text-sm text-dark-5 dark:text-dark-6">
+                  No staged imports. Statements you upload and imports prepared in chat
+                  appear here.
+                </p>
+              ) : (
+                <ul className="divide-y divide-stroke dark:divide-dark-3">
+                  {staged.map((d) => {
+                    const selected = selectedDraftIds.has(d.id);
+                    const labelling = Number(d.reviewSummary?.labelling || 0);
+                    const reconciliation = Number(d.reviewSummary?.reconciliation || 0);
+                    const rows = Number(d._count?.rows || 0);
+                    return (
+                      <li
+                        key={d.id}
+                        className={`flex items-center gap-4 px-5 py-3.5 transition-colors ${
+                          selected
+                            ? "bg-primary/5"
+                            : "hover:bg-gray-1 dark:hover:bg-dark-3/40"
+                        }`}
+                      >
+                        <Checkbox
+                          checked={selected}
+                          aria-label={`Select ${d.sourceFilename}`}
+                          onChange={() => toggleDraft(d.id)}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <Link
+                            href={`/imports/drafts/${d.id}`}
+                            className="block truncate font-medium text-dark hover:text-primary dark:text-white dark:hover:text-primary"
+                            title={`Review ${d.sourceFilename}`}
+                          >
+                            {d.sourceFilename}
+                          </Link>
+                          <p className="mt-0.5 text-xs text-dark-5 dark:text-dark-6">
+                            {rows} {rows === 1 ? "transaction" : "transactions"}
+                            {d.mode === "trip" ? " · Trip import" : ""}
+                            {d.createdAt
+                              ? ` · Staged ${new Date(d.createdAt).toLocaleDateString("en-SG", {
+                                  day: "numeric",
+                                  month: "short",
+                                  year: "numeric",
+                                })}`
+                              : ""}
+                            {d.status === "valid" ? " · Validated" : ""}
+                          </p>
+                        </div>
+                        <div className="hidden shrink-0 items-center gap-1.5 sm:flex">
+                          {labelling > 0 && (
+                            <span className="rounded-full bg-yellow-light-4 px-2 py-0.5 text-xs font-medium text-yellow-dark dark:bg-yellow-dark/15">
+                              {labelling} to label
+                            </span>
+                          )}
+                          {reconciliation > 0 && (
+                            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                              {reconciliation} to reconcile
+                            </span>
+                          )}
+                          {!labelling && !reconciliation && (
+                            <span className="rounded-full bg-green/10 px-2 py-0.5 text-xs font-medium text-green">
+                              Ready
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          disabled={deleting}
+                          aria-label={`Delete ${d.sourceFilename}`}
+                          title="Delete"
+                          onClick={() => setPendingDelete([d.id])}
+                          className="shrink-0 rounded-md p-2 text-dark-5 transition-colors hover:bg-red/10 hover:text-red disabled:opacity-50 dark:text-dark-6"
+                        >
+                          <Trash2 className="size-4" />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </Card>
           )}
         </>
       )}
+      <Modal
+        isOpen={deleteTargets.length > 0}
+        onClose={() => setPendingDelete(null)}
+        type="warning"
+        title={
+          deleteTargets.length === 1
+            ? "Delete staged import?"
+            : `Delete ${deleteTargets.length} staged imports?`
+        }
+        message={[
+          deleteTargets.map((draft) => draft.sourceFilename).join("\n"),
+          "",
+          "Its rows and review edits are discarded and nothing is saved to your transactions. The uploaded statement is deleted unless it is kept as a parser fixture.",
+          ...(deleteTargets.some((draft) => (draft.linkedDraftIds || []).length)
+            ? ["Reimbursement links between these rows and other staged imports are removed too."]
+            : []),
+        ].join("\n")}
+        confirmText={deleteTargets.length === 1 ? "Delete import" : "Delete imports"}
+        onConfirm={() => void deleteDrafts(deleteTargets.map((draft) => draft.id))}
+      />
       {tab === "history" && (
         <>
           {commitNotice && (
