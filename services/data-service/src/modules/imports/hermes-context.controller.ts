@@ -3,6 +3,7 @@ import { z } from "zod";
 import prisma from "../../lib/prisma";
 import { authenticatedUserId, requireAccountAuth } from "../auth/auth.middleware";
 import { TransactionService } from "../transactions/transactions.service";
+import { listCandidates } from "../reimbursements/links.queries";
 
 export const hermesContextRouter = Router();
 
@@ -29,6 +30,45 @@ hermesContextRouter.get("/metrics", requireAccountAuth(["drafts:read"]), async (
       prisma.parserCandidate.groupBy({ by: ["status"], where: { workspace: { userId }, createdAt: { gte: since } }, _count: true }),
     ]);
     return response.json({ windowDays: 30, drafts: draftStatuses, proposals: proposalStatuses, jobs: jobStatuses, parserCandidates: parserStatuses });
+  } catch (error) {
+    return failure(response, error);
+  }
+});
+
+/** Main-ledger reimbursement candidates for a staged row or saved transaction, with available and pending amounts. */
+hermesContextRouter.get("/reimbursement-candidates", requireAccountAuth(["drafts:read"]), async (request, response) => {
+  try {
+    const userId = authenticatedUserId(request);
+    const input = z
+      .object({
+        draftRowId: z.string().min(1).optional(),
+        transactionId: z.string().min(1).optional(),
+        lookingFor: z.enum(["reimbursement", "expense"]),
+        query: z.string().max(200).optional(),
+        limit: z.coerce.number().int().min(1).max(50).default(20),
+        offset: z.coerce.number().int().min(0).default(0),
+        contextDraftIds: z.string().max(2000).optional(),
+      })
+      .refine((value) => !!value.draftRowId !== !!value.transactionId, "Pass draftRowId or transactionId")
+      .parse(request.query);
+    const result = await listCandidates({
+      userId,
+      subject: input.draftRowId ? { draftRowId: input.draftRowId } : { transactionId: input.transactionId as string },
+      lookingFor: input.lookingFor,
+      query: input.query,
+      limit: input.limit,
+      offset: input.offset,
+      contextDraftIds: input.contextDraftIds?.split(",").map((id) => id.trim()).filter(Boolean),
+    });
+    const mask = <T extends { accountIdentifier: string | null }>(item: T) => ({
+      ...item,
+      accountIdentifier: maskAccount(item.accountIdentifier),
+    });
+    return response.json({
+      ...result,
+      saved: { ...result.saved, items: result.saved.items.map(mask) },
+      staged: result.staged.map(mask),
+    });
   } catch (error) {
     return failure(response, error);
   }

@@ -221,10 +221,58 @@ export function createFinanceMcpServer(identity: AccountIdentity) {
     "commit_import_draft",
     {
       title: "Commit a validated import draft",
-      description: "Commit exactly the validated draft version. Call only after the user explicitly confirms in the current interaction; the token is short-lived and single-use.",
+      description: "Commit exactly the validated draft version. Call only after the user explicitly confirms in the current interaction; the token is short-lived and single-use. Drafts with reimbursement links to rows in other drafts must be committed together with commit_import_selection.",
       inputSchema: z.object({ draftId: z.string(), confirmationToken: z.string(), confirmed: z.literal(true) }),
     },
     async ({ draftId, ...body }) => result(await dataServiceRequest(`/api/agent/drafts/${encodeURIComponent(draftId)}/commit`, { method: "POST", body: JSON.stringify(body) })),
+  );
+
+  server.registerTool(
+    "validate_import_selection",
+    {
+      title: "Validate several import drafts together",
+      description: "Validate drafts that will be committed together, as one import: checks each draft, reimbursement links between them, and duplicates within and across them. Returns one short-lived confirmation token per draft for commit_import_selection.",
+      inputSchema: z.object({ draftIds: z.array(z.string()).min(1).max(20) }),
+    },
+    async ({ draftIds }) => result(await dataServiceRequest("/api/agent/drafts/validate-selection", { method: "POST", body: JSON.stringify({ draftIds }) })),
+  );
+
+  server.registerTool(
+    "commit_import_selection",
+    {
+      title: "Commit several validated import drafts together",
+      description: "Commit validated drafts in one transaction: reimbursement links between their rows become links between the new transactions, and nothing is saved if any draft fails. Call only after the user explicitly confirms in the current interaction, with the tokens from validate_import_selection.",
+      inputSchema: z.object({
+        items: z.array(z.object({ draftId: z.string(), confirmationToken: z.string() })).min(1).max(20),
+        confirmed: z.literal(true),
+      }),
+    },
+    async (body) => result(await dataServiceRequest("/api/agent/drafts/commit-selection", { method: "POST", body: JSON.stringify(body) })),
+  );
+
+  server.registerTool(
+    "get_ledger_reimbursement_candidates",
+    {
+      title: "Get main-ledger reimbursement candidates",
+      description: "For a staged draft row or saved transaction, list what it can be linked to: lookingFor=expense when it is a reimbursement choosing what it pays back, lookingFor=reimbursement when it is an expense choosing what paid it back. Each candidate shows its amount, what is already linked, amounts pending in other staged imports, and what is still available; fullyAllocated candidates cannot take more. Links are proposed through row linkage and always require review.",
+      inputSchema: z.object({
+        draftRowId: z.string().optional(),
+        transactionId: z.string().optional(),
+        lookingFor: z.enum(["reimbursement", "expense"]),
+        query: z.string().max(200).optional(),
+        limit: z.number().int().min(1).max(50).default(20),
+        offset: z.number().int().min(0).default(0),
+        contextDraftIds: z.array(z.string()).max(20).optional().describe("Drafts being reviewed and committed together with this row"),
+      }),
+    },
+    async ({ draftRowId, transactionId, lookingFor, query, limit, offset, contextDraftIds }) => {
+      const params = new URLSearchParams({ lookingFor, limit: String(limit), offset: String(offset) });
+      if (draftRowId) params.set("draftRowId", draftRowId);
+      if (transactionId) params.set("transactionId", transactionId);
+      if (query) params.set("query", query);
+      if (contextDraftIds?.length) params.set("contextDraftIds", contextDraftIds.join(","));
+      return result(await dataServiceRequest(`/api/agent/context/reimbursement-candidates?${params}`));
+    },
   );
 
   server.registerTool(
