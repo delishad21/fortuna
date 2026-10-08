@@ -360,16 +360,36 @@ export class TransactionService {
       for (const rule of rules) {
         if (!this.ruleMatches(rule, tx)) continue;
 
-        const metadata = (tx.metadata || {}) as Record<string, any>;
-        const hasLearnedClassification = !!metadata.classificationPatternId;
-        const hasExplicitLinkage = !!tx.linkage && !hasLearnedClassification;
+        // Rules override values that auto-categorization set, but not a suggestion it only
+        // noted, nor a value the user has since changed (drafts re-run rules on every read).
+        const learned = tx as typeof tx & {
+          suggestedCategoryId?: string;
+          suggestedLabel?: string;
+          suggestionApplied?: boolean;
+        };
+        const learnedApplied =
+          !!(tx.metadata as Record<string, any> | undefined)
+            ?.classificationPatternId && learned.suggestionApplied === true;
+        const hasExplicitLinkage =
+          !!tx.linkage &&
+          !(
+            tx.linkage.autoDetected &&
+            String(tx.linkage.detectionReason || "").startsWith("Auto-labelled")
+          );
         const hasExplicitCategory =
-          !!tx.categoryId && !hasLearnedClassification;
+          !!tx.categoryId &&
+          !(learnedApplied && tx.categoryId === learned.suggestedCategoryId);
         const hasExplicitLabel =
-          !!tx.label && tx.label.trim().length > 0 && !hasLearnedClassification;
+          !!tx.label &&
+          tx.label.trim().length > 0 &&
+          !(learnedApplied && tx.label === learned.suggestedLabel);
         let applied = false;
 
-        if (rule.markInternal && !hasExplicitLinkage) {
+        if (
+          rule.markInternal &&
+          !hasExplicitLinkage &&
+          tx.linkage?.type !== "internal"
+        ) {
           tx.linkage = {
             type: "internal",
             autoDetected: true,
@@ -378,7 +398,7 @@ export class TransactionService {
           applied = true;
         }
 
-        if (rule.setLabel && !hasExplicitLabel) {
+        if (rule.setLabel && !hasExplicitLabel && tx.label !== rule.setLabel) {
           tx.label = rule.setLabel;
           applied = true;
         }
@@ -391,7 +411,7 @@ export class TransactionService {
           const categoryId = categoryMap.get(
             rule.setCategoryName.toLowerCase(),
           );
-          if (categoryId) {
+          if (categoryId && tx.categoryId !== categoryId) {
             tx.categoryId = categoryId;
             applied = true;
           }
