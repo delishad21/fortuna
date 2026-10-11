@@ -3,41 +3,49 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { format, parseISO } from "date-fns";
 import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
-import { AlertCircle, ArrowRight, CheckCircle2, FileText, Upload } from "lucide-react";
+import { ArrowRight, CheckCircle2, FileText, Upload } from "lucide-react";
+import { getDashboardOverview } from "@/app/actions/analytics";
 import { updateTransaction } from "@/app/actions/transactions";
 import { Button } from "@/components/ui/Button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
+import { Card } from "@/components/ui/Card";
 import { CategorySelect } from "@/components/ui/CategorySelect";
 import { PageTabs } from "@/components/ui/PageTabs";
 import { ImportSummaryCard } from "@/components/analytics/ImportSummaryCard";
-import { ExpandableTransactionList } from "@/components/transactions/ExpandableTransactionList";
-import type { TransactionCardTransaction } from "@/components/transactions/TransactionCard";
+import {
+  BarList,
+  Delta,
+  EmptyText,
+  MonthSwitcher,
+  SectionCard,
+  StatCard,
+  TransactionRows,
+  formatCurrency,
+  formatDay,
+  formatMonth,
+  type CompactTransaction,
+} from "@/components/analytics/parts";
+import { cn } from "@/lib/utils";
 
-type Transaction = {
-  id: string;
-  date: string;
-  description: string;
-  label?: string | null;
-  amountIn: number;
-  amountOut: number;
-  category?: { id: string; name: string; color: string } | null;
-  merchant?: string;
-};
+type Category = { id: string; name: string; color: string };
 
-type Category = {
-  id: string;
+type RecurringPayment = {
+  key: string;
   name: string;
-  color: string;
+  monthsSeen: number;
+  averageAmount: number;
+  stability: string;
+  lastDate: string | null;
+  lastAmount: number;
 };
 
 type OverviewData = {
@@ -48,21 +56,32 @@ type OverviewData = {
     totalOut: number;
     net: number;
     transactionCount: number;
-    topCategory: { name: string; color: string; totalOut: number } | null;
-    largestTransaction: Transaction | null;
     previousMonth: { month: string; totalOut: number; spendingDelta: number } | null;
   };
   trend: Array<{ month: string; totalIn: number; totalOut: number; net: number }>;
-  recentTransactions: Transaction[];
+  spendingByCategory?: Array<{ key: string; name: string; color: string; totalOut: number; transactionCount: number; previousTotalOut: number }>;
+  largestExpenses?: CompactTransaction[];
+  recurringPayments?: RecurringPayment[];
+  attention?: { stagedImports: number; stagedRows: number; uncategorizedCount: number };
   hasTransactions: boolean;
+};
+
+type CoverageAccount = {
+  accountIdentifier: string | null;
+  label: string;
+  color: string;
+  months: Array<{ month: string; transactionCount: number; tracked: boolean }>;
+  missingMonths: string[];
 };
 
 type ReviewData = {
   reviewQueue: {
-    uncategorized: Transaction[];
-    newMerchants: Array<{ key: string; name: string }>;
-    largeTransactions: Transaction[];
+    uncategorized: CompactTransaction[];
+    newMerchants: Array<{ key: string; name: string; totalOut?: number; totalIn?: number; transactionCount?: number }>;
+    newMerchantsMonth?: string | null;
   };
+  stagedImports?: Array<{ id: string; filename: string; rowCount: number; updatedAt: string }>;
+  coverage?: { months: string[]; accounts: CoverageAccount[] };
   importSummaries: Array<{
     key: string;
     filename: string;
@@ -80,52 +99,38 @@ type ReviewData = {
     uncategorizedCount: number;
     categorizedPercent: number;
     ruleCount: number;
-    merchantCount: number;
-    categoryCount: number;
   };
 };
 
-const formatCurrency = (value: number) =>
-  new Intl.NumberFormat("en-SG", {
-    style: "currency",
-    currency: "SGD",
-    maximumFractionDigits: 2,
-  }).format(value || 0);
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
-const formatMonth = (month: string | null) => {
-  if (!month) return "No imported month";
-  return format(parseISO(`${month}-01`), "MMM yyyy");
-};
-
-const dashboardBarSize = 42;
-
-function EmptyState({ title, description, action }: { title: string; description: string; action?: React.ReactNode }) {
-  return (
-    <Card>
-      <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-        <FileText className="size-10 text-dark-4" />
-        <div>
-          <h3 className="font-semibold text-dark dark:text-white">{title}</h3>
-          <p className="mt-1 text-sm text-dark-5 dark:text-dark-6">{description}</p>
-        </div>
-        {action}
-      </CardContent>
-    </Card>
-  );
-}
-
-export function DashboardClient({ initialOverview, initialReview, categories }: { initialOverview: OverviewData; initialReview: ReviewData; categories: Category[] }) {
+export function DashboardClient({
+  initialOverview,
+  initialReview,
+  categories,
+}: {
+  initialOverview: OverviewData;
+  initialReview: ReviewData;
+  categories: Category[];
+}) {
   const [activeTab, setActiveTab] = useState<"overview" | "review">("overview");
-  const overview = initialOverview;
+  const [overview, setOverview] = useState(initialOverview);
+  const [loadingMonth, setLoadingMonth] = useState(false);
+  const [uncategorized, setUncategorized] = useState(initialReview.reviewQueue.uncategorized);
+  const categorisedNow = initialReview.reviewQueue.uncategorized.length - uncategorized.length;
+  const uncategorizedCount = Math.max(initialReview.dataHealth.uncategorizedCount - categorisedNow, 0);
+  const missingStatements = (initialReview.coverage?.accounts || []).filter((account) => account.missingMonths.length > 0);
+  const stagedImports = initialReview.stagedImports || [];
+  const reviewCount = uncategorizedCount + stagedImports.length;
 
-  const trend = useMemo(
-    () => overview.trend.map((item) => ({ ...item, label: formatMonth(item.month) })),
-    [overview.trend],
-  );
-
-  const reviewCount =
-    initialReview.reviewQueue.uncategorized.length +
-    initialReview.reviewQueue.largeTransactions.length;
+  const changeMonth = async (month: string) => {
+    setLoadingMonth(true);
+    try {
+      setOverview(await getDashboardOverview(month));
+    } finally {
+      setLoadingMonth(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -139,143 +144,335 @@ export function DashboardClient({ initialOverview, initialReview, categories }: 
       />
 
       {activeTab === "overview" ? (
-        <div className="flex flex-col gap-6">
-          {!overview.hasTransactions ? (
-            <EmptyState
-              title="No transactions imported yet"
-              description="Import a statement to unlock dashboard analytics and review queues."
-              action={<Link href="/imports"><Button leftIcon={<Upload className="size-4" />}>Import Statement</Button></Link>}
-            />
-          ) : !overview.selectedMonth ? (
-            <EmptyState
-              title="No completed statement month detected"
-              description="A month appears here after it has at least one transaction dated after the 15th."
-              action={<Link href="/imports"><Button>Import Another Statement</Button></Link>}
-            />
-          ) : (
-            <>
-              <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
-                <Card className="min-h-[360px]">
-                  <CardHeader><CardTitle>Spending and Income Trend</CardTitle></CardHeader>
-                  <CardContent className="h-[300px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={trend} barGap={6} barCategoryGap="32%">
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
-                        <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--chart-muted)" }} />
-                        <YAxis tick={{ fontSize: 12, fill: "var(--chart-muted)" }} />
-                        <Tooltip formatter={(value: number) => formatCurrency(Number(value))} />
-                        <Bar dataKey="totalOut" name="Spending" fill="#F23030" barSize={dashboardBarSize} radius={[6, 6, 0, 0]} />
-                        <Bar dataKey="totalIn" name="Income" fill="#22AD5C" barSize={dashboardBarSize} radius={[6, 6, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader><CardTitle>Quick Actions</CardTitle></CardHeader>
-                  <CardContent className="flex flex-col gap-3">
-                    <Link href="/imports"><Button className="w-full" leftIcon={<Upload className="size-4" />}>Import Statement</Button></Link>
-                    <Link href="/analytics"><Button className="w-full" variant="secondary">Open Analytics</Button></Link>
-                    <Link href="/transactions"><Button className="w-full" variant="secondary">Review Transactions</Button></Link>
-                    <Link href="/settings"><Button className="w-full" variant="secondary">Manage Categories</Button></Link>
-                  </CardContent>
-                </Card>
-              </div>
-
-                <Card>
-                  <CardHeader><CardTitle>Recent Transactions</CardTitle></CardHeader>
-                  <CardContent>
-                  <RecentTransactionCards transactions={overview.recentTransactions} />
-                  </CardContent>
-                </Card>
-            </>
-          )}
-        </div>
+        <OverviewTab
+          overview={overview}
+          loading={loadingMonth}
+          onMonthChange={changeMonth}
+          uncategorizedCount={uncategorizedCount}
+          stagedImports={stagedImports}
+          missingStatements={missingStatements}
+          onOpenReview={() => setActiveTab("review")}
+        />
       ) : (
-        <ReviewTab data={initialReview} categories={categories} />
+        <ReviewTab
+          data={initialReview}
+          categories={categories}
+          uncategorized={uncategorized}
+          setUncategorized={setUncategorized}
+          uncategorizedCount={uncategorizedCount}
+          categorisedNow={categorisedNow}
+        />
       )}
     </div>
   );
 }
 
-function TransactionList({ transactions }: { transactions: Transaction[] }) {
-  if (transactions.length === 0) {
-    return <div className="py-8 text-center text-sm text-dark-5 dark:text-dark-6">No transactions to show.</div>;
-  }
+function NoData({ title, description }: { title: string; description: string }) {
   return (
-    <div className="divide-y divide-stroke dark:divide-dark-3">
-      {transactions.map((tx) => (
-        <div key={tx.id} className="flex items-center justify-between gap-4 py-3">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-dark dark:text-white">{tx.label || tx.description}</div>
-            <div className="text-xs text-dark-5 dark:text-dark-6">
-              {format(parseISO(String(tx.date)), "dd MMM yyyy")} - {tx.category?.name || "Uncategorized"}
+    <Card className="flex flex-col items-center gap-3 py-12 text-center">
+      <FileText className="size-10 text-dark-4" />
+      <div>
+        <h3 className="font-semibold text-dark dark:text-white">{title}</h3>
+        <p className="mt-1 text-sm text-dark-5 dark:text-dark-6">{description}</p>
+      </div>
+      <Link href="/imports">
+        <Button leftIcon={<Upload className="size-4" />}>Import Statement</Button>
+      </Link>
+    </Card>
+  );
+}
+
+function OverviewTab({
+  overview,
+  loading,
+  onMonthChange,
+  uncategorizedCount,
+  stagedImports,
+  missingStatements,
+  onOpenReview,
+}: {
+  overview: OverviewData;
+  loading: boolean;
+  onMonthChange: (month: string) => void;
+  uncategorizedCount: number;
+  stagedImports: NonNullable<ReviewData["stagedImports"]>;
+  missingStatements: CoverageAccount[];
+  onOpenReview: () => void;
+}) {
+  const trend = useMemo(
+    () => overview.trend.map((item) => ({ ...item, label: formatMonth(item.month, "MMM") })),
+    [overview.trend],
+  );
+
+  if (!overview.hasTransactions) {
+    return <NoData title="No transactions imported yet" description="Import a statement to see your monthly overview." />;
+  }
+  if (!overview.selectedMonth) {
+    return <NoData title="No complete statement month yet" description="A month appears once it has transactions after the 15th." />;
+  }
+
+  const { summary } = overview;
+  const previous = summary.previousMonth;
+  const savingsRate = summary.totalIn > 0 ? Math.round((summary.net / summary.totalIn) * 100) : null;
+  const categories = overview.spendingByCategory || [];
+  const largest = overview.largestExpenses || [];
+  const recurring = overview.recurringPayments || [];
+
+  return (
+    <div className={cn("flex flex-col gap-6 transition-opacity", loading && "opacity-60")}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-xl font-bold text-dark dark:text-white">{formatMonth(overview.selectedMonth, "MMMM yyyy")}</h2>
+        <MonthSwitcher
+          months={overview.importedMonths.map((item) => item.month)}
+          value={overview.selectedMonth}
+          onChange={onMonthChange}
+          loading={loading}
+        />
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Income" value={formatCurrency(summary.totalIn)} tone="good" />
+        <StatCard
+          label="Spending"
+          value={formatCurrency(summary.totalOut)}
+          tone="bad"
+          sub={previous ? <Delta value={previous.spendingDelta} previous={previous.totalOut} suffix={`vs ${formatMonth(previous.month, "MMM")}`} /> : "No earlier month to compare"}
+        />
+        <StatCard
+          label="Net flow"
+          value={formatCurrency(summary.net, { signed: true })}
+          tone={summary.net >= 0 ? "good" : "bad"}
+          sub={savingsRate === null ? "No income this month" : `${savingsRate}% of income kept`}
+        />
+        <StatCard label="Transactions" value={String(summary.transactionCount)} sub={largest[0] ? `Largest: ${largest[0].label || largest[0].description}` : undefined} />
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
+        <SectionCard title="Income and spending">
+          <div className="h-[280px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={trend} barGap={4} barCategoryGap="28%">
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
+                <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--chart-muted)" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 12, fill: "var(--chart-muted)" }} axisLine={false} tickLine={false} width={56} tickFormatter={(value: number) => (value >= 1000 ? `${Math.round(value / 100) / 10}k` : String(value))} />
+                <Tooltip formatter={(value: number) => formatCurrency(Number(value))} cursor={{ fill: "var(--chart-grid)", opacity: 0.4 }} />
+                <Bar dataKey="totalIn" name="Income" radius={[4, 4, 0, 0]} maxBarSize={36}>
+                  {trend.map((item) => (
+                    <Cell key={item.month} fill="#22AD5C" fillOpacity={item.month === overview.selectedMonth ? 1 : 0.35} />
+                  ))}
+                </Bar>
+                <Bar dataKey="totalOut" name="Spending" radius={[4, 4, 0, 0]} maxBarSize={36}>
+                  {trend.map((item) => (
+                    <Cell key={item.month} fill="#F23030" fillOpacity={item.month === overview.selectedMonth ? 1 : 0.35} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Needs attention"
+          action={
+            <Link href="/imports">
+              <Button size="sm" variant="secondary" leftIcon={<Upload className="size-4" />}>Import</Button>
+            </Link>
+          }
+        >
+          <AttentionList
+            stagedImports={stagedImports}
+            uncategorizedCount={uncategorizedCount}
+            missingStatements={missingStatements}
+            onOpenReview={onOpenReview}
+          />
+        </SectionCard>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2 xl:grid-cols-3">
+        <SectionCard title="Spending by category">
+          {categories.length === 0 ? (
+            <EmptyText>No spending this month.</EmptyText>
+          ) : (
+            <BarList
+              limit={8}
+              valueTone="bad"
+              rows={categories.map((item) => ({
+                key: item.key,
+                name: item.name,
+                color: item.color,
+                value: item.totalOut,
+                helper: plural(item.transactionCount, "transaction"),
+                trailing: previous ? (
+                  item.previousTotalOut ? (
+                    <Delta value={item.totalOut - item.previousTotalOut} previous={item.previousTotalOut} />
+                  ) : (
+                    "New this month"
+                  )
+                ) : null,
+              }))}
+            />
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Largest expenses"
+          action={
+            <Link href="/transactions" className="text-sm font-medium">
+              <span className="text-primary">All transactions</span>
+            </Link>
+          }
+        >
+          {largest.length === 0 ? <EmptyText>No expenses this month.</EmptyText> : <TransactionRows transactions={largest} />}
+        </SectionCard>
+
+        <SectionCard title="Recurring payments" className="lg:col-span-2 xl:col-span-1">
+          {recurring.length === 0 ? (
+            <EmptyText>Merchants charged in two or more months show up here.</EmptyText>
+          ) : (
+            <div className="divide-y divide-stroke dark:divide-stroke-dark">
+              {recurring.map((item) => (
+                <div key={item.key} className="flex items-center justify-between gap-3 py-2.5">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-dark dark:text-white">{item.name}</p>
+                    <p className="mt-0.5 text-xs text-dark-5 dark:text-dark-6">
+                      {plural(item.monthsSeen, "month")} · {item.stability === "fixed" ? "fixed amount" : "varies"}
+                      {item.lastDate ? ` · last ${formatDay(item.lastDate)}` : ""}
+                    </p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <p className="text-sm font-semibold tabular-nums text-dark dark:text-white">{formatCurrency(item.averageAmount)}</p>
+                    <p className="text-xs text-dark-5 dark:text-dark-6">typical</p>
+                  </div>
+                </div>
+              ))}
             </div>
-          </div>
-          <div className={`shrink-0 text-sm font-semibold ${tx.amountIn > 0 ? "text-green" : "text-red"}`}>
-            {tx.amountIn > 0 ? `+${formatCurrency(tx.amountIn)}` : `-${formatCurrency(tx.amountOut)}`}
-          </div>
-        </div>
-      ))}
+          )}
+        </SectionCard>
+      </div>
     </div>
   );
 }
 
-function RecentTransactionCards({ transactions }: { transactions: Transaction[] }) {
-  if (transactions.length === 0) {
-    return <div className="py-8 text-center text-sm text-dark-5 dark:text-dark-6">No transactions to show.</div>;
+function AttentionList({
+  stagedImports,
+  uncategorizedCount,
+  missingStatements,
+  onOpenReview,
+}: {
+  stagedImports: NonNullable<ReviewData["stagedImports"]>;
+  uncategorizedCount: number;
+  missingStatements: CoverageAccount[];
+  onOpenReview: () => void;
+}) {
+  const stagedRows = stagedImports.reduce((sum, draft) => sum + draft.rowCount, 0);
+  const items = [
+    stagedImports.length > 0 && {
+      key: "staged",
+      tone: "primary",
+      title: `${plural(stagedImports.length, "staged import")} waiting`,
+      detail: `${plural(stagedRows, "row")} to review and commit`,
+      href: stagedImports.length === 1 ? `/imports/drafts/${stagedImports[0].id}` : "/imports",
+    },
+    uncategorizedCount > 0 && {
+      key: "uncategorized",
+      tone: "warning",
+      title: `${plural(uncategorizedCount, "transaction")} without a category`,
+      detail: "Categorise them so the breakdowns add up",
+      onClick: onOpenReview,
+    },
+    ...missingStatements.slice(0, 3).map((account) => ({
+      key: `missing-${account.label}`,
+      tone: "danger",
+      title: `${account.label}: no transactions in ${account.missingMonths.map((month) => formatMonth(month, "MMM yyyy")).join(", ")}`,
+      detail: "A statement may not have been imported",
+      onClick: onOpenReview,
+    })),
+  ].filter(Boolean) as Array<{ key: string; tone: string; title: string; detail: string; href?: string; onClick?: () => void }>;
+
+  if (items.length === 0) {
+    return (
+      <div className="flex h-full items-center gap-3 rounded-lg bg-green/5 p-4">
+        <CheckCircle2 className="size-6 shrink-0 text-green" />
+        <div>
+          <p className="text-sm font-semibold text-dark dark:text-white">All caught up</p>
+          <p className="text-xs text-dark-5 dark:text-dark-6">Nothing staged, everything categorised, no gaps in your statements.</p>
+        </div>
+      </div>
+    );
   }
 
-  const cardTransactions: TransactionCardTransaction[] = transactions.map((tx) => ({
-    id: tx.id,
-    date: String(tx.date),
-    description: tx.description,
-    label: tx.label || undefined,
-    amountIn: tx.amountIn > 0 ? tx.amountIn : null,
-    amountOut: tx.amountOut > 0 ? tx.amountOut : null,
-    balance: null,
-    category: tx.category || undefined,
-  }));
-
-  return <ExpandableTransactionList transactions={cardTransactions} />;
+  const toneClass: Record<string, string> = {
+    primary: "border-l-primary",
+    warning: "border-l-[#F59E0B]",
+    danger: "border-l-red",
+  };
+  return (
+    <div className="space-y-2">
+      {items.map((item) => {
+        const body = (
+          <div className={cn("flex items-center justify-between gap-3 rounded-lg border border-l-4 border-stroke p-3 transition hover:bg-gray-2 dark:border-stroke-dark dark:hover:bg-dark-3", toneClass[item.tone])}>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-dark dark:text-white">{item.title}</p>
+              <p className="mt-0.5 text-xs text-dark-5 dark:text-dark-6">{item.detail}</p>
+            </div>
+            <ArrowRight className="size-4 shrink-0 text-dark-5 dark:text-dark-6" />
+          </div>
+        );
+        return item.href ? (
+          <Link key={item.key} href={item.href} className="block">
+            {body}
+          </Link>
+        ) : (
+          <button key={item.key} type="button" onClick={item.onClick} className="block w-full text-left">
+            {body}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
-function ReviewTab({ data, categories }: { data: ReviewData; categories: Category[] }) {
-  const [uncategorized, setUncategorized] = useState(data.reviewQueue.uncategorized);
+function ReviewTab({
+  data,
+  categories,
+  uncategorized,
+  setUncategorized,
+  uncategorizedCount,
+  categorisedNow,
+}: {
+  data: ReviewData;
+  categories: Category[];
+  uncategorized: CompactTransaction[];
+  setUncategorized: React.Dispatch<React.SetStateAction<CompactTransaction[]>>;
+  uncategorizedCount: number;
+  categorisedNow: number;
+}) {
+  const router = useRouter();
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
-  const queueEmpty =
-    uncategorized.length === 0 &&
-    data.reviewQueue.largeTransactions.length === 0;
-  const reviewData = {
-    ...data,
-    reviewQueue: {
-      ...data.reviewQueue,
-      uncategorized,
-    },
-    dataHealth: {
-      ...data.dataHealth,
-      uncategorizedCount: Math.max(data.dataHealth.uncategorizedCount - (data.reviewQueue.uncategorized.length - uncategorized.length), 0),
-      categorizedCount: data.dataHealth.categorizedCount + (data.reviewQueue.uncategorized.length - uncategorized.length),
-      categorizedPercent: data.dataHealth.transactionCount
-        ? Math.round(((data.dataHealth.categorizedCount + (data.reviewQueue.uncategorized.length - uncategorized.length)) / data.dataHealth.transactionCount) * 100)
-        : 0,
-    },
-  };
+  const [showAll, setShowAll] = useState(false);
+  const health = data.dataHealth;
+  const categorisedPercent = health.transactionCount
+    ? Math.round(((health.categorizedCount + categorisedNow) / health.transactionCount) * 100)
+    : 0;
+  const stagedImports = data.stagedImports || [];
+  const coverage = data.coverage;
+  const newMerchants = data.reviewQueue.newMerchants;
+  const visibleUncategorized = showAll ? uncategorized : uncategorized.slice(0, 10);
 
-  const handleCategorize = async (transaction: Transaction, categoryId: string) => {
+  const categorise = async (tx: CompactTransaction, categoryId: string) => {
     if (!categoryId) return;
     setError(null);
-    setSavingIds((prev) => new Set(prev).add(transaction.id));
+    setSavingIds((prev) => new Set(prev).add(tx.id));
     try {
-      await updateTransaction(transaction.id, { categoryId });
-      setUncategorized((prev) => prev.filter((item) => item.id !== transaction.id));
+      await updateTransaction(tx.id, { categoryId });
+      setUncategorized((prev) => prev.filter((item) => item.id !== tx.id));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update category");
     } finally {
       setSavingIds((prev) => {
         const next = new Set(prev);
-        next.delete(transaction.id);
+        next.delete(tx.id);
         return next;
       });
     }
@@ -283,156 +480,188 @@ function ReviewTab({ data, categories }: { data: ReviewData; categories: Categor
 
   return (
     <div className="flex flex-col gap-6">
-      {error && (
-        <div className="rounded-lg bg-red/10 px-4 py-3 text-sm text-red">
-          {error}
-        </div>
-      )}
-      {queueEmpty ? (
-        <Card>
-          <CardContent className="flex items-center gap-3 py-8">
-            <CheckCircle2 className="size-8 text-green" />
-            <div>
-              <h3 className="font-semibold text-dark dark:text-white">No urgent review items</h3>
-              <p className="text-sm text-dark-5 dark:text-dark-6">Your imported transaction data looks clean.</p>
-            </div>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid gap-6 xl:grid-cols-2">
-          <UncategorizedQueueCard
-            categories={categories}
-            savingIds={savingIds}
-            transactions={uncategorized}
-            onCategorize={handleCategorize}
-          />
-          <DataHealthCard data={reviewData} />
-        </div>
-      )}
+      {error ? <div className="rounded-lg bg-red/10 px-4 py-3 text-sm text-red">{error}</div> : null}
 
-      <div className="flex flex-col gap-6">
-        <Card>
-          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <CardTitle>Recent Import Summaries</CardTitle>
-            <Link href="/imports">
-              <Button variant="secondary" size="sm" rightIcon={<ArrowRight className="size-4" />}>View All</Button>
-            </Link>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {data.importSummaries.length === 0 ? <p className="text-sm text-dark-5 dark:text-dark-6">No imported files detected yet.</p> : data.importSummaries.map((item) => (
-              <ImportSummaryCard key={item.key} item={item} />
-            ))}
-          </CardContent>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Card className="p-5">
+          <p className="text-sm font-medium text-dark-5 dark:text-dark-6">Categorised</p>
+          <p className="mt-2 text-2xl font-bold tabular-nums text-dark dark:text-white">{categorisedPercent}%</p>
+          <div className="mt-2 h-1.5 rounded-full bg-gray-2 dark:bg-dark-3">
+            <div className="h-1.5 rounded-full bg-primary" style={{ width: `${categorisedPercent}%` }} />
+          </div>
         </Card>
-
-        <QueueCard title="Large Transactions" count={data.reviewQueue.largeTransactions.length} transactions={data.reviewQueue.largeTransactions} useTransactionCards />
+        <StatCard label="Without a category" value={String(uncategorizedCount)} tone={uncategorizedCount ? "bad" : "default"} sub={`of ${health.transactionCount} transactions`} />
+        <StatCard label="Staged imports" value={String(stagedImports.length)} tone={stagedImports.length ? "primary" : "default"} sub={stagedImports.length ? "Waiting to be committed" : "Nothing waiting"} />
+        <StatCard label="Import rules" value={String(health.ruleCount)} sub={<Link href="/settings"><span className="text-primary">Manage rules</span></Link>} />
       </div>
-    </div>
-  );
-}
 
-function UncategorizedQueueCard({
-  categories,
-  savingIds,
-  transactions,
-  onCategorize,
-}: {
-  categories: Category[];
-  savingIds: Set<string>;
-  transactions: Transaction[];
-  onCategorize: (transaction: Transaction, categoryId: string) => void;
-}) {
-  const router = useRouter();
+      <div className="grid gap-6 xl:grid-cols-[3fr_2fr]">
+        <SectionCard
+          title={`Without a category${uncategorizedCount ? ` (${uncategorizedCount})` : ""}`}
+          action={
+            uncategorized.length > 10 ? (
+              <button type="button" onClick={() => setShowAll((value) => !value)} className="text-sm font-medium text-primary">
+                {showAll ? "Show fewer" : `Show all ${uncategorized.length}`}
+              </button>
+            ) : null
+          }
+        >
+          {uncategorized.length === 0 ? (
+            <div className="flex items-center gap-3 rounded-lg bg-green/5 p-4">
+              <CheckCircle2 className="size-6 shrink-0 text-green" />
+              <p className="text-sm text-dark dark:text-white">Every transaction has a category.</p>
+            </div>
+          ) : (
+            <>
+              <p className="mb-2 text-xs text-dark-5 dark:text-dark-6">Tab into a category and type its first letters to pick it.</p>
+              <TransactionRows
+                transactions={visibleUncategorized}
+                renderAside={(tx) => (
+                  <div className="flex shrink-0 items-center gap-3">
+                    <span className={cn("hidden text-sm font-semibold tabular-nums sm:inline", tx.amountIn > 0 ? "text-green" : "text-red")}>
+                      {tx.amountIn > 0 ? `+${formatCurrency(tx.amountIn)}` : `-${formatCurrency(tx.amountOut)}`}
+                    </span>
+                    <div className="w-44">
+                      <CategorySelect
+                        value=""
+                        categories={categories}
+                        onChange={(categoryId) => void categorise(tx, categoryId)}
+                        onAddClick={() => router.push("/settings")}
+                        disabled={savingIds.has(tx.id)}
+                        excludeReserved
+                        emptyLabel={savingIds.has(tx.id) ? "Saving…" : "Choose category"}
+                        triggerProps={{ className: "py-2" }}
+                      />
+                    </div>
+                  </div>
+                )}
+              />
+            </>
+          )}
+        </SectionCard>
 
-  return (
-    <Card>
-      <CardHeader><CardTitle>Uncategorized ({transactions.length})</CardTitle></CardHeader>
-      <CardContent>
-        {transactions.length === 0 ? (
-          <div className="py-8 text-center text-sm text-dark-5 dark:text-dark-6">No uncategorized transactions.</div>
+        <div className="flex flex-col gap-6">
+          <SectionCard title="Staged imports">
+            {stagedImports.length === 0 ? (
+              <EmptyText>No imports waiting to be committed.</EmptyText>
+            ) : (
+              <div className="divide-y divide-stroke dark:divide-stroke-dark">
+                {stagedImports.map((draft) => (
+                  <Link key={draft.id} href={`/imports/drafts/${draft.id}`} className="flex items-center justify-between gap-3 py-2.5">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-dark dark:text-white">{draft.filename}</p>
+                      <p className="mt-0.5 text-xs text-dark-5 dark:text-dark-6">
+                        {plural(draft.rowCount, "row")} · staged {formatDay(draft.updatedAt)}
+                      </p>
+                    </div>
+                    <span className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-primary">
+                      Review <ArrowRight className="size-4" />
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </SectionCard>
+
+          <SectionCard title={`New merchants${data.reviewQueue.newMerchantsMonth ? ` in ${formatMonth(data.reviewQueue.newMerchantsMonth, "MMMM")}` : ""}`}>
+            {newMerchants.length === 0 ? (
+              <EmptyText>No first-time merchants this month.</EmptyText>
+            ) : (
+              <div className="divide-y divide-stroke dark:divide-stroke-dark">
+                {newMerchants.map((merchant) => (
+                  <div key={merchant.key} className="flex items-center justify-between gap-3 py-2.5">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-dark dark:text-white">{merchant.name}</p>
+                      {merchant.transactionCount ? <p className="mt-0.5 text-xs text-dark-5 dark:text-dark-6">{plural(merchant.transactionCount, "transaction")}</p> : null}
+                    </div>
+                    {merchant.totalOut ? <span className="shrink-0 text-sm font-semibold tabular-nums text-red">-{formatCurrency(merchant.totalOut)}</span> : null}
+                  </div>
+                ))}
+              </div>
+            )}
+          </SectionCard>
+        </div>
+      </div>
+
+      {coverage && coverage.accounts.length > 0 ? <CoverageCard coverage={coverage} /> : null}
+
+      <SectionCard
+        title="Recent imports"
+        action={
+          <Link href="/imports?tab=history">
+            <Button variant="secondary" size="sm" rightIcon={<ArrowRight className="size-4" />}>View all</Button>
+          </Link>
+        }
+      >
+        {data.importSummaries.length === 0 ? (
+          <EmptyText>No imported files yet.</EmptyText>
         ) : (
           <div className="space-y-3">
-            {transactions.slice(0, 8).map((tx) => {
-              const isSaving = savingIds.has(tx.id);
-              return (
-                <div key={tx.id} className="grid gap-3 rounded-lg border border-stroke p-3 dark:border-stroke-dark md:grid-cols-[minmax(0,1fr)_220px] md:items-center">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-dark dark:text-white">{tx.label || tx.description}</p>
-                    <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
-                      {format(parseISO(String(tx.date)), "dd MMM yyyy")} · {tx.amountIn > 0 ? `+${formatCurrency(tx.amountIn)}` : `-${formatCurrency(tx.amountOut)}`}
-                    </p>
-                  </div>
-                  <div className="min-w-0">
-                    <CategorySelect
-                      value=""
-                      categories={categories}
-                      onChange={(categoryId) => onCategorize(tx, categoryId)}
-                      onAddClick={() => router.push("/settings")}
-                      disabled={isSaving}
-                      excludeReserved
-                      emptyLabel={isSaving ? "Saving..." : "Choose category"}
-                      dropdownPlacement="inline"
-                    />
-                  </div>
-                </div>
-              );
-            })}
+            {data.importSummaries.slice(0, 4).map((item) => (
+              <ImportSummaryCard key={item.key} item={item} />
+            ))}
           </div>
         )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function DataHealthCard({ data }: { data: ReviewData }) {
-  return (
-    <Card>
-      <CardHeader><CardTitle>Data Health</CardTitle></CardHeader>
-      <CardContent className="space-y-4">
-        <div>
-          <div className="flex items-center justify-between text-sm"><span className="text-dark-5 dark:text-dark-6">Categorized</span><span className="font-semibold text-dark dark:text-white">{data.dataHealth.categorizedPercent}%</span></div>
-          <div className="mt-2 h-2 rounded-full bg-gray-2 dark:bg-dark-2"><div className="h-2 rounded-full bg-primary" style={{ width: `${data.dataHealth.categorizedPercent}%` }} /></div>
-        </div>
-        <HealthRow label="Transactions" value={data.dataHealth.transactionCount} />
-        <HealthRow label="Uncategorized" value={data.dataHealth.uncategorizedCount} warning={data.dataHealth.uncategorizedCount > 0} />
-        <HealthRow label="Rules" value={data.dataHealth.ruleCount} />
-        <HealthRow label="Merchants" value={data.dataHealth.merchantCount} />
-        {data.dataHealth.uncategorizedCount > 0 && <div className="flex gap-2 rounded-lg bg-red/10 p-3 text-sm text-red"><AlertCircle className="size-4 shrink-0" />Review uncategorized transactions to improve analytics accuracy.</div>}
-      </CardContent>
-    </Card>
-  );
-}
-
-function QueueCard({
-  title,
-  count,
-  transactions,
-  useTransactionCards = false,
-}: {
-  title: string;
-  count: number;
-  transactions: Transaction[];
-  useTransactionCards?: boolean;
-}) {
-  return (
-    <Card>
-      <CardHeader><CardTitle>{title} ({count})</CardTitle></CardHeader>
-      <CardContent>
-        {useTransactionCards ? (
-          <RecentTransactionCards transactions={transactions.slice(0, 5)} />
-        ) : (
-          <TransactionList transactions={transactions.slice(0, 5)} />
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function HealthRow({ label, value, warning = false }: { label: string; value: number; warning?: boolean }) {
-  return (
-    <div className="flex items-center justify-between text-sm">
-      <span className="text-dark-5 dark:text-dark-6">{label}</span>
-      <span className={`font-semibold ${warning ? "text-red" : "text-dark dark:text-white"}`}>{value}</span>
+      </SectionCard>
     </div>
+  );
+}
+
+function CoverageCard({ coverage }: { coverage: NonNullable<ReviewData["coverage"]> }) {
+  return (
+    <SectionCard
+      title="Statement coverage"
+      action={
+        <div className="hidden items-center gap-4 text-xs text-dark-5 sm:flex dark:text-dark-6">
+          <span className="inline-flex items-center gap-1.5"><span className="size-3 rounded-sm bg-primary/70" />Has transactions</span>
+          <span className="inline-flex items-center gap-1.5"><span className="size-3 rounded-sm border border-dashed border-red bg-red/10" />Missing</span>
+        </div>
+      }
+    >
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[640px] border-separate border-spacing-1 text-xs">
+          <thead>
+            <tr>
+              <th className="w-48 text-left font-medium text-dark-5 dark:text-dark-6" />
+              {coverage.months.map((month) => (
+                <th key={month} className="font-medium text-dark-5 dark:text-dark-6">
+                  {formatMonth(month, "MMM")}
+                  <span className="block text-[10px] font-normal opacity-70">{formatMonth(month, "yy")}</span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {coverage.accounts.map((account) => (
+              <tr key={account.label}>
+                <td className="pr-2">
+                  <span className="flex items-center gap-2 text-sm font-medium text-dark dark:text-white">
+                    <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: account.color }} />
+                    <span className="truncate">{account.label}</span>
+                  </span>
+                </td>
+                {account.months.map((cell) => (
+                  <td key={cell.month} className="p-0">
+                    <div
+                      title={`${formatMonth(cell.month)}: ${cell.transactionCount ? plural(cell.transactionCount, "transaction") : cell.tracked ? "missing" : "before this account's first statement"}`}
+                      className={cn(
+                        "flex h-8 items-center justify-center rounded-md tabular-nums",
+                        cell.transactionCount
+                          ? "bg-primary/70 font-semibold text-white"
+                          : cell.tracked
+                            ? "border border-dashed border-red bg-red/10 text-red"
+                            : "bg-gray-2 dark:bg-dark-3",
+                      )}
+                    >
+                      {cell.transactionCount || (cell.tracked ? "–" : "")}
+                    </div>
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </SectionCard>
   );
 }

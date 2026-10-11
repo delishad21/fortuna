@@ -53,6 +53,8 @@ export interface AnalyticsReportParams {
   groupBy?: string;
   categoryId?: string;
   merchantKey?: string;
+  /** Time-series bucket: "day" or "month" (defaults from groupBy). */
+  interval?: string;
 }
 
 export async function getAnalyticsReport(params: AnalyticsReportParams = {}) {

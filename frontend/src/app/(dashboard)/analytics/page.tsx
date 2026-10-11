@@ -4,7 +4,7 @@ import { AnalyticsClient } from "@/components/analytics/AnalyticsClient";
 export default async function AnalyticsPage() {
   const [initialOverview, initialReport, initialInsights] = await Promise.all([
     getAnalyticsOverview(),
-    getAnalyticsReport(),
+    getAnalyticsReport({ groupBy: "day", interval: "day" }),
     getAnalyticsInsights(),
   ]);
 
