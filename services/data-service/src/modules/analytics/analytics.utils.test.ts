@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   buildCategoryBreakdown,
   buildStatementCoverage,
+  centeredWindow,
   getEffectiveIn,
   getEffectiveOut,
   getReimbursementLeftover,
@@ -141,5 +142,23 @@ describe("statement coverage", () => {
 
   it("returns nothing without transactions", () => {
     assert.deepEqual(buildStatementCoverage([], []), { months: [], accounts: [] });
+  });
+});
+
+describe("centered month window", () => {
+  it("puts the selected month in the middle when there is room", () => {
+    assert.deepEqual(centeredWindow(24, 12, 6), [6, 19]);
+  });
+
+  it("shows more months after the selection near the start", () => {
+    assert.deepEqual(centeredWindow(24, 2, 6), [0, 13]);
+  });
+
+  it("shows more months before the selection near the end", () => {
+    assert.deepEqual(centeredWindow(24, 23, 6), [11, 24]);
+  });
+
+  it("shows everything when there are fewer months than the window", () => {
+    assert.deepEqual(centeredWindow(5, 4, 6), [0, 5]);
   });
 });

@@ -6,6 +6,7 @@ import {
   buildDailySeries as buildAnalyticsDailySeries,
   buildMonthSeries,
   buildStatementCoverage,
+  centeredWindow,
   formatDayKey as formatAnalyticsDayKey,
   formatMonthKey,
   getEffectiveIn as getAnalyticsEffectiveIn,
@@ -555,9 +556,14 @@ analyticsRouter.get("/dashboard-overview", async (req: Request, res: Response) =
     const selectedIndex = selectedMonth
       ? monthsAscending.findIndex(([monthKey]) => monthKey === selectedMonth)
       : -1;
-    // Up to 6 months ending at the selected month.
-    const trendEnd = selectedIndex >= 0 ? selectedIndex + 1 : monthsAscending.length;
-    const trend = monthsAscending.slice(Math.max(0, trendEnd - 6), trendEnd).map(([monthKey, monthTransactions]) => ({
+    // The selected month in the middle with up to 6 months either side; when
+    // one side runs out, the other side shows more.
+    const [trendStart, trendEnd] = centeredWindow(
+      monthsAscending.length,
+      selectedIndex >= 0 ? selectedIndex : monthsAscending.length - 1,
+      6,
+    );
+    const trend = monthsAscending.slice(trendStart, trendEnd).map(([monthKey, monthTransactions]) => ({
       month: monthKey,
       ...summarizeTransactions(monthTransactions),
     }));
@@ -973,7 +979,14 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
       breakdown: withMetricPercent(breakdown),
       categoryBreakdown: withMetricPercent(categoryBreakdown),
       merchantBreakdown: withMetricPercent(merchantBreakdown),
-      transactions: [...transactions].reverse().map(serializeTransaction),
+      // Extra fields so the web can render the usual transaction cards.
+      transactions: [...transactions].reverse().map((tx) => ({
+        ...serializeTransaction(tx),
+        accountIdentifier: tx.accountIdentifier ?? null,
+        linkage: tx.linkage ?? null,
+        originalAmountIn: tx.amountIn === null ? null : Number(tx.amountIn),
+        originalAmountOut: tx.amountOut === null ? null : Number(tx.amountOut),
+      })),
       categories: availableCategories.map((item) => ({ id: item.key, name: item.name, color: item.color })),
       merchants: availableMerchants.map((item) => ({ key: item.key, name: item.name })),
     });

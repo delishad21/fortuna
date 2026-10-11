@@ -288,3 +288,13 @@ export const buildStatementCoverage = (
       .sort((a, b) => a.label.localeCompare(b.label)),
   };
 };
+
+/**
+ * [start, end) indexes of a window of up to `radius * 2 + 1` items centred on
+ * `index`, shifted to stay inside `[0, length)`.
+ */
+export const centeredWindow = (length: number, index: number, radius: number) => {
+  const size = Math.min(length, radius * 2 + 1);
+  const start = Math.min(Math.max(index - radius, 0), Math.max(length - size, 0));
+  return [start, start + size] as const;
+};
