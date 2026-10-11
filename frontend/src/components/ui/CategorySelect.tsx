@@ -63,6 +63,21 @@ export function CategorySelect({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const pointerFocusRef = useRef(false);
+  const focusSearchOnOpenRef = useRef(true);
+  const typeaheadRef = useRef("");
+  const typeaheadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingIdRef = useRef<string | null>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  // Type-ahead previews its match here and commits it once typing pauses, so a
+  // category with side effects (Reimbursement opens a picker) is not chosen
+  // halfway through typing another name.
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  // The choice just handed to onChange, shown until the parent's value catches
+  // up so a slow save doesn't flash the old category.
+  const [committedId, setCommittedId] = useState<string | null>(null);
 
   const reservedNames = ["internal", "reimbursement"];
   const filteredCategories = categories.filter((cat) => {
@@ -71,12 +86,113 @@ export function CategorySelect({
     if (excludeReserved && reservedNames.includes(name)) return false;
     return true;
   });
-  const selectedCategory = filteredCategories.find((c) => c.id === value);
-  const visibleCategories = searchQuery.trim()
-    ? filteredCategories.filter((category) =>
-        category.name.toLowerCase().includes(searchQuery.trim().toLowerCase()),
-      )
+  const shownId = pendingId ?? committedId ?? value;
+  const selectedCategory = filteredCategories.find((c) => c.id === shownId);
+  const needle = searchQuery.trim().toLowerCase();
+  const visibleCategories = needle
+    ? [
+        ...filteredCategories.filter((category) =>
+          category.name.toLowerCase().startsWith(needle),
+        ),
+        ...filteredCategories.filter(
+          (category) =>
+            !category.name.toLowerCase().startsWith(needle) &&
+            category.name.toLowerCase().includes(needle),
+        ),
+      ]
     : filteredCategories;
+  const alphabetical = [...filteredCategories].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+  );
+
+  // Reserved picks open their own dialogs instead of changing the value.
+  const holdChoice = (id: string) => {
+    const name = categories.find((c) => c.id === id)?.name.toLowerCase();
+    if (!name || !reservedNames.includes(name)) setCommittedId(id);
+  };
+
+  const clearTypeahead = () => {
+    typeaheadRef.current = "";
+    if (typeaheadTimerRef.current) clearTimeout(typeaheadTimerRef.current);
+    typeaheadTimerRef.current = null;
+  };
+
+  const showPending = (id: string | null) => {
+    pendingIdRef.current = id;
+    setPendingId(id);
+  };
+
+  const commitTypeahead = () => {
+    clearTypeahead();
+    const next = pendingIdRef.current;
+    if (next === null) return false;
+    showPending(null);
+    setIsOpen(false);
+    if (next !== (valueRef.current ?? "")) {
+      holdChoice(next);
+      onChangeRef.current(next);
+    }
+    return true;
+  };
+
+  const cancelTypeahead = () => {
+    clearTypeahead();
+    showPending(null);
+  };
+
+  // Typing letters on the closed or open trigger jumps to the first category,
+  // alphabetically, whose name starts with everything typed in the last 2s.
+  const handleTypeahead = (event: React.KeyboardEvent) => {
+    if (disabled || lockedByLinkage) return false;
+    if (event.ctrlKey || event.metaKey || event.altKey) return false;
+    const typing = typeaheadRef.current;
+    let next: string;
+    if (event.key === "Backspace") {
+      if (!typing) return false;
+      next = typing.slice(0, -1);
+    } else if (event.key.length === 1 && (typing || /\S/.test(event.key))) {
+      next = `${typing}${event.key.toLowerCase()}`;
+    } else {
+      return false;
+    }
+    event.preventDefault();
+    if (!next) {
+      cancelTypeahead();
+      return true;
+    }
+    typeaheadRef.current = next;
+    const match = alphabetical.find((category) =>
+      category.name.toLowerCase().startsWith(next),
+    );
+    if (match) showPending(match.id);
+    if (typeaheadTimerRef.current) clearTimeout(typeaheadTimerRef.current);
+    typeaheadTimerRef.current = setTimeout(commitTypeahead, 2000);
+    return true;
+  };
+
+  useEffect(() => {
+    if (committedId === null) return;
+    // A rejected change (e.g. Reimbursement on an expense) never updates value.
+    const timer = setTimeout(() => setCommittedId(null), 4000);
+    return () => clearTimeout(timer);
+  }, [committedId]);
+
+  useEffect(() => setCommittedId(null), [value]);
+
+  // A row can unmount (virtualized tables) mid-typing; keep what was typed.
+  useEffect(() => () => void commitTypeahead(), []);
+
+  useEffect(() => {
+    if (!isOpen || !shownId) return;
+    const frame = requestAnimationFrame(() =>
+      dropdownRef.current
+        ?.querySelector<HTMLElement>(
+          `[data-category-id="${CSS.escape(shownId)}"]`,
+        )
+        ?.scrollIntoView({ block: "nearest" }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen, shownId]);
 
   const renderMenu = (menu: React.ReactNode) =>
     dropdownPlacement === "inline" || typeof document === "undefined"
@@ -108,7 +224,9 @@ export function CategorySelect({
   useEffect(() => {
     if (!isOpen) return;
 
-    const focusFrame = requestAnimationFrame(() => searchRef.current?.focus());
+    const focusFrame = focusSearchOnOpenRef.current
+      ? requestAnimationFrame(() => searchRef.current?.focus())
+      : 0;
 
     function handleClickOutside(event: MouseEvent) {
       if (
@@ -153,11 +271,14 @@ export function CategorySelect({
   }, [isOpen, dropdownPlacement]);
 
   const handleSelect = (categoryId: string) => {
+    cancelTypeahead();
+    if (categoryId !== (value ?? "")) holdChoice(categoryId);
     onChange(categoryId);
     setIsOpen(false);
   };
 
   const handleAddNew = () => {
+    cancelTypeahead();
     setIsOpen(false);
     onAddClick();
   };
@@ -166,6 +287,7 @@ export function CategorySelect({
     className: triggerClassNameProp,
     onKeyDown: triggerOnKeyDown,
     onFocus: triggerOnFocus,
+    onBlur: triggerOnBlur,
     ...triggerRestProps
   } = triggerProps || {};
   const triggerClassName = [
@@ -195,44 +317,59 @@ export function CategorySelect({
         onClick={() => {
           if (disabled) return;
           pointerFocusRef.current = false;
+          if (commitTypeahead()) return;
           // Position before the first frame so the menu never flashes at 0,0.
           if (!isOpen) updateDropdownPosition();
+          focusSearchOnOpenRef.current = true;
           setIsOpen((prev) => !prev);
         }}
         onFocus={(event) => {
           triggerOnFocus?.(event);
           if (openOnFocus && !disabled && !pointerFocusRef.current) {
             updateDropdownPosition();
+            // Keep focus here so typing picks a category without the search box.
+            focusSearchOnOpenRef.current = false;
             setIsOpen(true);
           }
+        }}
+        onBlur={(event) => {
+          triggerOnBlur?.(event);
+          const next = event.relatedTarget as Node | null;
+          if (next && dropdownRef.current?.contains(next)) {
+            // Moving into the search box: searching replaces the type-ahead.
+            cancelTypeahead();
+            return;
+          }
+          commitTypeahead();
         }}
         onKeyDown={(event) => {
           triggerOnKeyDown?.(event);
           if (event.defaultPrevented) return;
           if (event.key === "Escape") {
+            cancelTypeahead();
             setIsOpen(false);
             return;
           }
           if (event.key === "Tab") {
+            commitTypeahead();
             setIsOpen(false);
+            return;
+          }
+          if (event.key === "Enter" && pendingIdRef.current !== null) {
+            event.preventDefault();
+            commitTypeahead();
             return;
           }
           if (event.key === "Enter" || event.key === "ArrowDown") {
             event.preventDefault();
+            cancelTypeahead();
             updateDropdownPosition();
+            focusSearchOnOpenRef.current = true;
+            if (isOpen) searchRef.current?.focus();
             setIsOpen(true);
             return;
           }
-          if (
-            !disabled &&
-            !lockedByLinkage &&
-            event.key.length === 1 &&
-            /\S/.test(event.key)
-          ) {
-            event.preventDefault();
-            setSearchQuery(event.key);
-            setIsOpen(true);
-          }
+          handleTypeahead(event);
         }}
         disabled={disabled}
         {...triggerRestProps}
@@ -279,11 +416,16 @@ export function CategorySelect({
         renderMenu(
           <div
             ref={dropdownRef}
+            onMouseDown={(event) => {
+              // Clicking an option keeps focus on the trigger; only the search
+              // box takes focus.
+              if (event.target !== searchRef.current) event.preventDefault();
+            }}
             className={`${
               dropdownPlacement === "inline"
                 ? "absolute left-0 right-0 z-30"
                 : "fixed z-[90]"
-            } py-1 bg-white dark:bg-dark-2 border border-stroke dark:border-dark-3 rounded-lg shadow-dropdown max-h-60 overflow-auto`}
+            } flex max-h-60 flex-col overflow-hidden bg-white dark:bg-dark-2 border border-stroke dark:border-dark-3 rounded-lg shadow-dropdown`}
             style={
               dropdownPlacement === "inline"
                 ? showAbove
@@ -306,7 +448,7 @@ export function CategorySelect({
                   }
             }
           >
-            <div className="sticky top-0 z-10 border-b border-stroke bg-white p-2 dark:border-dark-3 dark:bg-dark-2">
+            <div className="shrink-0 border-b border-stroke bg-white p-2 dark:border-dark-3 dark:bg-dark-2">
               <input
                 ref={searchRef}
                 type="search"
@@ -330,60 +472,68 @@ export function CategorySelect({
               />
             </div>
 
-            {/* Uncategorized Option */}
-            <button
-              type="button"
-              onClick={() => handleSelect("")}
-              className="w-full flex items-center px-4 py-2.5 text-sm text-left hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors"
-            >
-              <div className="w-2.5 h-2.5 rounded-full mr-2 flex-shrink-0 bg-dark-5 dark:bg-dark-6" />
-              <span className="flex-1 text-dark dark:text-white">
-                {emptyLabel}
-              </span>
-              {!value && <Check className="h-4 w-4 text-primary ml-2" />}
-            </button>
-
-            {/* Divider */}
-            <div className="h-px bg-stroke dark:bg-dark-3 my-1" />
-
-            {/* Category Options */}
-            {visibleCategories.map((cat) => (
+            <div className="min-h-0 flex-1 overflow-auto py-1">
+              {/* Uncategorized Option */}
               <button
-                key={cat.id}
                 type="button"
-                onClick={() => handleSelect(cat.id)}
-                className="w-full flex items-center px-4 py-2.5 text-sm text-left hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors"
+                data-category-id=""
+                onClick={() => handleSelect("")}
+                className={`w-full flex items-center px-4 py-2.5 text-sm text-left hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors ${
+                  pendingId === "" ? "bg-gray-2 dark:bg-dark-3" : ""
+                }`}
               >
-                <div
-                  className="w-2.5 h-2.5 rounded-full mr-2 flex-shrink-0"
-                  style={{ backgroundColor: cat.color }}
-                />
+                <div className="w-2.5 h-2.5 rounded-full mr-2 flex-shrink-0 bg-dark-5 dark:bg-dark-6" />
                 <span className="flex-1 text-dark dark:text-white">
-                  {cat.name}
+                  {emptyLabel}
                 </span>
-                {value === cat.id && (
-                  <Check className="h-4 w-4 text-primary ml-2" />
-                )}
+                {!shownId && <Check className="h-4 w-4 text-primary ml-2" />}
               </button>
-            ))}
-            {visibleCategories.length === 0 && (
-              <p className="px-4 py-3 text-sm text-dark-5 dark:text-dark-6">
-                No categories found
-              </p>
-            )}
 
-            {/* Divider */}
-            <div className="h-px bg-stroke dark:bg-dark-3 my-1" />
+              {/* Divider */}
+              <div className="h-px bg-stroke dark:bg-dark-3 my-1" />
 
-            {/* Add New Category */}
-            <button
-              type="button"
-              onClick={handleAddNew}
-              className="w-full flex items-center px-4 py-2.5 text-sm text-left text-primary hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors font-medium"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              <span>New Category</span>
-            </button>
+              {/* Category Options */}
+              {visibleCategories.map((cat) => (
+                <button
+                  key={cat.id}
+                  type="button"
+                  data-category-id={cat.id}
+                  onClick={() => handleSelect(cat.id)}
+                  className={`w-full flex items-center px-4 py-2.5 text-sm text-left hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors ${
+                    pendingId === cat.id ? "bg-gray-2 dark:bg-dark-3" : ""
+                  }`}
+                >
+                  <div
+                    className="w-2.5 h-2.5 rounded-full mr-2 flex-shrink-0"
+                    style={{ backgroundColor: cat.color }}
+                  />
+                  <span className="flex-1 text-dark dark:text-white">
+                    {cat.name}
+                  </span>
+                  {shownId === cat.id && (
+                    <Check className="h-4 w-4 text-primary ml-2" />
+                  )}
+                </button>
+              ))}
+              {visibleCategories.length === 0 && (
+                <p className="px-4 py-3 text-sm text-dark-5 dark:text-dark-6">
+                  No categories found
+                </p>
+              )}
+
+              {/* Divider */}
+              <div className="h-px bg-stroke dark:bg-dark-3 my-1" />
+
+              {/* Add New Category */}
+              <button
+                type="button"
+                onClick={handleAddNew}
+                className="w-full flex items-center px-4 py-2.5 text-sm text-left text-primary hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors font-medium"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                <span>New Category</span>
+              </button>
+            </div>
           </div>,
         )}
     </div>
