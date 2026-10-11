@@ -352,10 +352,7 @@ export function AgentDraftReviewClient({
     }
   };
 
-  /**
-   * Mark a money-in row as a reimbursement if needed, then choose what it pays
-   * back. On an expense, choose the money-in rows that paid it back instead.
-   */
+  /** Mark the row as a reimbursement if needed, then choose what it pays back. */
   const openReimbursement = async (globalIndex: number) => {
     const item = flatRows[globalIndex];
     if (!item) return;
@@ -363,8 +360,7 @@ export function AgentDraftReviewClient({
     const rowId = String(item.row.id);
     const payload = item.row.currentPayload || {};
     if (!(Number(payload.amountIn || 0) > 0)) {
-      if (Number(payload.amountOut || 0) > 0) openReimbursedBy(globalIndex);
-      else setMessage("Add an amount before linking reimbursements.");
+      setMessage("Only money-in rows can be reimbursements.");
       return;
     }
     if (payload.linkage?.type !== "reimbursement") {

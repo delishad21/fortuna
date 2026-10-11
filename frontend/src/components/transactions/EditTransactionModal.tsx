@@ -244,11 +244,7 @@ export function EditTransactionModal({
   };
 
   const handleReimbursementClick = async () => {
-    // An expense can't be a reimbursement; pick what paid it back instead.
-    if (!parseAmount(formData.amountIn)) {
-      if (parseAmount(transaction.amountOut)) setPickerMode("reimbursements");
-      return;
-    }
+    if (!parseAmount(formData.amountIn)) return;
     setLinkageType("reimbursement");
     if (savedType === "reimbursement") {
       setPickerMode("expenses");
@@ -419,10 +415,7 @@ export function EditTransactionModal({
                 isLoading={isMarking}
                 onClick={() => void handleReimbursementClick()}
                 leftIcon={<Receipt className="h-4 w-4" />}
-                disabled={
-                  !parseAmount(formData.amountIn) &&
-                  !parseAmount(transaction.amountOut)
-                }
+                disabled={!parseAmount(formData.amountIn)}
               >
                 Reimbursement
               </Button>
@@ -437,9 +430,7 @@ export function EditTransactionModal({
             </div>
             {!parseAmount(formData.amountIn) && (
               <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
-                {parseAmount(transaction.amountOut)
-                  ? "On an expense, Reimbursement picks the money-in that paid it back."
-                  : "Reimbursement needs a saved amount."}
+                Reimbursement is available only for positive inflow transactions.
               </p>
             )}
             {linkageType === "reimbursement" && savedType === "reimbursement" && (
