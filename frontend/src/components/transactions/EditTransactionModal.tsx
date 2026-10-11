@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { CategorySelect } from "@/components/ui/CategorySelect";
 import { AccountIdentifierSelect } from "@/components/ui/AccountIdentifierSelect";
 import { ReimbursementLinkPicker } from "@/components/reimbursement/ReimbursementLinkPicker";
-import { getLinkedTransactions } from "@/app/actions/transactions";
+import { getLinkedTransactions, updateTransaction } from "@/app/actions/transactions";
 import { Modal } from "@/components/ui/Modal";
 import {
   SplitTransactionModal,
@@ -119,10 +119,14 @@ export function EditTransactionModal({
     return `${year}-${month}-${day}`;
   };
 
-  const [formData, setFormData] = useState({
-    ...transaction,
-    date: formatDateForPicker(transaction.date),
+  // Treat a stored 0 on the unused side as empty, so the other amount stays editable.
+  const withAmounts = (t: Transaction) => ({
+    ...t,
+    amountIn: Number(t.amountIn) ? t.amountIn : null,
+    amountOut: Number(t.amountOut) ? t.amountOut : null,
+    date: formatDateForPicker(t.date),
   });
+  const [formData, setFormData] = useState(withAmounts(transaction));
   const [linkageType, setLinkageType] = useState<
     "none" | "internal" | "reimbursement"
   >(
@@ -139,10 +143,7 @@ export function EditTransactionModal({
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    setFormData({
-      ...transaction,
-      date: formatDateForPicker(transaction.date),
-    });
+    setFormData(withAmounts(transaction));
     setLinkageType(
       transaction.linkage?.type === "internal"
         ? "internal"
@@ -151,12 +152,17 @@ export function EditTransactionModal({
           : "none",
     );
     setPickerMode(null);
+    setSavedType(transaction.linkage?.type ?? null);
+    setMarkError("");
     setLinked(transaction.linkedTransactions);
     setIsSplitModalOpen(false);
     setShowSplitWarning(false);
   }, [transaction]);
 
-  const savedType = transaction.linkage?.type ?? null;
+  // The saved link type; choosing Reimbursement saves it straight away so the picker can open.
+  const [savedType, setSavedType] = useState(transaction.linkage?.type ?? null);
+  const [isMarking, setIsMarking] = useState(false);
+  const [markError, setMarkError] = useState("");
   const reimbursedBy = linked?.reimbursedBy || [];
   const reimburses = linked?.reimburses || [];
   const reimbursedTotal = useMemo(
@@ -237,14 +243,29 @@ export function EditTransactionModal({
     }
   };
 
-  const handleReimbursementClick = () => {
+  const handleReimbursementClick = async () => {
     if (!parseAmount(formData.amountIn)) return;
+    setLinkageType("reimbursement");
     if (savedType === "reimbursement") {
-      setLinkageType("reimbursement");
       setPickerMode("expenses");
       return;
     }
-    setLinkageType("reimbursement");
+    // Only a saved money-in transaction can be linked; otherwise it is marked when saved.
+    if (!parseAmount(transaction.amountIn)) return;
+    setIsMarking(true);
+    setMarkError("");
+    try {
+      await updateTransaction(transaction.id, {
+        linkage: { type: "reimbursement", leftoverCategoryId: null },
+      });
+      setSavedType("reimbursement");
+      setPickerMode("expenses");
+      await onLinksChanged?.([]);
+    } catch (error) {
+      setMarkError(error instanceof Error ? error.message : "Could not mark this as a reimbursement");
+    } finally {
+      setIsMarking(false);
+    }
   };
 
   const handleOpenSplitModal = () => {
@@ -391,7 +412,8 @@ export function EditTransactionModal({
               <Button
                 type="button"
                 variant={linkageType === "reimbursement" ? "success" : "secondary"}
-                onClick={handleReimbursementClick}
+                isLoading={isMarking}
+                onClick={() => void handleReimbursementClick()}
                 leftIcon={<Receipt className="h-4 w-4" />}
                 disabled={!parseAmount(formData.amountIn)}
               >
@@ -420,10 +442,10 @@ export function EditTransactionModal({
             )}
             {linkageType === "reimbursement" && savedType !== "reimbursement" && (
               <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
-                Save to mark this as a reimbursement, then open it again to
-                choose what it pays back.
+                Save the money-in amount first, then choose what it pays back.
               </p>
             )}
+            {markError ? <p className="mt-1 text-xs text-red">{markError}</p> : null}
             {parseAmount(formData.amountOut) && linkageType === "none" ? (
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-stroke px-3 py-2 dark:border-dark-3">
                 <p className="text-xs text-dark-5 dark:text-dark-6">

@@ -80,6 +80,10 @@ export interface TransactionCardTransaction {
   };
 }
 
+/** A zero on the unused side (stored as 0 instead of null) is not an amount. */
+const hasAmount = (value: number | string | null | undefined) =>
+  value !== null && value !== undefined && Number(value) !== 0;
+
 interface TransactionCardProps {
   transaction: TransactionCardTransaction;
   accountColor?: string;
@@ -180,8 +184,8 @@ export function TransactionCard({
   const formatAmount = (amount: number | null) =>
     formatAmountInCurrency(amount, transaction.displayCurrency || transaction.currency || "SGD");
 
-  const amount = transaction.amountIn ?? transaction.amountOut ?? 0;
-  const isIncome = transaction.amountIn !== null;
+  const isIncome = hasAmount(transaction.amountIn);
+  const amount = (isIncome ? transaction.amountIn : transaction.amountOut) ?? 0;
   const reimbursedTotal =
     linkedTransactions?.reimbursedBy.reduce(
       (sum, linked) => sum + (linked.reimbursementAmount ?? 0),
@@ -483,7 +487,7 @@ export function TransactionCard({
               </div>
             )}
 
-            {transaction.amountIn !== null && (
+            {hasAmount(transaction.amountIn) && (
               <div>
                 <div className="text-dark-5 dark:text-dark-6">Amount In</div>
                 <div className="font-medium text-green dark:text-green-light mt-0.5">
@@ -492,7 +496,7 @@ export function TransactionCard({
               </div>
             )}
 
-            {transaction.amountOut !== null && (
+            {hasAmount(transaction.amountOut) && (
               <div>
                 <div className="text-dark-5 dark:text-dark-6">Amount Out</div>
                 <div className="font-medium text-red dark:text-red-light mt-0.5">
@@ -565,7 +569,7 @@ export function TransactionCard({
                 linkedTransactions.reimbursedBy.length > 0) && (
                 <div className="col-span-2 mt-2">
                   {linkedTransactions.reimbursedBy.length > 0 &&
-                    transaction.amountOut !== null && (
+                    hasAmount(transaction.amountOut) && (
                       <div className="mb-3 grid grid-cols-1 gap-2 rounded border border-stroke bg-white p-3 dark:border-dark-3 dark:bg-dark-2 md:grid-cols-3">
                         <div>
                           <div className="text-[11px] uppercase tracking-wide text-dark-5 dark:text-dark-6">
@@ -661,8 +665,8 @@ function LinkedTransactionPreview({
   formatAmount: (amount: number | null) => string;
   mode: "pays" | "received";
 }) {
-  const amount = transaction.amountIn ?? transaction.amountOut ?? 0;
-  const isIncome = transaction.amountIn !== null;
+  const isIncome = hasAmount(transaction.amountIn);
+  const amount = (isIncome ? transaction.amountIn : transaction.amountOut) ?? 0;
   const accentColor =
     mode === "pays"
       ? "bg-primary"
