@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   buildCategoryBreakdown,
+  buildStatementCoverage,
   getEffectiveIn,
   getEffectiveOut,
   getReimbursementLeftover,
@@ -109,5 +110,36 @@ describe("reimbursement analytics", () => {
     assert.equal(synthetic?.name, REIMBURSEMENT_LEFTOVER_CATEGORY.name);
     assert.equal(synthetic?.totalIn, 30);
     assert.equal(realCategory?.totalIn, 0);
+  });
+});
+
+describe("statement coverage", () => {
+  const at = (day: string, accountIdentifier: string | null) => ({ date: new Date(`${day}T00:00:00Z`), accountIdentifier });
+
+  it("flags months with no transactions after an account's first statement", () => {
+    const coverage = buildStatementCoverage(
+      [
+        at("2026-05-03", "DBS"),
+        at("2026-06-03", "DBS"),
+        at("2026-08-03", "DBS"),
+        at("2026-07-10", "UOB"),
+        at("2026-08-10", "UOB"),
+      ],
+      [{ accountIdentifier: "DBS", label: "DBS Multiplier", color: "#3B82F6" }],
+      4,
+    );
+
+    assert.deepEqual(coverage.months, ["2026-05", "2026-06", "2026-07", "2026-08"]);
+    const dbs = coverage.accounts.find((account) => account.accountIdentifier === "DBS");
+    assert.equal(dbs?.label, "DBS Multiplier");
+    assert.deepEqual(dbs?.missingMonths, ["2026-07"]);
+    const uob = coverage.accounts.find((account) => account.accountIdentifier === "UOB");
+    // Months before UOB's first statement are not "missing".
+    assert.deepEqual(uob?.missingMonths, []);
+    assert.deepEqual(uob?.months.map((cell) => cell.tracked), [false, false, true, true]);
+  });
+
+  it("returns nothing without transactions", () => {
+    assert.deepEqual(buildStatementCoverage([], []), { months: [], accounts: [] });
   });
 });

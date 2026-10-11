@@ -231,3 +231,60 @@ export const buildCategoryBreakdown = (transactions: AnalyticsTransaction[]) => 
 
   return Array.from(map.values()).sort((a, b) => b.totalOut - a.totalOut);
 };
+
+export const shiftMonthKey = (monthKey: string, offset: number) => {
+  const [year, month] = monthKey.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1 + offset, 1));
+  return date.toISOString().slice(0, 7);
+};
+
+/**
+ * Months with transactions per account over the last `span` months, so the
+ * review tab can show which statements are missing.
+ */
+export const buildStatementCoverage = (
+  transactions: Array<{ date: Date; accountIdentifier?: string | null }>,
+  accounts: Array<{ accountIdentifier: string; label: string | null; color: string }>,
+  span = 12,
+) => {
+  if (transactions.length === 0) return { months: [] as string[], accounts: [] };
+  const latestMonth = transactions
+    .map((tx) => formatMonthKey(tx.date))
+    .reduce((max, key) => (key > max ? key : max));
+  const months = Array.from({ length: span }, (_, index) =>
+    shiftMonthKey(latestMonth, index - (span - 1)),
+  );
+  const byAccount = new Map<string, { counts: Map<string, number>; firstMonth: string }>();
+  for (const tx of transactions) {
+    const key = tx.accountIdentifier || "";
+    const month = formatMonthKey(tx.date);
+    const entry = byAccount.get(key) || { counts: new Map<string, number>(), firstMonth: month };
+    entry.counts.set(month, (entry.counts.get(month) || 0) + 1);
+    if (month < entry.firstMonth) entry.firstMonth = month;
+    byAccount.set(key, entry);
+  }
+  const accountInfo = new Map(accounts.map((item) => [item.accountIdentifier, item]));
+  return {
+    months,
+    accounts: Array.from(byAccount.entries())
+      .map(([identifier, entry]) => {
+        const info = accountInfo.get(identifier);
+        const cells = months.map((month) => ({
+          month,
+          transactionCount: entry.counts.get(month) || 0,
+          tracked: month >= entry.firstMonth,
+        }));
+        return {
+          accountIdentifier: identifier || null,
+          label: info?.label || identifier || "No account",
+          color: info?.color || "#9ca3af",
+          months: cells,
+          missingMonths: cells
+            .filter((cell) => cell.tracked && cell.transactionCount === 0)
+            .map((cell) => cell.month),
+        };
+      })
+      .filter((account) => account.months.some((cell) => cell.transactionCount > 0))
+      .sort((a, b) => a.label.localeCompare(b.label)),
+  };
+};

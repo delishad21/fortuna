@@ -5,6 +5,7 @@ import {
   buildCategoryBreakdown as buildAnalyticsCategoryBreakdown,
   buildDailySeries as buildAnalyticsDailySeries,
   buildMonthSeries,
+  buildStatementCoverage,
   formatDayKey as formatAnalyticsDayKey,
   formatMonthKey,
   getEffectiveIn as getAnalyticsEffectiveIn,
@@ -296,13 +297,17 @@ const buildImportDailySeries = (transactions: ImportSummaryTransaction[]) => {
 
 const buildRecurringMerchantInsights = (
   importedMonthGroups: Array<[string, AnalyticsTransaction[]]>,
+  limit = 8,
 ) => {
   const merchantByMonth = new Map<string, Map<string, { name: string; months: Set<string>; totalOut: number; amounts: number[] }>>();
+  const lastCharge = new Map<string, { date: Date; amount: number }>();
   for (const [monthKey, monthTransactions] of importedMonthGroups) {
     for (const tx of monthTransactions) {
       const amountOut = getAnalyticsEffectiveOut(tx);
       if (amountOut <= 0) continue;
       const merchant = normalizeMerchant(tx);
+      const last = lastCharge.get(merchant.key);
+      if (!last || tx.date > last.date) lastCharge.set(merchant.key, { date: tx.date, amount: amountOut });
       const monthMap = merchantByMonth.get(merchant.key) || new Map();
       const current = monthMap.get(monthKey) || { name: merchant.name, months: new Set<string>(), totalOut: 0, amounts: [] };
       current.months.add(monthKey);
@@ -329,12 +334,39 @@ const buildRecurringMerchantInsights = (
         averageAmount,
         frequency: monthsSeen >= 3 ? "monthly" : monthsSeen === 2 ? "recurring" : "one-off",
         stability: maxAmount - minAmount <= Math.max(5, averageAmount * 0.1) ? "fixed" : "variable",
+        lastDate: lastCharge.get(key)?.date ?? null,
+        lastAmount: lastCharge.get(key)?.amount ?? 0,
       };
     })
     .filter((item) => item.monthsSeen >= 2)
     .sort((a, b) => b.totalOut - a.totalOut)
-    .slice(0, 8);
+    .slice(0, limit);
 };
+
+/** No category, or the placeholder category literally named "Uncategorized". */
+const isUncategorized = (tx: { categoryId?: string | null; category?: { name: string } | null }) =>
+  !tx.categoryId || tx.category?.name.trim().toLowerCase() === "uncategorized";
+
+const OPEN_DRAFT_EXCLUDED_STATUSES = ["committed", "discarded", "failed", "cancelled"];
+
+/** Bank-statement drafts that are staged and still waiting to be committed. */
+const listOpenStatementDrafts = (userId: string) =>
+  prisma.importDraft.findMany({
+    where: {
+      userId,
+      mode: "main",
+      status: { notIn: OPEN_DRAFT_EXCLUDED_STATUSES },
+      expiresAt: { gt: new Date() },
+    },
+    select: {
+      id: true,
+      sourceFilename: true,
+      updatedAt: true,
+      _count: { select: { rows: true } },
+    },
+    orderBy: { updatedAt: "desc" },
+  });
+
 
 const summarizeImportGroup = (
   importGroup: ReturnType<typeof getImportFileGroups>[number],
@@ -520,7 +552,12 @@ analyticsRouter.get("/dashboard-overview", async (req: Request, res: Response) =
       .sort((a, b) => getAnalyticsEffectiveOut(b) - getAnalyticsEffectiveOut(a))[0];
 
     const monthsAscending = [...importedMonthGroups].reverse();
-    const trend = monthsAscending.slice(-6).map(([monthKey, monthTransactions]) => ({
+    const selectedIndex = selectedMonth
+      ? monthsAscending.findIndex(([monthKey]) => monthKey === selectedMonth)
+      : -1;
+    // Up to 6 months ending at the selected month.
+    const trendEnd = selectedIndex >= 0 ? selectedIndex + 1 : monthsAscending.length;
+    const trend = monthsAscending.slice(Math.max(0, trendEnd - 6), trendEnd).map(([monthKey, monthTransactions]) => ({
       month: monthKey,
       ...summarizeTransactions(monthTransactions),
     }));
@@ -531,12 +568,34 @@ analyticsRouter.get("/dashboard-overview", async (req: Request, res: Response) =
     const currentSummary = summarizeTransactions(selectedTransactions);
     const previousSummary = previousMonth ? summarizeTransactions(previousMonth[1]) : null;
 
-    const recentTransactions = await prisma.transaction.findMany({
-      where: { userId: userId as string },
-      include: { category: true },
-      orderBy: { date: "desc" },
-      take: 8,
-    });
+    const previousCategories = new Map(
+      (previousMonth ? buildAnalyticsCategoryBreakdown(previousMonth[1]) : []).map((item) => [item.key, item]),
+    );
+    const spendingByCategory = categoryBreakdown
+      .filter((item) => item.totalOut > 0)
+      .map((item) => ({
+        key: item.key,
+        name: item.name,
+        color: item.color,
+        totalOut: item.totalOut,
+        transactionCount: item.transactionCount,
+        previousTotalOut: previousCategories.get(item.key)?.totalOut || 0,
+      }));
+    const largestExpenses = selectedTransactions
+      .filter((tx) => getAnalyticsEffectiveOut(tx) > 0)
+      .sort((a, b) => getAnalyticsEffectiveOut(b) - getAnalyticsEffectiveOut(a))
+      .slice(0, 5)
+      .map(serializeTransaction);
+
+    const [recentTransactions, openDrafts] = await Promise.all([
+      prisma.transaction.findMany({
+        where: { userId: userId as string },
+        include: { category: true },
+        orderBy: { date: "desc" },
+        take: 8,
+      }),
+      listOpenStatementDrafts(userId as string),
+    ]);
 
     res.json({
       selectedMonth,
@@ -557,6 +616,14 @@ analyticsRouter.get("/dashboard-overview", async (req: Request, res: Response) =
           : null,
       },
       trend,
+      spendingByCategory,
+      largestExpenses,
+      recurringPayments: buildRecurringMerchantInsights(importedMonthGroups, 6),
+      attention: {
+        stagedImports: openDrafts.length,
+        stagedRows: openDrafts.reduce((sum, draft) => sum + draft._count.rows, 0),
+        uncategorizedCount: allTransactions.filter(isUncategorized).length,
+      },
       recentTransactions: recentTransactions.map(serializeTransaction),
       hasTransactions: allTransactions.length > 0,
     });
@@ -586,8 +653,8 @@ analyticsRouter.get("/dashboard-review", async (req: Request, res: Response) => 
     const merchantBreakdown = buildMerchantBreakdown(transactions);
 
     const uncategorized = transactions
-      .filter((tx) => !tx.categoryId)
-      .slice(0, 8)
+      .filter(isUncategorized)
+      .slice(0, 50)
       .map(serializeTransaction);
     const averageOut = transactions.length
       ? transactions.reduce((sum, tx) => sum + getAnalyticsEffectiveOut(tx), 0) / transactions.length
@@ -604,30 +671,43 @@ analyticsRouter.get("/dashboard-review", async (req: Request, res: Response) => 
     });
     const latestMonth = importedMonthGroups[0]?.[0] || null;
     const newMerchants = latestMonth
-      ? transactions
-          .filter((tx) => formatMonthKey(tx.date) === latestMonth)
-          .map((tx) => normalizeMerchant(tx))
-          .filter((merchant, index, arr) =>
-            arr.findIndex((item) => item.key === merchant.key) === index &&
-            firstSeen.get(merchant.key) &&
-            formatMonthKey(firstSeen.get(merchant.key) as Date) === latestMonth,
-          )
-          .slice(0, 8)
+      ? buildMerchantBreakdown(
+          transactions.filter((tx) => {
+            if (formatMonthKey(tx.date) !== latestMonth) return false;
+            const seen = firstSeen.get(normalizeMerchant(tx).key);
+            return !!seen && formatMonthKey(seen) === latestMonth;
+          }),
+        ).slice(0, 8)
       : [];
 
     const importSummaries = getImportFileGroups(transactions)
       .slice(0, 6)
       .map(summarizeImportGroup);
 
-    const ruleCount = await prisma.importRule.count({ where: { userId: userId as string } });
-    const categorizedCount = transactions.filter((tx) => tx.categoryId).length;
+    const [ruleCount, openDrafts, accounts] = await Promise.all([
+      prisma.importRule.count({ where: { userId: userId as string } }),
+      listOpenStatementDrafts(userId as string),
+      prisma.accountIdentifier.findMany({
+        where: { userId: userId as string },
+        select: { accountIdentifier: true, label: true, color: true },
+      }),
+    ]);
+    const categorizedCount = transactions.filter((tx) => !isUncategorized(tx)).length;
 
     res.json({
       reviewQueue: {
         uncategorized,
         newMerchants,
+        newMerchantsMonth: latestMonth,
         largeTransactions,
       },
+      stagedImports: openDrafts.map((draft) => ({
+        id: draft.id,
+        filename: draft.sourceFilename,
+        rowCount: draft._count.rows,
+        updatedAt: draft.updatedAt,
+      })),
+      coverage: buildStatementCoverage(transactions, accounts),
       importSummaries,
       dataHealth: {
         transactionCount: transactions.length,
@@ -733,6 +813,7 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
       groupBy = "month",
       categoryId,
       merchantKey,
+      interval,
     } = req.query;
     if (!userId) {
       return res.status(400).json({ error: "userId is required" });
@@ -768,27 +849,48 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
       excludedCategoryIds,
     );
 
+    const categoryWhere = categoryId
+      ? categoryId === "uncategorized"
+        ? { categoryId: null }
+        : { categoryId: categoryId as string }
+      : {};
+    const filtered = (rows: typeof rawBaseTransactions) => {
+      const kept = filterAnalyticsExcludedCategories(rows, excludedCategoryIds);
+      return merchantKey ? kept.filter((tx) => normalizeMerchant(tx).key === merchantKey) : kept;
+    };
+
     const rawTransactions = await prisma.transaction.findMany({
       where: {
         userId: userId as string,
         date: { gte: start, lte: end },
-        ...(categoryId
-          ? categoryId === "uncategorized"
-            ? { categoryId: null }
-            : { categoryId: categoryId as string }
-          : {}),
+        ...categoryWhere,
       },
       include: { category: true },
       orderBy: { date: "asc" },
     });
-    let transactions = filterAnalyticsExcludedCategories(
-      rawTransactions,
-      excludedCategoryIds,
-    );
+    const transactions = filtered(rawTransactions);
 
-    if (merchantKey) {
-      transactions = transactions.filter((tx) => normalizeMerchant(tx).key === merchantKey);
-    }
+    // The period just before this one, for "vs previous period": the same
+    // number of whole months when the range is month-aligned, else the same
+    // number of days.
+    const previousEnd = new Date(start.getTime() - 1);
+    const dayAfterEnd = new Date(end.getTime() + 1000);
+    const monthAligned = start.getDate() === 1 && dayAfterEnd.getDate() === 1;
+    const monthSpan =
+      (dayAfterEnd.getFullYear() - start.getFullYear()) * 12 + dayAfterEnd.getMonth() - start.getMonth();
+    const previousStart = monthAligned && monthSpan > 0
+      ? new Date(start.getFullYear(), start.getMonth() - monthSpan, 1)
+      : new Date(previousEnd.getTime() - (end.getTime() - start.getTime()));
+    const previousTransactions = filtered(
+      await prisma.transaction.findMany({
+        where: {
+          userId: userId as string,
+          date: { gte: previousStart, lte: previousEnd },
+          ...categoryWhere,
+        },
+        include: { category: true },
+      }),
+    );
 
     const summary = summarizeTransactions(transactions);
     const monthSeries = buildMonthSeries(start, end).map((monthKey) => ({
@@ -807,11 +909,12 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
       net: 0,
       transactionCount: 0,
     }));
-    const timeSeries = groupBy === "day" ? daySeries : monthSeries;
+    const byDay = interval ? interval === "day" : groupBy === "day";
+    const timeSeries = byDay ? daySeries : monthSeries;
     const timeSeriesMap = new Map(timeSeries.map((item) => [item.key, item]));
 
     for (const tx of transactions) {
-      const key = groupBy === "day" ? formatAnalyticsDayKey(tx.date) : formatMonthKey(tx.date);
+      const key = byDay ? formatAnalyticsDayKey(tx.date) : formatMonthKey(tx.date);
       const item = timeSeriesMap.get(key);
       if (!item) continue;
       item.totalIn += getAnalyticsEffectiveIn(tx);
@@ -849,6 +952,11 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
       controls: { range, metric, groupBy, categoryId: categoryId || null, merchantKey: merchantKey || null },
       period: { start, end },
       summary,
+      previousPeriod: {
+        start: previousStart,
+        end: previousEnd,
+        summary: summarizeTransactions(previousTransactions),
+      },
       chartSeries: groupBy === "category" || groupBy === "merchant"
         ? breakdown.map((item: any) => ({
             key: item.key,
@@ -861,8 +969,10 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
             color: item.color || "#5750F1",
           }))
         : timeSeries,
+      timeSeries,
       breakdown: withMetricPercent(breakdown),
       categoryBreakdown: withMetricPercent(categoryBreakdown),
+      merchantBreakdown: withMetricPercent(merchantBreakdown),
       transactions: [...transactions].reverse().map(serializeTransaction),
       categories: availableCategories.map((item) => ({ id: item.key, name: item.name, color: item.color })),
       merchants: availableMerchants.map((item) => ({ key: item.key, name: item.name })),
