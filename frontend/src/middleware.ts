@@ -13,8 +13,8 @@ export default auth((req) => {
     req.nextUrl.pathname.startsWith("/analytics") ||
     req.nextUrl.pathname.startsWith("/settings");
 
-  // Redirect logged-in users away from auth pages
-  if (isLoggedIn && isAuthRoute) {
+  // Redirect logged-in users away from the landing and auth pages
+  if (isLoggedIn && (isAuthRoute || req.nextUrl.pathname === "/")) {
     return NextResponse.redirect(new URL("/dashboard", req.url));
   }
 
