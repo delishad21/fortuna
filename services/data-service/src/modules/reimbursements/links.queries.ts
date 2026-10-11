@@ -127,6 +127,11 @@ export async function listCandidates(input: {
   limit?: number;
   offset?: number;
   contextDraftIds?: string[];
+  /** Narrow candidates: a category id ("" for uncategorized), a YYYY-MM-DD range, or an exact amount. */
+  categoryId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  amountEquals?: number;
 }) {
   const db = prisma as unknown as Db;
   const { userId, lookingFor } = input;
@@ -149,6 +154,26 @@ export async function listCandidates(input: {
   const searchFilter = search
     ? Prisma.sql`AND (t.description ILIKE ${"%" + search + "%"} OR t.label ILIKE ${"%" + search + "%"})`
     : Prisma.empty;
+  const day = (value: string | undefined, end: boolean) =>
+    value && /^\d{4}-\d{2}-\d{2}$/.test(value)
+      ? new Date(`${value}T${end ? "23:59:59.999" : "00:00:00.000"}Z`)
+      : null;
+  const from = day(input.dateFrom, false);
+  const to = day(input.dateTo, true);
+  const amountEquals = Number.isFinite(input.amountEquals) ? Number(input.amountEquals) : null;
+  const amountColumn =
+    lookingFor === "reimbursement" ? Prisma.sql`COALESCE(t.amount_in,0)` : Prisma.sql`COALESCE(t.amount_out,0)`;
+  const narrowFilter = Prisma.sql`${
+    input.categoryId === undefined
+      ? Prisma.empty
+      : input.categoryId
+        ? Prisma.sql`AND t.category_id = ${input.categoryId}`
+        : Prisma.sql`AND t.category_id IS NULL`
+  } ${from ? Prisma.sql`AND t.date >= ${from}` : Prisma.empty} ${
+    to ? Prisma.sql`AND t.date <= ${to}` : Prisma.empty
+  } ${amountEquals !== null ? Prisma.sql`AND ABS(${amountColumn} - ${amountEquals}) < 0.005` : Prisma.empty}`;
+  const narrowed =
+    !!search || input.categoryId !== undefined || !!from || !!to || amountEquals !== null;
   const subjectLinks = (await linksTouching(db, userId, [subjectKey])).filter(
     (link) => endKeyFor(link, subjectRole) === subjectKey,
   );
@@ -157,9 +182,14 @@ export async function listCandidates(input: {
     .map((link) => endKeyFor(link, lookingFor))
     .filter((key) => key.startsWith("t:"))
     .map((key) => key.slice(2));
+  // Unfiltered, linked rows are listed first, so the pages skip them; filtered, they page normally.
   const excludeSubject = Prisma.sql`${
     subject.kind === "transaction" ? Prisma.sql`AND t.id <> ${subject.id}` : Prisma.empty
-  } ${linkedSavedIds.length ? Prisma.sql`AND t.id NOT IN (${Prisma.join(linkedSavedIds)})` : Prisma.empty}`;
+  } ${
+    linkedSavedIds.length && !narrowed
+      ? Prisma.sql`AND t.id NOT IN (${Prisma.join(linkedSavedIds)})`
+      : Prisma.empty
+  }`;
   // Reimbursements usually come after the expense, and expenses before the reimbursement.
   const afterFirst =
     lookingFor === "reimbursement"
@@ -168,15 +198,15 @@ export async function listCandidates(input: {
   const [ids, totalRows] = await Promise.all([
     prisma.$queryRaw<Array<{ id: string }>>`
       SELECT t.id FROM transactions t
-      WHERE t.user_id = ${userId} AND ${roleFilter} ${searchFilter} ${excludeSubject}
+      WHERE t.user_id = ${userId} AND ${roleFilter} ${searchFilter} ${narrowFilter} ${excludeSubject}
       ORDER BY ${afterFirst}, ABS(EXTRACT(EPOCH FROM (t.date - ${subjectDate}))), t.id
       LIMIT ${limit} OFFSET ${offset}`,
     prisma.$queryRaw<Array<{ count: bigint }>>`
       SELECT COUNT(*) AS count FROM transactions t
-      WHERE t.user_id = ${userId} AND ${roleFilter} ${searchFilter} ${excludeSubject}`,
+      WHERE t.user_id = ${userId} AND ${roleFilter} ${searchFilter} ${narrowFilter} ${excludeSubject}`,
   ]);
   const savedKeys = [
-    ...(offset === 0 && !search ? linkedSavedIds : []),
+    ...(offset === 0 && !narrowed ? linkedSavedIds : []),
     ...ids.map((row) => row.id),
   ].map(transactionKey);
   const savedEndsMap = await loadEnds(db, userId, savedKeys);
@@ -218,13 +248,20 @@ export async function listCandidates(input: {
     });
   }
   const needle = search?.toLowerCase();
-  const stagedEnds = [...stagedEndsMap.values()].filter(
-    (end) =>
+  const stagedEnds = [...stagedEndsMap.values()].filter((end) => {
+    const date = end.date ? new Date(end.date) : null;
+    return (
       !roleProblem(end, lookingFor) &&
       (!needle ||
         end.description.toLowerCase().includes(needle) ||
-        (end.label || "").toLowerCase().includes(needle)),
-  );
+        (end.label || "").toLowerCase().includes(needle)) &&
+      (input.categoryId === undefined ||
+        (extra.get(end.key)?.categoryId || "") === input.categoryId) &&
+      (!from || (date !== null && date >= from)) &&
+      (!to || (date !== null && date <= to)) &&
+      (amountEquals === null || Math.abs(capacityOf(end, lookingFor) - amountEquals) < 0.005)
+    );
+  });
 
   const [saved, staged] = await Promise.all([
     describeCandidates(
@@ -265,7 +302,7 @@ export async function listCandidates(input: {
     },
     saved: {
       items: saved,
-      total: Number(totalRows[0]?.count || 0) + (offset === 0 && !search ? linkedSavedIds.length : 0),
+      total: Number(totalRows[0]?.count || 0) + (offset === 0 && !narrowed ? linkedSavedIds.length : 0),
     },
     staged,
   };

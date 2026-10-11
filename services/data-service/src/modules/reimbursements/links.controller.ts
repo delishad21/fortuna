@@ -67,6 +67,10 @@ reimbursementRouter.get("/candidates", async (req: Request, res: Response) => {
       contextDraftIds: req.query.contextDraftIds
         ? String(req.query.contextDraftIds).split(",").map((id) => id.trim()).filter(Boolean)
         : undefined,
+      categoryId: req.query.categoryId === undefined ? undefined : String(req.query.categoryId),
+      dateFrom: req.query.dateFrom ? String(req.query.dateFrom) : undefined,
+      dateTo: req.query.dateTo ? String(req.query.dateTo) : undefined,
+      amountEquals: req.query.amountEquals ? Number(req.query.amountEquals) : undefined,
     });
     res.json(result);
   } catch (error) {

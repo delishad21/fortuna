@@ -67,6 +67,11 @@ export async function getReimbursementCandidates(input: {
   limit?: number;
   offset?: number;
   contextDraftIds?: string[];
+  /** "" means uncategorized; omit for every category. */
+  categoryId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  amountEquals?: number;
 }): Promise<ReimbursementCandidates> {
   const params = new URLSearchParams({
     userId: await userId(),
@@ -80,6 +85,10 @@ export async function getReimbursementCandidates(input: {
     ...(input.contextDraftIds?.length
       ? { contextDraftIds: input.contextDraftIds.join(",") }
       : {}),
+    ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
+    ...(input.dateFrom ? { dateFrom: input.dateFrom } : {}),
+    ...(input.dateTo ? { dateTo: input.dateTo } : {}),
+    ...(input.amountEquals ? { amountEquals: String(input.amountEquals) } : {}),
   });
   const response = await fetch(
     `${DATA_SERVICE_URL}/api/reimbursements/candidates?${params}`,

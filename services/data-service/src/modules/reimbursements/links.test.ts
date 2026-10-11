@@ -212,6 +212,30 @@ test("saved links work in both directions, keep caches in sync and respect limit
       assert.equal(byId.get(r1.id)?.fullyAllocated, false);
       assert.equal(byId.get(r2.id)?.available, 80);
 
+      // Filters narrow the saved list: exact amount, category and date range.
+      const sameAmount = await listCandidates({
+        userId: user.id,
+        subject: { transactionId: e1.id },
+        lookingFor: "reimbursement",
+        amountEquals: 100,
+      });
+      assert.deepEqual(sameAmount.saved.items.map((item) => item.transactionId), [r2.id]);
+      assert.equal(sameAmount.saved.total, 1);
+      const uncategorized = await listCandidates({
+        userId: user.id,
+        subject: { transactionId: e1.id },
+        lookingFor: "reimbursement",
+        categoryId: "",
+      });
+      assert.equal(uncategorized.saved.total, 2);
+      const later = await listCandidates({
+        userId: user.id,
+        subject: { transactionId: e1.id },
+        lookingFor: "reimbursement",
+        dateFrom: "2026-09-02",
+      });
+      assert.equal(later.saved.total, 0);
+
       // Amount edits below what is linked are rejected and change nothing.
       await assert.rejects(
         TransactionService.updateTransaction(e2.id, user.id, { amountOut: 10 }),
