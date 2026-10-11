@@ -20,10 +20,11 @@ import { PageTabs } from "@/components/ui/PageTabs";
 import { Select } from "@/components/ui/Select";
 import { ExpandableTransactionList } from "@/components/transactions/ExpandableTransactionList";
 import { TransactionCard, type TransactionCardTransaction } from "@/components/transactions/TransactionCard";
-import { accountDisplayMap } from "@/lib/accounts";
 import {
   BarList,
   ChartTooltip,
+  accountMaps,
+  toCardTransaction,
   barSizeFor,
   Delta,
   EmptyText,
@@ -553,8 +554,7 @@ function ReportTransactionCards({
   limit: number;
   accounts: Account[];
 }) {
-  const accountColorMap = Object.fromEntries(accounts.map((account) => [account.accountIdentifier, account.color]));
-  const accountNameMap = accountDisplayMap(accounts);
+  const { colors: accountColorMap, names: accountNameMap } = accountMaps(accounts);
   const amountOf = (tx: Transaction) =>
     Math.max(Number(tx.originalAmountIn ?? tx.amountIn) || 0, Number(tx.originalAmountOut ?? tx.amountOut) || 0);
   const sorted = [...transactions].sort((a, b) => {
@@ -563,18 +563,7 @@ function ReportTransactionCards({
     const byDate = isoDay(a.date).localeCompare(isoDay(b.date));
     return ordering === "oldest" ? byDate : -byDate;
   });
-  const cards: TransactionCardTransaction[] = sorted.slice(0, limit).map((tx) => ({
-    id: tx.id,
-    date: isoDay(tx.date),
-    description: tx.description,
-    label: tx.label || undefined,
-    amountIn: tx.originalAmountIn ?? (tx.amountIn || null),
-    amountOut: tx.originalAmountOut ?? (tx.amountOut || null),
-    balance: null,
-    accountIdentifier: tx.accountIdentifier ?? null,
-    category: tx.category || undefined,
-    linkage: tx.linkage ?? null,
-  }));
+  const cards: TransactionCardTransaction[] = sorted.slice(0, limit).map(toCardTransaction);
 
   // Date orders group by day like the Transactions page; amount orders are a flat list.
   if (ordering === "newest" || ordering === "oldest") {

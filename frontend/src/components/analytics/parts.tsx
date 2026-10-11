@@ -3,7 +3,10 @@
 import type { ReactNode } from "react";
 import { format, parseISO } from "date-fns";
 import { ArrowDownRight, ArrowUpRight, ChevronLeft, ChevronRight } from "lucide-react";
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { Card } from "@/components/ui/Card";
+import type { TransactionCardTransaction } from "@/components/transactions/TransactionCard";
+import { accountDisplayMap } from "@/lib/accounts";
 import { Select } from "@/components/ui/Select";
 import { cn } from "@/lib/utils";
 
@@ -336,3 +339,63 @@ export function ChartTooltip({
 /** Wider bars when there are only a few of them. */
 export const barSizeFor = (count: number) =>
   count <= 2 ? 120 : count <= 4 ? 88 : count <= 8 ? 56 : count <= 16 ? 36 : 24;
+
+/** A transaction from the analytics API with what the transaction cards need. */
+export type CardSource = CompactTransaction & {
+  accountIdentifier?: string | null;
+  linkage?: TransactionCardTransaction["linkage"];
+  originalAmountIn?: number | null;
+  originalAmountOut?: number | null;
+};
+
+export type AccountInfo = { accountIdentifier: string; label?: string | null; color: string };
+
+/** Card data with the stored amounts, as on the Transactions page. */
+export const toCardTransaction = (tx: CardSource): TransactionCardTransaction => ({
+  id: tx.id,
+  date: isoDay(tx.date),
+  description: tx.description,
+  label: tx.label || undefined,
+  amountIn: tx.originalAmountIn !== undefined ? tx.originalAmountIn : tx.amountIn || null,
+  amountOut: tx.originalAmountOut !== undefined ? tx.originalAmountOut : tx.amountOut || null,
+  balance: null,
+  accountIdentifier: tx.accountIdentifier ?? null,
+  category: tx.category || undefined,
+  linkage: tx.linkage ?? null,
+});
+
+export const accountMaps = (accounts: AccountInfo[]) => ({
+  colors: Object.fromEntries(accounts.map((account) => [account.accountIdentifier, account.color])) as Record<string, string>,
+  names: accountDisplayMap(accounts) as Record<string, string>,
+});
+
+/** Donut of spending per category with the total in the middle. */
+export function SpendingPie({
+  rows,
+  total,
+}: {
+  rows: Array<{ key: string; name: string; color?: string; value: number }>;
+  total: number;
+}) {
+  const data = rows
+    .filter((row) => row.value > 0)
+    .map((row) => ({ name: row.name, value: row.value, fill: row.color || "#9ca3af" }));
+  return (
+    <div className="relative h-60 w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie data={data} dataKey="value" nameKey="name" innerRadius="62%" outerRadius="95%" paddingAngle={1} stroke="none" isAnimationActive={false}>
+            {data.map((row) => (
+              <Cell key={row.name} fill={row.fill} />
+            ))}
+          </Pie>
+          <Tooltip content={<ChartTooltip />} />
+        </PieChart>
+      </ResponsiveContainer>
+      <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-xs text-dark-5 dark:text-dark-6">Total</span>
+        <span className="text-lg font-bold tabular-nums text-dark dark:text-white">{formatCurrency(total)}</span>
+      </div>
+    </div>
+  );
+}

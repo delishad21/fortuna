@@ -21,9 +21,15 @@ import { Card } from "@/components/ui/Card";
 import { CategorySelect } from "@/components/ui/CategorySelect";
 import { PageTabs } from "@/components/ui/PageTabs";
 import { ImportSummaryCard } from "@/components/analytics/ImportSummaryCard";
+import { TransactionCard } from "@/components/transactions/TransactionCard";
 import {
   BarList,
   ChartTooltip,
+  SpendingPie,
+  accountMaps,
+  toCardTransaction,
+  type AccountInfo,
+  type CardSource,
   barSizeFor,
   Delta,
   EmptyText,
@@ -40,16 +46,6 @@ import { cn } from "@/lib/utils";
 
 type Category = { id: string; name: string; color: string };
 
-type RecurringPayment = {
-  key: string;
-  name: string;
-  monthsSeen: number;
-  averageAmount: number;
-  stability: string;
-  lastDate: string | null;
-  lastAmount: number;
-};
-
 type OverviewData = {
   selectedMonth: string | null;
   importedMonths: Array<{ month: string; transactionCount: number }>;
@@ -62,8 +58,7 @@ type OverviewData = {
   };
   trend: Array<{ month: string; totalIn: number; totalOut: number; net: number }>;
   spendingByCategory?: Array<{ key: string; name: string; color: string; totalOut: number; transactionCount: number; previousTotalOut: number }>;
-  largestExpenses?: CompactTransaction[];
-  recurringPayments?: RecurringPayment[];
+  largestExpenses?: CardSource[];
   attention?: { stagedImports: number; stagedRows: number; uncategorizedCount: number };
   hasTransactions: boolean;
 };
@@ -110,10 +105,12 @@ export function DashboardClient({
   initialOverview,
   initialReview,
   categories,
+  accounts = [],
 }: {
   initialOverview: OverviewData;
   initialReview: ReviewData;
   categories: Category[];
+  accounts?: AccountInfo[];
 }) {
   const [activeTab, setActiveTab] = useState<"overview" | "review">("overview");
   const [overview, setOverview] = useState(initialOverview);
@@ -145,7 +142,7 @@ export function DashboardClient({
       />
 
       {activeTab === "overview" ? (
-        <OverviewTab overview={overview} loading={loadingMonth} onMonthChange={changeMonth} />
+        <OverviewTab overview={overview} loading={loadingMonth} onMonthChange={changeMonth} accounts={accounts} />
       ) : (
         <ReviewTab
           data={initialReview}
@@ -179,10 +176,12 @@ function OverviewTab({
   overview,
   loading,
   onMonthChange,
+  accounts,
 }: {
   overview: OverviewData;
   loading: boolean;
   onMonthChange: (month: string) => void;
+  accounts: AccountInfo[];
 }) {
   const trend = useMemo(
     () => overview.trend.map((item) => ({ ...item, label: formatMonth(item.month, "MMM") })),
@@ -201,7 +200,7 @@ function OverviewTab({
   const savingsRate = summary.totalIn > 0 ? Math.round((summary.net / summary.totalIn) * 100) : null;
   const categories = overview.spendingByCategory || [];
   const largest = overview.largestExpenses || [];
-  const recurring = overview.recurringPayments || [];
+  const { colors: accountColors, names: accountNames } = accountMaps(accounts);
 
   return (
     <div className={cn("flex flex-col gap-6 transition-opacity", loading && "opacity-60")}>
@@ -264,29 +263,35 @@ function OverviewTab({
         </div>
       </SectionCard>
 
-      <div className="grid gap-6 lg:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-6 xl:grid-cols-[3fr_2fr]">
         <SectionCard title="Spending by category">
           {categories.length === 0 ? (
             <EmptyText>No spending this month.</EmptyText>
           ) : (
-            <BarList
-              limit={8}
-              valueTone="bad"
-              rows={categories.map((item) => ({
-                key: item.key,
-                name: item.name,
-                color: item.color,
-                value: item.totalOut,
-                helper: plural(item.transactionCount, "transaction"),
-                trailing: previous ? (
-                  item.previousTotalOut ? (
-                    <Delta value={item.totalOut - item.previousTotalOut} previous={item.previousTotalOut} />
-                  ) : (
-                    "New this month"
-                  )
-                ) : null,
-              }))}
-            />
+            <div className="grid items-center gap-6 md:grid-cols-[minmax(200px,260px)_1fr]">
+              <SpendingPie
+                total={summary.totalOut}
+                rows={categories.map((item) => ({ key: item.key, name: item.name, color: item.color, value: item.totalOut }))}
+              />
+              <BarList
+                limit={8}
+                valueTone="bad"
+                rows={categories.map((item) => ({
+                  key: item.key,
+                  name: item.name,
+                  color: item.color,
+                  value: item.totalOut,
+                  helper: plural(item.transactionCount, "transaction"),
+                  trailing: previous ? (
+                    item.previousTotalOut ? (
+                      <Delta value={item.totalOut - item.previousTotalOut} previous={item.previousTotalOut} />
+                    ) : (
+                      "New this month"
+                    )
+                  ) : null,
+                }))}
+              />
+            </div>
           )}
         </SectionCard>
 
@@ -298,29 +303,22 @@ function OverviewTab({
             </Link>
           }
         >
-          {largest.length === 0 ? <EmptyText>No expenses this month.</EmptyText> : <TransactionRows transactions={largest} />}
-        </SectionCard>
-
-        <SectionCard title="Recurring payments" className="lg:col-span-2 xl:col-span-1">
-          {recurring.length === 0 ? (
-            <EmptyText>Merchants charged in two or more months show up here.</EmptyText>
+          {largest.length === 0 ? (
+            <EmptyText>No expenses this month.</EmptyText>
           ) : (
-            <div className="divide-y divide-stroke dark:divide-stroke-dark">
-              {recurring.map((item) => (
-                <div key={item.key} className="flex items-center justify-between gap-3 py-2.5">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-dark dark:text-white">{item.name}</p>
-                    <p className="mt-0.5 text-xs text-dark-5 dark:text-dark-6">
-                      {plural(item.monthsSeen, "month")} · {item.stability === "fixed" ? "fixed amount" : "varies"}
-                      {item.lastDate ? ` · last ${formatDay(item.lastDate)}` : ""}
-                    </p>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <p className="text-sm font-semibold tabular-nums text-dark dark:text-white">{formatCurrency(item.averageAmount)}</p>
-                    <p className="text-xs text-dark-5 dark:text-dark-6">typical</p>
-                  </div>
-                </div>
-              ))}
+            <div className="space-y-3">
+              {largest.map((tx) => {
+                const card = toCardTransaction(tx);
+                return (
+                  <TransactionCard
+                    key={card.id}
+                    transaction={card}
+                    accountColor={card.accountIdentifier ? accountColors[card.accountIdentifier] : undefined}
+                    accountName={card.accountIdentifier ? accountNames[card.accountIdentifier] : undefined}
+                    showDate
+                  />
+                );
+              })}
             </div>
           )}
         </SectionCard>
