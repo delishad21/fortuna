@@ -265,7 +265,7 @@ select option {
   padding: 8px;
 }
 
-/* Landing page sky: faint stars, a slowly drifting orbit and a twinkling sparkle. */
+/* Landing page sky: faint stars and a slowly drifting orbit. */
 .landing-sky::before {
   content: "";
   position: absolute;
@@ -290,23 +290,12 @@ select option {
   to { transform: rotate(4deg); }
 }
 
-@keyframes landing-twinkle {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.45; transform: scale(0.8); }
-}
-
 .landing-orbit {
   animation: landing-drift 14s ease-in-out infinite alternate;
 }
 
-.landing-twinkle {
-  display: inline-block;
-  animation: landing-twinkle 2.8s ease-in-out infinite;
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .landing-orbit,
-  .landing-twinkle {
+  .landing-orbit {
     animation: none;
   }
 }

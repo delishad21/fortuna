@@ -141,11 +141,7 @@ export default function LandingPage() {
         </header>
 
         <div className="mx-auto max-w-7xl px-4 pb-20 pt-14 text-center sm:px-6 sm:pt-20 lg:px-8">
-          <p className="mx-auto inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs font-medium text-white/80 backdrop-blur">
-            <span className="landing-twinkle text-[#F5D0FE]">✦</span>
-            Personal finance, from statement to insight
-          </p>
-          <h1 className="mx-auto mt-6 max-w-4xl font-display text-4xl font-extrabold leading-[1.05] tracking-tight sm:text-6xl lg:text-7xl">
+          <h1 className="mx-auto max-w-4xl font-display text-4xl font-extrabold leading-[1.05] tracking-tight sm:text-6xl lg:text-7xl">
             Every transaction,{" "}
             <span className="bg-gradient-to-r from-[#F472FF] via-[#C084FC] to-[#8B85FF] bg-clip-text text-transparent">
               accounted for.
