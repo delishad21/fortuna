@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { format, parseISO } from "date-fns";
 import { ArrowDownRight, ArrowUpRight, ChevronLeft, ChevronRight } from "lucide-react";
 import { Card } from "@/components/ui/Card";
+import { Select } from "@/components/ui/Select";
 import { cn } from "@/lib/utils";
 
 export const formatCurrency = (value: number, options: { signed?: boolean } = {}) => {
@@ -128,25 +129,22 @@ export function MonthSwitcher({
   const older = index >= 0 ? months[index + 1] : undefined;
   const newer = index > 0 ? months[index - 1] : undefined;
   const buttonClass =
-    "flex size-9 items-center justify-center rounded-lg border border-stroke bg-white text-dark transition hover:bg-gray-2 disabled:cursor-not-allowed disabled:opacity-40 dark:border-stroke-dark dark:bg-dark-2 dark:text-white dark:hover:bg-dark-3";
+    "flex size-11 shrink-0 items-center justify-center rounded-lg border border-stroke bg-white text-dark transition hover:border-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-stroke dark:border-dark-3 dark:bg-dark-2 dark:text-white dark:hover:border-primary";
   return (
     <div className="flex items-center gap-2">
       <button type="button" className={buttonClass} disabled={!older || loading} onClick={() => older && onChange(older)} aria-label="Previous month">
         <ChevronLeft className="size-4" />
       </button>
-      <select
-        aria-label="Month"
-        value={value || ""}
-        onChange={(event) => onChange(event.target.value)}
-        disabled={loading || months.length === 0}
-        className="h-9 min-w-36 rounded-lg border border-stroke bg-white px-3 text-sm font-semibold text-dark outline-none focus:border-primary dark:border-stroke-dark dark:bg-dark-2 dark:text-white"
-      >
-        {months.map((month) => (
-          <option key={month} value={month}>
-            {formatMonth(month, "MMMM yyyy")}
-          </option>
-        ))}
-      </select>
+      <div className="w-44">
+        <Select
+          value={value || ""}
+          options={months.map((month) => ({ value: month, label: formatMonth(month, "MMMM yyyy") }))}
+          onChange={onChange}
+          disabled={loading || months.length === 0}
+          placeholder="Month"
+          buttonClassName="w-full min-w-0"
+        />
+      </div>
       <button type="button" className={buttonClass} disabled={!newer || loading} onClick={() => newer && onChange(newer)} aria-label="Next month">
         <ChevronRight className="size-4" />
       </button>
@@ -287,7 +285,7 @@ export function Segmented<T extends string>({
   disabled?: boolean;
 }) {
   return (
-    <div className="no-scrollbar inline-flex max-w-full overflow-x-auto rounded-lg border border-stroke bg-white p-0.5 dark:border-stroke-dark dark:bg-dark-2">
+    <div className="no-scrollbar inline-flex h-11 max-w-full items-stretch overflow-x-auto rounded-lg border border-stroke bg-white p-1 dark:border-dark-3 dark:bg-dark-2">
       {options.map((option) => (
         <button
           key={option.value}
@@ -295,7 +293,7 @@ export function Segmented<T extends string>({
           disabled={disabled}
           onClick={() => onChange(option.value)}
           className={cn(
-            "whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition",
+            "flex items-center whitespace-nowrap rounded-md px-3 text-sm font-medium transition",
             value === option.value
               ? "bg-primary text-white"
               : "text-dark-5 hover:text-dark dark:text-dark-6 dark:hover:text-white",
@@ -307,3 +305,34 @@ export function Segmented<T extends string>({
     </div>
   );
 }
+
+/** Recharts tooltip in the app's card style; follows light and dark mode. */
+export function ChartTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: Array<{ name?: string; value?: number | string; color?: string; payload?: { fill?: string } }>;
+  label?: string | number;
+}) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="min-w-40 rounded-lg border border-stroke bg-white px-3 py-2 text-sm shadow-dropdown dark:border-dark-3 dark:bg-dark-2">
+      {label !== undefined ? <p className="mb-1 font-semibold text-dark dark:text-white">{label}</p> : null}
+      {payload.map((item) => (
+        <p key={item.name} className="flex items-center justify-between gap-4 text-dark-5 dark:text-dark-6">
+          <span className="flex items-center gap-2">
+            <span className="size-2.5 rounded-full" style={{ backgroundColor: item.color || item.payload?.fill }} />
+            {item.name}
+          </span>
+          <span className="font-semibold tabular-nums text-dark dark:text-white">{formatCurrency(Number(item.value || 0))}</span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
+/** Wider bars when there are only a few of them. */
+export const barSizeFor = (count: number) =>
+  count <= 2 ? 120 : count <= 4 ? 88 : count <= 8 ? 56 : count <= 16 ? 36 : 24;

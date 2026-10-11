@@ -18,8 +18,13 @@ import { Card } from "@/components/ui/Card";
 import { DatePicker } from "@/components/ui/DatePicker";
 import { PageTabs } from "@/components/ui/PageTabs";
 import { Select } from "@/components/ui/Select";
+import { ExpandableTransactionList } from "@/components/transactions/ExpandableTransactionList";
+import { TransactionCard, type TransactionCardTransaction } from "@/components/transactions/TransactionCard";
+import { accountDisplayMap } from "@/lib/accounts";
 import {
   BarList,
+  ChartTooltip,
+  barSizeFor,
   Delta,
   EmptyText,
   MonthSwitcher,
@@ -35,7 +40,25 @@ import {
 } from "@/components/analytics/parts";
 import { cn } from "@/lib/utils";
 
-type Transaction = CompactTransaction & { merchant: string; merchantKey: string };
+type Transaction = CompactTransaction & {
+  merchant: string;
+  merchantKey: string;
+  accountIdentifier?: string | null;
+  linkage?: TransactionCardTransaction["linkage"];
+  originalAmountIn?: number | null;
+  originalAmountOut?: number | null;
+};
+
+type Account = { accountIdentifier: string; label?: string | null; color: string };
+
+type Ordering = "newest" | "oldest" | "largest" | "smallest";
+
+const orderingOptions: Array<{ value: Ordering; label: string }> = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "largest", label: "Largest amount" },
+  { value: "smallest", label: "Smallest amount" },
+];
 
 type Totals = { totalIn: number; totalOut: number; net: number; transactionCount: number };
 
@@ -136,10 +159,12 @@ export function AnalyticsClient({
   initialOverview,
   initialReport,
   initialInsights,
+  accounts = [],
 }: {
   initialOverview: OverviewInsightsData;
   initialReport: ReportData;
   initialInsights: InsightsData;
+  accounts?: Account[];
 }) {
   const [activeTab, setActiveTab] = useState<"reports" | "insights" | "overall">("reports");
   const [insights, setInsights] = useState(initialInsights);
@@ -167,7 +192,7 @@ export function AnalyticsClient({
       />
 
       {activeTab === "reports" ? (
-        <ReportsTab initialReport={initialReport} />
+        <ReportsTab initialReport={initialReport} accounts={accounts} />
       ) : activeTab === "insights" ? (
         <InsightsTab insights={insights} loading={insightsLoading} loadInsights={loadInsights} />
       ) : (
@@ -177,12 +202,13 @@ export function AnalyticsClient({
   );
 }
 
-function ReportsTab({ initialReport }: { initialReport: ReportData }) {
+function ReportsTab({ initialReport, accounts }: { initialReport: ReportData; accounts: Account[] }) {
   const [report, setReport] = useState(initialReport);
   const [loading, setLoading] = useState(false);
   const [custom, setCustom] = useState(false);
   const [breakdownBy, setBreakdownBy] = useState<"category" | "merchant">("category");
   const [shownTransactions, setShownTransactions] = useState(25);
+  const [ordering, setOrdering] = useState<Ordering>("newest");
 
   const metric = (report.controls.metric as Metric) || "inOut";
   const interval: Interval = report.controls.groupBy === "day" ? "day" : "month";
@@ -235,6 +261,18 @@ function ReportsTab({ initialReport }: { initialReport: ReportData }) {
     void load({ range: value, interval: value === "month" ? "day" : "month" }, false);
   };
 
+  /** Clicking a month bar opens that month by day; a day bar opens that day. */
+  const zoomTo = (key: string) => {
+    if (loading) return;
+    if (interval === "month") {
+      setCustom(false);
+      void load({ month: key, range: "month", interval: "day" }, false);
+      return;
+    }
+    setCustom(true);
+    void load({ dateFrom: key, dateTo: key, interval: "day" }, true);
+  };
+
   const exportCsv = () => {
     const rows = report.transactions.map((tx) => [
       isoDay(tx.date),
@@ -275,9 +313,9 @@ function ReportsTab({ initialReport }: { initialReport: ReportData }) {
           <Segmented options={presetOptions} value={preset} onChange={choosePreset} disabled={loading} />
           {preset === "custom" ? (
             <div className="flex flex-wrap items-center gap-2">
-              <div className="w-40"><DatePicker value={dateFrom} onChange={(value) => void load({ dateFrom: value }, true)} /></div>
+              <div className="w-44"><DatePicker variant="field" value={dateFrom} onChange={(value) => void load({ dateFrom: value }, true)} /></div>
               <span className="text-sm text-dark-5 dark:text-dark-6">to</span>
-              <div className="w-40"><DatePicker value={dateTo} onChange={(value) => void load({ dateTo: value }, true)} /></div>
+              <div className="w-44"><DatePicker variant="field" value={dateTo} onChange={(value) => void load({ dateTo: value }, true)} /></div>
             </div>
           ) : (
             <MonthSwitcher
@@ -302,22 +340,25 @@ function ReportsTab({ initialReport }: { initialReport: ReportData }) {
             onChange={(value) => void load({ interval: value })}
             disabled={loading}
           />
-          <div className="w-48">
+          <div className="w-52">
             <Select
               value={report.controls.categoryId || ""}
-              options={[{ value: "", label: "All categories" }, ...report.categories.map((item) => ({ value: item.id, label: item.name }))]}
+              options={[
+                { value: "", label: "All categories" },
+                ...report.categories.map((item) => ({ value: item.id, label: item.name, color: item.color || "#9ca3af" })),
+              ]}
               onChange={(categoryId) => void load({ categoryId })}
               buttonClassName="w-full min-w-0"
             />
           </div>
-          <div className="w-48">
-            <Select
-              value={report.controls.merchantKey || ""}
-              options={[{ value: "", label: "All merchants" }, ...report.merchants.map((item) => ({ value: item.key, label: item.name }))]}
-              onChange={(merchantKey) => void load({ merchantKey })}
-              buttonClassName="w-full min-w-0"
-            />
-          </div>
+          {merchantName ? (
+            <span className="inline-flex h-11 items-center gap-2 rounded-lg border border-stroke bg-white px-3 text-sm text-dark dark:border-dark-3 dark:bg-dark-2 dark:text-white">
+              {merchantName}
+              <button type="button" aria-label="Remove merchant filter" onClick={() => void load({ merchantKey: "" })} className="text-dark-5 hover:text-dark dark:text-dark-6 dark:hover:text-white">
+                <X className="size-4" />
+              </button>
+            </span>
+          ) : null}
           {categoryName || merchantName ? (
             <button
               type="button"
@@ -359,9 +400,16 @@ function ReportsTab({ initialReport }: { initialReport: ReportData }) {
         />
       </div>
 
-      <SectionCard title={`${metric === "inOut" ? "Income and spending" : metricWord} ${interval === "day" ? "by day" : "by month"}`}>
+      <SectionCard
+        title={`${metric === "inOut" ? "Income and spending" : metricWord} ${interval === "day" ? "by day" : "by month"}`}
+        action={
+          <span className="text-xs text-dark-5 dark:text-dark-6">
+            {interval === "month" ? "Click a month to see it day by day" : dateFrom === dateTo ? "" : "Click a day to see just that day"}
+          </span>
+        }
+      >
         <div className="h-[320px]">
-          <SeriesChart data={series} metric={metric} interval={interval} />
+          <SeriesChart data={series} metric={metric} interval={interval} onSelect={zoomTo} />
         </div>
       </SectionCard>
 
@@ -408,16 +456,26 @@ function ReportsTab({ initialReport }: { initialReport: ReportData }) {
         <SectionCard
           title={`Transactions (${report.transactions.length})`}
           action={
-            categoryName || merchantName ? (
-              <span className="truncate text-sm text-dark-5 dark:text-dark-6">{[categoryName, merchantName].filter(Boolean).join(" · ")}</span>
-            ) : null
+            <div className="w-44">
+              <Select
+                value={ordering}
+                options={orderingOptions}
+                onChange={(value) => setOrdering(value as Ordering)}
+                buttonClassName="w-full min-w-0"
+              />
+            </div>
           }
         >
           {report.transactions.length === 0 ? (
             <EmptyText>No transactions match this report.</EmptyText>
           ) : (
             <>
-              <TransactionRows transactions={report.transactions.slice(0, shownTransactions)} />
+              <ReportTransactionCards
+                transactions={report.transactions}
+                ordering={ordering}
+                limit={shownTransactions}
+                accounts={accounts}
+              />
               {report.transactions.length > shownTransactions ? (
                 <button
                   type="button"
@@ -435,7 +493,17 @@ function ReportsTab({ initialReport }: { initialReport: ReportData }) {
   );
 }
 
-function SeriesChart({ data, metric, interval }: { data: SeriesPoint[]; metric: Metric; interval: Interval }) {
+function SeriesChart({
+  data,
+  metric,
+  interval,
+  onSelect,
+}: {
+  data: SeriesPoint[];
+  metric: Metric;
+  interval: Interval;
+  onSelect?: (key: string) => void;
+}) {
   if (data.length === 0 || data.every((item) => !item.totalIn && !item.totalOut)) {
     return <div className="flex h-full items-center justify-center text-sm text-dark-5 dark:text-dark-6">No transactions in this period.</div>;
   }
@@ -443,17 +511,27 @@ function SeriesChart({ data, metric, interval }: { data: SeriesPoint[]; metric: 
     ...item,
     label: interval === "day" ? formatDay(item.key) : formatMonth(item.key, "MMM yy"),
   }));
+  const barSize = barSizeFor(rows.length * (metric === "inOut" ? 2 : 1));
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={rows} barGap={3} barCategoryGap={interval === "day" ? "12%" : "28%"}>
+      <BarChart
+        data={rows}
+        barGap={3}
+        barCategoryGap={interval === "day" ? "12%" : "28%"}
+        onClick={(state) => {
+          const key = (state?.activePayload?.[0]?.payload as SeriesPoint | undefined)?.key;
+          if (key && onSelect) onSelect(key);
+        }}
+        style={onSelect ? { cursor: "pointer" } : undefined}
+      >
         <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
         <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--chart-muted)" }} axisLine={false} tickLine={false} minTickGap={16} />
         <YAxis tick={{ fontSize: 12, fill: "var(--chart-muted)" }} axisLine={false} tickLine={false} width={56} tickFormatter={(value: number) => (Math.abs(value) >= 1000 ? `${Math.round(value / 100) / 10}k` : String(value))} />
-        <Tooltip formatter={(value: number) => formatCurrency(Number(value))} cursor={{ fill: "var(--chart-grid)", opacity: 0.4 }} />
-        {(metric === "income" || metric === "inOut") && <Bar dataKey="totalIn" name="Income" fill="#22AD5C" radius={[4, 4, 0, 0]} maxBarSize={40} />}
-        {(metric === "spending" || metric === "inOut") && <Bar dataKey="totalOut" name="Spending" fill="#F23030" radius={[4, 4, 0, 0]} maxBarSize={40} />}
+        <Tooltip content={<ChartTooltip />} cursor={{ fill: "var(--chart-grid)", opacity: 0.4 }} />
+        {(metric === "income" || metric === "inOut") && <Bar dataKey="totalIn" name="Income" fill="#22AD5C" radius={[4, 4, 0, 0]} maxBarSize={barSize} />}
+        {(metric === "spending" || metric === "inOut") && <Bar dataKey="totalOut" name="Spending" fill="#F23030" radius={[4, 4, 0, 0]} maxBarSize={barSize} />}
         {metric === "net" && (
-          <Bar dataKey="net" name="Net flow" radius={[4, 4, 0, 0]} maxBarSize={40}>
+          <Bar dataKey="net" name="Net flow" radius={[4, 4, 0, 0]} maxBarSize={barSize}>
             {rows.map((item) => (
               <Cell key={item.key} fill={item.net >= 0 ? "#22AD5C" : "#F23030"} />
             ))}
@@ -461,6 +539,59 @@ function SeriesChart({ data, metric, interval }: { data: SeriesPoint[]; metric: 
         )}
       </BarChart>
     </ResponsiveContainer>
+  );
+}
+
+function ReportTransactionCards({
+  transactions,
+  ordering,
+  limit,
+  accounts,
+}: {
+  transactions: Transaction[];
+  ordering: Ordering;
+  limit: number;
+  accounts: Account[];
+}) {
+  const accountColorMap = Object.fromEntries(accounts.map((account) => [account.accountIdentifier, account.color]));
+  const accountNameMap = accountDisplayMap(accounts);
+  const amountOf = (tx: Transaction) =>
+    Math.max(Number(tx.originalAmountIn ?? tx.amountIn) || 0, Number(tx.originalAmountOut ?? tx.amountOut) || 0);
+  const sorted = [...transactions].sort((a, b) => {
+    if (ordering === "largest") return amountOf(b) - amountOf(a);
+    if (ordering === "smallest") return amountOf(a) - amountOf(b);
+    const byDate = isoDay(a.date).localeCompare(isoDay(b.date));
+    return ordering === "oldest" ? byDate : -byDate;
+  });
+  const cards: TransactionCardTransaction[] = sorted.slice(0, limit).map((tx) => ({
+    id: tx.id,
+    date: isoDay(tx.date),
+    description: tx.description,
+    label: tx.label || undefined,
+    amountIn: tx.originalAmountIn ?? (tx.amountIn || null),
+    amountOut: tx.originalAmountOut ?? (tx.amountOut || null),
+    balance: null,
+    accountIdentifier: tx.accountIdentifier ?? null,
+    category: tx.category || undefined,
+    linkage: tx.linkage ?? null,
+  }));
+
+  // Date orders group by day like the Transactions page; amount orders are a flat list.
+  if (ordering === "newest" || ordering === "oldest") {
+    return <ExpandableTransactionList transactions={cards} accountColorMap={accountColorMap} accountNameMap={accountNameMap} />;
+  }
+  return (
+    <div className="space-y-3">
+      {cards.map((card) => (
+        <TransactionCard
+          key={card.id}
+          transaction={card}
+          accountColor={card.accountIdentifier ? accountColorMap[card.accountIdentifier] : undefined}
+          accountName={card.accountIdentifier ? accountNameMap[card.accountIdentifier] : undefined}
+          showDate
+        />
+      ))}
+    </div>
   );
 }
 

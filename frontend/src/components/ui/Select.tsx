@@ -8,6 +8,8 @@ export interface SelectOption {
   value: string;
   label: string;
   description?: string;
+  /** Optional colour dot, e.g. a category colour. */
+  color?: string;
 }
 
 type SelectSize = "sm" | "md" | "lg";
@@ -144,6 +146,12 @@ export function Select({
             ${buttonClassName || "min-w-[180px]"}
           `}
         >
+          {selectedOption?.color && (
+            <span
+              className="h-2.5 w-2.5 shrink-0 rounded-full"
+              style={{ backgroundColor: selectedOption.color }}
+            />
+          )}
           <span
             className={`flex-1 truncate ${
               selectedOption
@@ -224,7 +232,13 @@ function SelectMenuOptions({
           className="w-full flex items-start px-3 py-2.5 text-sm text-left hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors"
         >
           <div className="flex-1 min-w-0">
-            <div className="font-medium text-dark dark:text-white">
+            <div className="flex items-center gap-2 font-medium text-dark dark:text-white">
+              {option.color && (
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: option.color }}
+                />
+              )}
               {option.label}
             </div>
             {option.description && (

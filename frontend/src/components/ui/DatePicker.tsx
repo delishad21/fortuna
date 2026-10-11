@@ -1,5 +1,6 @@
 "use client";
 
+import { cn } from "@/lib/utils";
 import { useState, useRef, useEffect } from "react";
 import type { HTMLAttributes } from "react";
 import { createPortal } from "react-dom";
@@ -9,6 +10,8 @@ interface DatePickerProps {
   value: string; // ISO date string (YYYY-MM-DD)
   onChange: (date: string) => void;
   className?: string;
+  /** "table" (default) is borderless for grid cells; "field" matches Select. */
+  variant?: "table" | "field";
   disabled?: boolean;
   triggerProps?: HTMLAttributes<HTMLButtonElement> & {
     [key: `data-${string}`]: string;
@@ -37,6 +40,7 @@ export function DatePicker({
   className = "",
   disabled = false,
   triggerProps,
+  variant = "table",
 }: DatePickerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [dropdownPosition, setDropdownPosition] = useState({
@@ -200,12 +204,12 @@ export function DatePicker({
 
   const { className: triggerClassNameProp, ...triggerRestProps } =
     triggerProps || {};
-  const triggerClassName = [
+  const triggerClassName = cn(
     "w-full h-full flex items-center px-4 py-3 text-sm text-left bg-transparent text-dark dark:text-white outline-none cursor-pointer hover:bg-gray-2 dark:hover:bg-dark-3 transition-colors disabled:cursor-not-allowed disabled:hover:bg-transparent",
+    variant === "field" &&
+      "h-11 py-0 rounded-lg border border-stroke bg-white hover:border-primary hover:bg-white focus:ring-2 focus:ring-primary dark:border-dark-3 dark:bg-dark-2 dark:hover:border-primary dark:hover:bg-dark-2",
     triggerClassNameProp,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  );
 
   return (
     <div ref={containerRef} className={`relative w-full h-full ${className}`}>

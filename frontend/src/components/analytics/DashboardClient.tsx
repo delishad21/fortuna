@@ -23,6 +23,8 @@ import { PageTabs } from "@/components/ui/PageTabs";
 import { ImportSummaryCard } from "@/components/analytics/ImportSummaryCard";
 import {
   BarList,
+  ChartTooltip,
+  barSizeFor,
   Delta,
   EmptyText,
   MonthSwitcher,
@@ -119,7 +121,6 @@ export function DashboardClient({
   const [uncategorized, setUncategorized] = useState(initialReview.reviewQueue.uncategorized);
   const categorisedNow = initialReview.reviewQueue.uncategorized.length - uncategorized.length;
   const uncategorizedCount = Math.max(initialReview.dataHealth.uncategorizedCount - categorisedNow, 0);
-  const missingStatements = (initialReview.coverage?.accounts || []).filter((account) => account.missingMonths.length > 0);
   const stagedImports = initialReview.stagedImports || [];
   const reviewCount = uncategorizedCount + stagedImports.length;
 
@@ -144,15 +145,7 @@ export function DashboardClient({
       />
 
       {activeTab === "overview" ? (
-        <OverviewTab
-          overview={overview}
-          loading={loadingMonth}
-          onMonthChange={changeMonth}
-          uncategorizedCount={uncategorizedCount}
-          stagedImports={stagedImports}
-          missingStatements={missingStatements}
-          onOpenReview={() => setActiveTab("review")}
-        />
+        <OverviewTab overview={overview} loading={loadingMonth} onMonthChange={changeMonth} />
       ) : (
         <ReviewTab
           data={initialReview}
@@ -186,18 +179,10 @@ function OverviewTab({
   overview,
   loading,
   onMonthChange,
-  uncategorizedCount,
-  stagedImports,
-  missingStatements,
-  onOpenReview,
 }: {
   overview: OverviewData;
   loading: boolean;
   onMonthChange: (month: string) => void;
-  uncategorizedCount: number;
-  stagedImports: NonNullable<ReviewData["stagedImports"]>;
-  missingStatements: CoverageAccount[];
-  onOpenReview: () => void;
 }) {
   const trend = useMemo(
     () => overview.trend.map((item) => ({ ...item, label: formatMonth(item.month, "MMM") })),
@@ -247,46 +232,37 @@ function OverviewTab({
         <StatCard label="Transactions" value={String(summary.transactionCount)} sub={largest[0] ? `Largest: ${largest[0].label || largest[0].description}` : undefined} />
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
-        <SectionCard title="Income and spending">
-          <div className="h-[280px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={trend} barGap={4} barCategoryGap="28%">
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
-                <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--chart-muted)" }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 12, fill: "var(--chart-muted)" }} axisLine={false} tickLine={false} width={56} tickFormatter={(value: number) => (value >= 1000 ? `${Math.round(value / 100) / 10}k` : String(value))} />
-                <Tooltip formatter={(value: number) => formatCurrency(Number(value))} cursor={{ fill: "var(--chart-grid)", opacity: 0.4 }} />
-                <Bar dataKey="totalIn" name="Income" radius={[4, 4, 0, 0]} maxBarSize={36}>
-                  {trend.map((item) => (
-                    <Cell key={item.month} fill="#22AD5C" fillOpacity={item.month === overview.selectedMonth ? 1 : 0.35} />
-                  ))}
-                </Bar>
-                <Bar dataKey="totalOut" name="Spending" radius={[4, 4, 0, 0]} maxBarSize={36}>
-                  {trend.map((item) => (
-                    <Cell key={item.month} fill="#F23030" fillOpacity={item.month === overview.selectedMonth ? 1 : 0.35} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </SectionCard>
-
-        <SectionCard
-          title="Needs attention"
-          action={
-            <Link href="/imports">
-              <Button size="sm" variant="secondary" leftIcon={<Upload className="size-4" />}>Import</Button>
-            </Link>
-          }
-        >
-          <AttentionList
-            stagedImports={stagedImports}
-            uncategorizedCount={uncategorizedCount}
-            missingStatements={missingStatements}
-            onOpenReview={onOpenReview}
-          />
-        </SectionCard>
-      </div>
+      <SectionCard title="Income and spending" action={<span className="text-xs text-dark-5 dark:text-dark-6">Click a month to open it</span>}>
+        <div className="h-[280px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart
+              data={trend}
+              barGap={4}
+              barCategoryGap="28%"
+              style={{ cursor: "pointer" }}
+              onClick={(state) => {
+                const month = (state?.activePayload?.[0]?.payload as { month?: string } | undefined)?.month;
+                if (month && month !== overview.selectedMonth) onMonthChange(month);
+              }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--chart-muted)" }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 12, fill: "var(--chart-muted)" }} axisLine={false} tickLine={false} width={56} tickFormatter={(value: number) => (value >= 1000 ? `${Math.round(value / 100) / 10}k` : String(value))} />
+              <Tooltip content={<ChartTooltip />} cursor={{ fill: "var(--chart-grid)", opacity: 0.4 }} />
+              <Bar dataKey="totalIn" name="Income" fill="#22AD5C" radius={[4, 4, 0, 0]} maxBarSize={barSizeFor(trend.length * 2)}>
+                {trend.map((item) => (
+                  <Cell key={item.month} fill="#22AD5C" fillOpacity={item.month === overview.selectedMonth ? 1 : 0.35} />
+                ))}
+              </Bar>
+              <Bar dataKey="totalOut" name="Spending" fill="#F23030" radius={[4, 4, 0, 0]} maxBarSize={barSizeFor(trend.length * 2)}>
+                {trend.map((item) => (
+                  <Cell key={item.month} fill="#F23030" fillOpacity={item.month === overview.selectedMonth ? 1 : 0.35} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </SectionCard>
 
       <div className="grid gap-6 lg:grid-cols-2 xl:grid-cols-3">
         <SectionCard title="Spending by category">
@@ -349,85 +325,6 @@ function OverviewTab({
           )}
         </SectionCard>
       </div>
-    </div>
-  );
-}
-
-function AttentionList({
-  stagedImports,
-  uncategorizedCount,
-  missingStatements,
-  onOpenReview,
-}: {
-  stagedImports: NonNullable<ReviewData["stagedImports"]>;
-  uncategorizedCount: number;
-  missingStatements: CoverageAccount[];
-  onOpenReview: () => void;
-}) {
-  const stagedRows = stagedImports.reduce((sum, draft) => sum + draft.rowCount, 0);
-  const items = [
-    stagedImports.length > 0 && {
-      key: "staged",
-      tone: "primary",
-      title: `${plural(stagedImports.length, "staged import")} waiting`,
-      detail: `${plural(stagedRows, "row")} to review and commit`,
-      href: stagedImports.length === 1 ? `/imports/drafts/${stagedImports[0].id}` : "/imports",
-    },
-    uncategorizedCount > 0 && {
-      key: "uncategorized",
-      tone: "warning",
-      title: `${plural(uncategorizedCount, "transaction")} without a category`,
-      detail: "Categorise them so the breakdowns add up",
-      onClick: onOpenReview,
-    },
-    ...missingStatements.slice(0, 3).map((account) => ({
-      key: `missing-${account.label}`,
-      tone: "danger",
-      title: `${account.label}: no transactions in ${account.missingMonths.map((month) => formatMonth(month, "MMM yyyy")).join(", ")}`,
-      detail: "A statement may not have been imported",
-      onClick: onOpenReview,
-    })),
-  ].filter(Boolean) as Array<{ key: string; tone: string; title: string; detail: string; href?: string; onClick?: () => void }>;
-
-  if (items.length === 0) {
-    return (
-      <div className="flex h-full items-center gap-3 rounded-lg bg-green/5 p-4">
-        <CheckCircle2 className="size-6 shrink-0 text-green" />
-        <div>
-          <p className="text-sm font-semibold text-dark dark:text-white">All caught up</p>
-          <p className="text-xs text-dark-5 dark:text-dark-6">Nothing staged, everything categorised, no gaps in your statements.</p>
-        </div>
-      </div>
-    );
-  }
-
-  const toneClass: Record<string, string> = {
-    primary: "border-l-primary",
-    warning: "border-l-[#F59E0B]",
-    danger: "border-l-red",
-  };
-  return (
-    <div className="space-y-2">
-      {items.map((item) => {
-        const body = (
-          <div className={cn("flex items-center justify-between gap-3 rounded-lg border border-l-4 border-stroke p-3 transition hover:bg-gray-2 dark:border-stroke-dark dark:hover:bg-dark-3", toneClass[item.tone])}>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-dark dark:text-white">{item.title}</p>
-              <p className="mt-0.5 text-xs text-dark-5 dark:text-dark-6">{item.detail}</p>
-            </div>
-            <ArrowRight className="size-4 shrink-0 text-dark-5 dark:text-dark-6" />
-          </div>
-        );
-        return item.href ? (
-          <Link key={item.key} href={item.href} className="block">
-            {body}
-          </Link>
-        ) : (
-          <button key={item.key} type="button" onClick={item.onClick} className="block w-full text-left">
-            {body}
-          </button>
-        );
-      })}
     </div>
   );
 }
