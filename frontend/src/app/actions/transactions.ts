@@ -202,6 +202,28 @@ export async function getTransactions(filters?: {
   return response.json();
 }
 
+/**
+ * Get one transaction by id
+ */
+export async function getTransaction(id: string) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    throw new Error("Unauthorized");
+  }
+
+  const response = await fetch(
+    `${DATA_SERVICE_URL}/api/transactions/${encodeURIComponent(id)}?userId=${session.user.id}`,
+    { cache: "no-store" },
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error || "Failed to fetch transaction");
+  }
+
+  return response.json();
+}
+
 export async function getTransactionYears(): Promise<number[]> {
   const session = await auth();
   if (!session?.user?.id) {

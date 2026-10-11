@@ -2,6 +2,7 @@ import {
   checkImportDuplicates,
   commitImport,
   getTransactions,
+  getTransaction,
   getTransactionYears,
   deleteTransaction,
   updateTransaction,
@@ -103,7 +104,46 @@ import {
   validateAgentDraft,
   validateAgentDraftSelection,
   commitAgentDraft,
+  commitAgentDraftSelection,
+  discardAgentDraft,
 } from "@/app/actions/agentDrafts";
+import {
+  getReimbursementCandidates,
+  setReimbursementLinks,
+} from "@/app/actions/reimbursements";
+import {
+  getTripWallets,
+  updateTripWallet,
+  deleteTripWallet,
+  mergeTripWallet,
+  getWalletAccounts,
+  createWalletAccount,
+  updateWalletAccount,
+  getCarryOverCandidates,
+  getCarryOverSources,
+  carryOverWallets,
+} from "@/lib/tripWalletMutations";
+import {
+  getTripParticipants,
+  createTripParticipant,
+  renameTripParticipant,
+  deleteTripParticipant,
+  getTripBalances,
+  setTripSettlementAllocations,
+  createTripPeopleEntry,
+  addBankSettlements,
+  getTripPeopleEntries,
+  inviteTripMember,
+  getTripMembers,
+  updateTripMemberRole,
+  removeTripMember,
+  leaveSharedTrip,
+  getTripInvitations,
+  acceptTripInvitation,
+  declineTripInvitation,
+  getTripSharedOverview,
+  setTripEntryShares,
+} from "@/lib/tripSharingMutations";
 import {
   getCurrentUser,
   updateUserProfile,
@@ -127,12 +167,31 @@ async function commitReviewedTripImport(
   );
 }
 
+// The request reviver rejects any "userId" field, so mobile names the member
+// "memberUserId"; the trip owner check still happens in the data service.
+async function setTripEntryMemberShares(
+  tripId: string,
+  entryId: string,
+  shares: Array<{ memberUserId: string; localAmount: number }>,
+) {
+  if (!Array.isArray(shares)) throw new Error("Shares must be a list");
+  return setTripEntryShares(
+    tripId,
+    entryId,
+    shares.map((share) => ({
+      userId: String(share.memberUserId),
+      localAmount: Number(share.localAmount),
+    })),
+  );
+}
+
 // Explicit allowlist; new server actions are not exposed automatically.
 export const mobileOperations = {
   commitReviewedTripImport,
   checkImportDuplicates,
   commitImport,
   getTransactions,
+  getTransaction,
   getTransactionYears,
   deleteTransaction,
   updateTransaction,
@@ -216,6 +275,39 @@ export const mobileOperations = {
   validateAgentDraft,
   validateAgentDraftSelection,
   commitAgentDraft,
+  commitAgentDraftSelection,
+  discardAgentDraft,
+  getReimbursementCandidates,
+  setReimbursementLinks,
+  getTripWallets,
+  updateTripWallet,
+  deleteTripWallet,
+  mergeTripWallet,
+  getWalletAccounts,
+  createWalletAccount,
+  updateWalletAccount,
+  getCarryOverCandidates,
+  getCarryOverSources,
+  carryOverWallets,
+  getTripParticipants,
+  createTripParticipant,
+  renameTripParticipant,
+  deleteTripParticipant,
+  getTripBalances,
+  setTripSettlementAllocations,
+  createTripPeopleEntry,
+  addBankSettlements,
+  getTripPeopleEntries,
+  inviteTripMember,
+  getTripMembers,
+  updateTripMemberRole,
+  removeTripMember,
+  leaveSharedTrip,
+  getTripInvitations,
+  acceptTripInvitation,
+  declineTripInvitation,
+  getTripSharedOverview,
+  setTripEntryMemberShares,
   getCurrentUser,
   updateUserProfile,
   updateAutoLabelSettings,
