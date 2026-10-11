@@ -232,11 +232,9 @@ test("mobile authentication, financial workflows and phone navigation", async ({
     // The preview requests the same real backend, through a same-origin test proxy.
     await page.route("**/api/**", async (route) => {
       const url = new URL(route.request().url());
-      const response = await route.fetch({
-        url: `${server}${url.pathname}${url.search}`,
-      });
-      await route.fulfill({ response });
+      await route.continue({ url: `${server}${url.pathname}${url.search}` });
     });
+    page.on("dialog", (dialog) => void dialog.accept());
     await page.goto("/");
     await page
       .getByLabel("Fortuna server domain or URL", { exact: true })
@@ -247,32 +245,25 @@ test("mobile authentication, financial workflows and phone navigation", async ({
     await expect(page.getByText("Hello, Mobile.", { exact: true })).toBeVisible(
       { timeout: 30000 },
     );
-    await expect(
-      page.getByText("Net cash flow", { exact: true }),
-    ).toBeVisible();
+    await expect(page.getByText(/^Net cash flow/).first()).toBeVisible();
     await page.screenshot({
       path: "test-results/home-phone.png",
       fullPage: true,
     });
-    await page.getByRole("tab", { name: /Activity|Transactions/ }).click();
+    await page.getByRole("tab", { name: /Activity/ }).click();
+    await expect(page.getByText("Activity", { exact: true }).first()).toBeVisible();
     await expect(
-      page.getByText("Your transactions", { exact: true }),
+      page.getByText("Coffee catch-up", { exact: true }).last(),
     ).toBeVisible();
     await expect(
-      page.getByText("Coffee catch-up", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByText("2 transactions", { exact: true }),
+      page.getByText("2 transactions", { exact: true }).last(),
     ).toBeVisible();
     await page.screenshot({
       path: "test-results/transactions-phone.png",
       fullPage: true,
     });
     await page.getByRole("tab", { name: /Trips/ }).click();
-    await expect(
-      page.getByText("Kyoto getaway", { exact: true }),
-    ).toBeVisible();
-    await page.getByRole("button", { name: "Open trip", exact: true }).click();
+    await page.getByRole("button", { name: "Kyoto getaway" }).first().click();
     await expect(
       page.getByText("Net trip cost", { exact: true }),
     ).toBeVisible();
@@ -282,62 +273,48 @@ test("mobile authentication, financial workflows and phone navigation", async ({
     });
     await page.getByRole("link", { name: /back/i }).first().click();
     await page.getByRole("tab", { name: /Import/ }).click();
-    await page.getByRole("button", { name: "Staged", exact: true }).click();
-    await expect(
-      page.getByText("Agent staged QA.csv", { exact: true }),
-    ).toBeVisible();
+    await page.getByRole("button", { name: /^Staged/ }).click();
     await page
-      .getByRole("button", { name: "Review staged transactions", exact: true })
+      .getByRole("button", { name: "Agent staged QA.csv", exact: true })
       .click();
     await expect(
       page.getByText("Staged expense 1", { exact: true }).first(),
     ).toBeVisible();
     await page
-      .getByRole("button", { name: "Exclude row", exact: true })
-      .first()
+      .getByRole("checkbox", { name: "Include Staged expense 1" })
       .click();
-    await expect(
-      page.getByRole("button", { name: "Include row", exact: true }),
-    ).toBeVisible();
+    await expect
+      .poll(async () => (await rpc("getAgentDraft", draft.id)).draft.reviewSummary.selected)
+      .toBe(3);
     await page
-      .getByRole("button", { name: "Include row", exact: true })
+      .getByRole("checkbox", { name: "Include Staged expense 1" })
       .click();
-    await page.getByRole("button", { name: "More details", exact: true }).first().click();
-    await page
-      .getByRole("button", { name: "Accept", exact: true })
-      .first()
-      .click();
+    await expect
+      .poll(async () => (await rpc("getAgentDraft", draft.id)).draft.reviewSummary.selected)
+      .toBe(4);
+    await page.getByRole("button", { name: "Edit Staged expense 1" }).click();
     await expect(
-      page.getByText("Reviewed expense 1", { exact: true }).first(),
-    ).toBeHidden();
-    await page
-      .getByRole("button", { name: "Reconciliation", exact: true })
-      .click();
-    await page.getByRole("button", { name: "More details", exact: true }).first().click();
-    await expect(
-      page.getByText("Check this transfer", { exact: true }).first(),
+      page.getByText("Confirm merchant label", { exact: true }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Accept", exact: true }).click();
+    await page.getByRole("button", { name: "Close" }).last().click();
+    await page.getByRole("button", { name: "Edit Staged expense 2" }).click();
     await expect(
-      page.getByText(
-        "No transactions match this view. Choose All to see every row.",
-        { exact: true },
-      ),
+      page.getByText("Check this transfer", { exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Accept", exact: true }).click();
+    await page.getByRole("button", { name: "Close" }).last().click();
+    await expect(
+      page.getByText("No rows in this view", { exact: true }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Ready", exact: true }).click();
-    await expect(
-      page.getByText("Reviewed expense 1", { exact: true }).first(),
-    ).toBeVisible();
     await page
-      .getByRole("button", { name: "Edit transaction", exact: true })
-      .first()
+      .getByRole("button", { name: "Edit Reviewed expense 1" })
       .click();
     await page
       .getByLabel("Label", { exact: true })
       .fill("Phone reviewed expense");
-    await page
-      .getByRole("button", { name: "Save changes", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Save row", exact: true }).click();
     await expect(
       page.getByText("Phone reviewed expense", { exact: true }).first(),
     ).toBeVisible();
@@ -349,81 +326,49 @@ test("mobile authentication, financial workflows and phone navigation", async ({
       fullPage: true,
     });
     await page
-      .getByRole("button", { name: "Edit transaction", exact: true })
-      .last()
+      .getByRole("button", { name: "Edit Incoming reimbursement" })
       .click();
     await page
-      .getByRole("button", { name: "Allocate reimbursement", exact: true })
+      .getByRole("button", { name: "Reimbursement", exact: true })
       .click();
     await expect(
-      page.getByText(
-        "Choose expenses in this statement or your saved ledger.",
-        { exact: true },
-      ),
+      page.getByText("What does this pay back?", { exact: true }),
     ).toBeVisible();
-    await page.getByRole("button", { name: /Phone reviewed expense/ }).click();
+    await page.getByRole("button", { name: /^This import/ }).click();
     await page
-      .getByRole("button", { name: "Save allocations", exact: true })
+      .getByRole("checkbox", { name: "Phone reviewed expense" })
       .click();
-    await page.getByRole("button", {name:"Review staged transactions",exact:true}).click();
+    await page.getByRole("button", { name: "Save links", exact: true }).click();
     await expect(
-      page.getByRole("button", { name: "Review & save 4 rows", exact: true }),
+      page.getByRole("button", { name: "Validate & commit (4)", exact: true }),
     ).toBeVisible();
-    expect(
-      (await rpc("getAgentDraft", draft.id)).draft.rows[3].currentPayload
-        .linkage,
-    ).toMatchObject({
-      type: "reimbursement",
-      reimbursesAllocations: [{ pendingBatchIndex: 0, amount: 5 }],
-      leftoverAmount: 0,
-    });
-    page.once("dialog", (dialog) => void dialog.accept());
+    await expect
+      .poll(async () => (await rpc("getAgentDraft", draft.id)).draft.rows[3].links.linkedAmount)
+      .toBe(5);
     await page
-      .getByRole("button", { name: "Review & save 4 rows", exact: true })
+      .getByRole("button", { name: "Validate & commit (4)", exact: true })
       .click();
-    await expect(
-      page.getByRole("button", { name: "Review & save 4 rows", exact: true }),
-    ).toBeHidden();
     await expect
       .poll(async () => (await rpc("getAgentDraft", draft.id)).draft.status)
       .toBe("committed");
-    await expect(
-      page.getByRole("button", {
-        name: "Review staged transactions",
-        exact: true,
-      }),
-    ).toBeHidden();
-    await page.getByRole("button", { name: "History", exact: true }).click();
     await expect(page.getByText("qa.csv", { exact: true })).toBeVisible();
-    await page
-      .getByRole("button", { name: "Import", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Upload", exact: true }).click();
     await expect(
-      page.getByText("1. Choose your statement type", { exact: true }),
+      page.getByText("Statement type", { exact: true }),
     ).toBeVisible();
     await page
       .getByRole("button", { name: "Statement parser", exact: true })
       .click();
-    await expect(
-      page.getByRole("button", { name: "Done", exact: true }),
-    ).toBeVisible();
-    await page.getByRole("button", { name: "Done", exact: true }).click();
-    await expect(
-      page.getByRole("button", { name: "Done", exact: true }),
-    ).toBeHidden();
+    await page.getByRole("button", { name: "Close" }).last().click();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await expect(
-      page.getByText("Make it yours", { exact: true }),
-    ).toBeVisible();
-    await page.getByRole("button", { name: "dark", exact: true }).click();
+    await expect(page.getByText("Organize", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Dark", exact: true }).click();
     await page.screenshot({
       path: "test-results/settings-dark-phone.png",
       fullPage: true,
     });
-    await page.getByRole("button", { name: "Categories", exact: true }).click();
-    await page
-      .getByRole("button", { name: "Add category", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Categories" }).click();
+    await page.getByRole("button", { name: "Add", exact: true }).click();
     await page
       .getByLabel("Name", { exact: true })
       .fill("Mobile-created category");
@@ -458,6 +403,112 @@ test("mobile authentication, financial workflows and phone navigation", async ({
         })
       ).status(),
     ).toBe(401);
+  } finally {
+    const user = await prisma.user.findUnique({ where: { username } });
+    if (user) await prisma.user.delete({ where: { id: user.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("opens a committed statement from import history", async ({ page, request }) => {
+  const username = `mobile_import_detail_${Date.now()}`;
+  const password = randomBytes(18).toString("hex");
+  const prisma = new PrismaClient({
+    datasources: {
+      db: {
+        url:
+          process.env.FORTUNA_TEST_DATABASE_URL ||
+          "postgresql://financeuser:financepass@localhost:5433/personal_finance?schema=public",
+      },
+    },
+  });
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  let token = "";
+  const rpc = async (operation: string, ...args: any[]) => {
+    const response = await request.post(`${server}/api/mobile/action`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { operation, args },
+    });
+    const body = await response.json();
+    expect(response.ok(), `${operation}: ${body.error || response.status()}`).toBeTruthy();
+    return body.data;
+  };
+
+  try {
+    expect(
+      (
+        await request.post(`${server}/api/auth/register`, {
+          data: { name: "Import Detail QA", username, password, baseCurrency: "SGD" },
+        })
+      ).ok(),
+    ).toBeTruthy();
+    const login = await request.post(`${server}/api/mobile/session`, {
+      data: { username, password },
+    });
+    expect(login.ok()).toBeTruthy();
+    token = (await login.json()).token;
+
+    const categories = await rpc("getCategories");
+    const account = await rpc("upsertAccountNumber", "QA statement", "#5750F1");
+    expect(
+      (
+        await rpc(
+          "commitImport",
+          [
+            {
+              date: "2026-09-20",
+              description: "Statement purchase",
+              amountIn: 0,
+              amountOut: 12,
+              categoryId: categories[0].id,
+              accountIdentifier: account.accountIdentifier,
+            },
+            {
+              date: "2026-09-21",
+              description: "Statement deposit",
+              amountIn: 30,
+              amountOut: 0,
+              categoryId: categories[0].id,
+              accountIdentifier: account.accountIdentifier,
+            },
+          ],
+          [0, 1],
+          { filename: "detail-qa.csv", parserId: "manual", fileType: "csv" },
+        )
+      ).success,
+    ).toBeTruthy();
+
+    await page.route("**/api/**", async (route) => {
+      const url = new URL(route.request().url());
+      await route.continue({ url: `${server}${url.pathname}${url.search}` });
+    });
+    await page.goto("/");
+    await page
+      .getByLabel("Fortuna server domain or URL", { exact: true })
+      .fill("http://localhost:8081");
+    await page.getByLabel("Username", { exact: true }).fill(username);
+    await page.getByLabel("Password", { exact: true }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await expect(page.getByText("Hello, Import.", { exact: true })).toBeVisible({
+      timeout: 30000,
+    });
+    await page.getByRole("tab", { name: /Import/ }).click();
+    await page.getByRole("button", { name: "History", exact: true }).click();
+    await expect(page.getByText("detail-qa.csv", { exact: true })).toBeVisible();
+    await page
+      .getByRole("button", { name: "detail-qa.csv", exact: true })
+      .click();
+    await expect(
+      page.getByText("detail-qa.csv", { exact: true }).last(),
+    ).toBeVisible();
+    await expect(
+      page.getByText("2 transactions", { exact: true }).last(),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Statement purchase", { exact: true }).last(),
+    ).toBeVisible();
+    expect(errors).toEqual([]);
   } finally {
     const user = await prisma.user.findUnique({ where: { username } });
     if (user) await prisma.user.delete({ where: { id: user.id } });

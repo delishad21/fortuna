@@ -188,7 +188,7 @@ test("phone chat uses configured server, preserves failed sends and shows approv
   await expect(page.getByText("1 transaction", { exact: true })).toBeVisible();
   await expect(page.getByText("Cafe", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Work lunch", { exact: true })).toBeVisible();
-  await expect(page.getByText("Dining", { exact: true })).toBeVisible();
+  await expect(page.getByText("Dining", { exact: true }).first()).toBeVisible();
   await expect(
     page.getByText("Internal transfer", { exact: true }),
   ).toBeVisible();
