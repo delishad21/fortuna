@@ -3,7 +3,6 @@ import { Pressable, RefreshControl, ScrollView, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useApi, useResource } from "./api";
 import {
-  Banner,
   BRAND,
   Button,
   Card,
@@ -14,9 +13,7 @@ import {
   fmtDate,
   fmtMonth,
   Group,
-  DateHeader,
   Dot,
-  groupByDay,
   ListItem,
   Tabs,
   money,
@@ -37,7 +34,7 @@ import {
   Txt,
   useTheme,
 } from "./ui";
-import { AreaChart, ColumnChart, Donut, RankBars } from "./charts";
+import { ColumnChart, Donut, RankBars } from "./charts";
 import { shareCsv } from "./sharing";
 
 const signed = (n: number, currency?: string) =>
@@ -186,19 +183,183 @@ function CategorizeRow({ item, categories, onDone, navigation }: any) {
     </View>
   );
 }
+/** Up to `radius` items either side of `index`, shifted to stay in range. */
+const around = <T,>(items: T[], index: number, radius: number) => {
+  const size = Math.min(items.length, radius * 2 + 1);
+  const start = Math.min(Math.max(index - radius, 0), Math.max(items.length - size, 0));
+  return items.slice(start, start + size);
+};
+
+/** "↑ $12.68 (+20%)": more spending is red, less is green (`invert` for income). */
+const changeText = (value: number, previous: number | null | undefined, currency: string) => {
+  if (Math.abs(value) < 0.005) return "No change";
+  const percent = previous ? Math.round((value / previous) * 100) : null;
+  return `${value > 0 ? "↑" : "↓"} ${money(Math.abs(value), currency)}${
+    percent != null && Number.isFinite(percent) ? ` (${value > 0 ? "+" : ""}${percent}%)` : ""
+  }`;
+};
+const changeTone = (value: number, invert = false): "red" | "green" | undefined =>
+  Math.abs(value) < 0.005 ? undefined : (value > 0) !== invert ? "red" : "green";
+
+/** "‹ October 2026 ›"; tap the title to pick any month. Months newest first. */
+function MonthHeader({
+  months,
+  value,
+  onChange,
+}: {
+  months: string[];
+  value?: string | null;
+  onChange: (month: string) => void;
+}) {
+  const { colors } = useTheme();
+  const [picking, setPicking] = useState(false);
+  const index = value ? months.indexOf(value) : -1;
+  const older = index >= 0 ? months[index + 1] : undefined;
+  const newer = index > 0 ? months[index - 1] : undefined;
+  const arrow = (icon: any, target: string | undefined, label: string) => (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      disabled={!target}
+      onPress={() => {
+        if (!target) return;
+        tap();
+        onChange(target);
+      }}
+      style={{
+        width: 40,
+        height: 40,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: colors.line,
+        backgroundColor: colors.card,
+        alignItems: "center",
+        justifyContent: "center",
+        opacity: target ? 1 : 0.35,
+      }}
+    >
+      <Ionicons name={icon} size={18} color={colors.text} />
+    </Pressable>
+  );
+  return (
+    <View style={[styles.row, { gap: 8 }]}>
+      {arrow("chevron-back", older, "Previous month")}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Month: ${fmtMonth(value)}`}
+        onPress={() => setPicking(true)}
+        style={[styles.row, { flex: 1, justifyContent: "center", gap: 6 }]}
+      >
+        <Txt bold size={18}>
+          {fmtMonth(value)}
+        </Txt>
+        <Ionicons name="chevron-down" size={16} color={colors.muted} />
+      </Pressable>
+      {arrow("chevron-forward", newer, "Next month")}
+      <Sheet visible={picking} onClose={() => setPicking(false)} title="Month">
+        <Group>
+          {months.map((m) => (
+            <ListItem
+              key={m}
+              title={fmtMonth(m)}
+              value={m === value ? "Showing" : undefined}
+              onPress={() => {
+                setPicking(false);
+                onChange(m);
+              }}
+            />
+          ))}
+        </Group>
+      </Sheet>
+    </View>
+  );
+}
+
+/** The month's spending up top, with income and net underneath. */
+function MonthCard({
+  summary,
+  currency,
+  label,
+  lines = [],
+}: {
+  summary: any;
+  currency: string;
+  label: string;
+  lines?: Array<{ text: string; tone?: "red" | "green" }>;
+}) {
+  const { colors } = useTheme();
+  const net = Number(summary.totalIn || 0) - Number(summary.totalOut || 0);
+  const kept = summary.totalIn > 0 ? Math.round((net / summary.totalIn) * 100) : null;
+  return (
+    <Card style={{ gap: 6 }}>
+      <Txt muted bold size={13}>
+        {label}
+      </Txt>
+      <Txt mono size={30} tone="red" numberOfLines={1} adjustsFontSizeToFit>
+        {money(summary.totalOut, currency)}
+      </Txt>
+      {lines.map((line) => (
+        <Txt key={line.text} size={13} tone={line.tone} muted={!line.tone}>
+          {line.text}
+        </Txt>
+      ))}
+      <View style={{ height: 1, backgroundColor: colors.line, marginVertical: 6 }} />
+      <View style={{ flexDirection: "row", gap: 12 }}>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Txt muted size={12}>
+            Income
+          </Txt>
+          <Txt mono size={16} tone="green" numberOfLines={1} adjustsFontSizeToFit>
+            {money(summary.totalIn, currency)}
+          </Txt>
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Txt muted size={12}>
+            Net{kept != null ? ` · ${kept}% kept` : ""}
+          </Txt>
+          <Txt mono size={16} tone={net >= 0 ? "green" : "red"} numberOfLines={1} adjustsFontSizeToFit>
+            {signed(net, currency)}
+          </Txt>
+        </View>
+      </View>
+    </Card>
+  );
+}
+
+const useAccountColors = () => {
+  const accounts = useResource("getAccountNumbers");
+  return useMemo(
+    () => Object.fromEntries((accounts.data || []).map((a: any) => [a.accountIdentifier, a.color])),
+    [accounts.data],
+  );
+};
+
 export function HomeScreen({ navigation }: any) {
   const [month, setMonth] = useState<string | undefined>();
   const [tab, setTab] = useState("Overview");
+  const [uncategorizedShown, setUncategorizedShown] = useState(8);
   const overview = useResource("getDashboardOverview", month);
   const review = useResource("getDashboardReview");
   const user = useResource("getCurrentUser");
   const categories = useResource("getCategories", { scope: "main" });
+  const accountColors = useAccountColors();
   const resource = tab === "Overview" ? overview : review;
   const o = overview.data;
   const r = review.data;
   const currency = user.data?.baseCurrency || "SGD";
-  const delta = Number(o?.summary?.previousMonth?.spendingDelta || 0);
   const { colors } = useTheme();
+  const reviewCount =
+    (r?.dataHealth?.uncategorizedCount || 0) + (r?.stagedImports?.length || 0);
+  const openTransaction = (item: any) => navigation.navigate("Transaction", { id: item.id, item });
+
+  const months: string[] = (o?.importedMonths || []).map((m: any) => m.month);
+  const selected: string | undefined = o?.selectedMonth || undefined;
+  const previous = o?.summary?.previousMonth;
+  const trendIndex = (o?.trend || []).findIndex((t: any) => t.month === selected);
+  const trend = around(o?.trend || [], trendIndex >= 0 ? trendIndex : (o?.trend?.length || 1) - 1, 3);
+  const categoriesSpent = (o?.spendingByCategory || []) as any[];
+  const missing = ((r?.coverage?.accounts || []) as any[]).filter((a) => a.missingMonths?.length);
+
   return (
     <Screen
       refreshControl={
@@ -211,33 +372,41 @@ export function HomeScreen({ navigation }: any) {
         />
       }
     >
-      <Tabs values={["Overview", "Review"]} value={tab} onChange={setTab} />
+      <Tabs
+        values={["Overview", "Review"]}
+        labels={{ Review: reviewCount ? `Review (${reviewCount})` : "Review" }}
+        value={tab}
+        onChange={setTab}
+      />
       <State {...resource} />
-      {tab === "Overview" && o && (
+      {tab === "Overview" && o && !o.hasTransactions && (
+        <Card>
+          <Empty title="No transactions yet" message="Import a statement to see your month." />
+          <Button title="Import Statement" icon="cloud-upload-outline" onPress={() => navigation.navigate("Import")} />
+        </Card>
+      )}
+      {tab === "Overview" && o?.hasTransactions && selected && (
         <>
-          {o.importedMonths.length > 0 && (
-            <MonthStrip
-              months={o.importedMonths.map((m: any) => m.month)}
-              value={month || o.selectedMonth}
-              onChange={setMonth}
-            />
-          )}
-          <Summary
+          <MonthHeader months={months} value={selected} onChange={setMonth} />
+          <MonthCard
             summary={o.summary}
             currency={currency}
-            footer={
-              o.summary.previousMonth ? (
-                <Txt muted size={13}>
-                  {money(Math.abs(delta), currency)} {delta > 0 ? "more" : "less"} spending than{" "}
-                  {fmtMonth(o.summary.previousMonth.month, true)}
-                </Txt>
-              ) : null
+            label={`Spent in ${fmtMonth(selected)}`}
+            lines={
+              previous
+                ? [
+                    {
+                      text: `${changeText(previous.spendingDelta, previous.totalOut, currency)} vs ${fmtMonth(previous.month, true)}`,
+                      tone: changeTone(previous.spendingDelta),
+                    },
+                  ]
+                : []
             }
           />
-          {o.trend?.length > 0 && (
+          {trend.length > 1 && (
             <Card>
               <Txt bold size={16}>
-                Spending and Income Trend
+                Income and spending
               </Txt>
               <ColumnChart
                 currency={currency}
@@ -245,62 +414,67 @@ export function HomeScreen({ navigation }: any) {
                 secondaryLabel="Income"
                 color={colors.red}
                 secondaryColor={colors.green}
-                data={o.trend.map((t: any) => ({
+                selectedKey={selected}
+                data={trend.map((t: any) => ({
                   key: t.month,
                   label: fmtMonth(t.month, true),
                   value: t.totalOut,
                   secondary: t.totalIn,
                 }))}
-                onSelect={(d) => setMonth(d.key)}
+                onSelect={(d) => d.key && d.key !== selected && setMonth(d.key)}
               />
             </Card>
           )}
-          <Card>
-            <Txt bold size={16}>
-              Quick Actions
-            </Txt>
-            <Button title="Import Statement" icon="cloud-upload-outline" onPress={() => navigation.navigate("Import")} />
-            <Button title="Open Analytics" secondary onPress={() => navigation.navigate("Analytics")} />
-            <Button title="Review Transactions" secondary onPress={() => navigation.navigate("Transactions")} />
-            <Button title="Manage Categories" secondary onPress={() => navigation.navigate("Manage", { kind: "categories" })} />
-          </Card>
-          <Card style={{ gap: 0 }}>
-            <View style={styles.between}>
-              <Txt bold size={16}>
-                Recent Transactions
-              </Txt>
-              <Button title="See all" compact ghost onPress={() => navigation.navigate("Transactions")} />
-            </View>
-            {o.recentTransactions.length === 0 && <Empty title="No transactions this month" />}
-            {groupByDay(o.recentTransactions).map((day) => (
-              <View key={day.key}>
-                <DateHeader date={day.key} />
-                {day.data.map((item: any) => (
+          {categoriesSpent.length > 0 && (
+            <Section title="Where it went" action="Details" onAction={() => navigation.navigate("Analytics")}>
+              <Card>
+                <Donut
+                  currency={currency}
+                  centerLabel="Spent"
+                  limit={5}
+                  data={categoriesSpent.map((c) => {
+                    const change = c.totalOut - (c.previousTotalOut || 0);
+                    return {
+                      key: c.key,
+                      label: c.name,
+                      value: c.totalOut,
+                      color: c.color,
+                      note: previous
+                        ? c.previousTotalOut
+                          ? changeText(change, c.previousTotalOut, currency)
+                          : "New this month"
+                        : undefined,
+                      noteTone: previous && c.previousTotalOut ? changeTone(change) : undefined,
+                    };
+                  })}
+                />
+              </Card>
+            </Section>
+          )}
+          {(o.largestExpenses || []).length > 0 && (
+            <Section title="Largest expenses" action="See all" onAction={() => navigation.navigate("Transactions")}>
+              <Card style={{ paddingVertical: 6, gap: 0 }}>
+                {o.largestExpenses.slice(0, 3).map((item: any) => (
                   <TransactionRow
                     key={item.id}
-                    item={item}
-                    onPress={() => navigation.navigate("Transaction", { id: item.id, item })}
+                    item={{ ...item, accountColor: accountColors[item.accountIdentifier] }}
+                    showDate
+                    onPress={() => openTransaction(item)}
                   />
                 ))}
-              </View>
-            ))}
-          </Card>
+              </Card>
+            </Section>
+          )}
         </>
       )}
       {tab === "Review" && r && (
         <>
-          <Card>
+          <Card style={{ gap: 8 }}>
             <View style={styles.between}>
-              <View style={{ flex: 1, gap: 2 }}>
-                <Txt bold size={16}>
-                  Data Health
-                </Txt>
-                <Txt muted size={13}>
-                  {r.dataHealth.categorizedCount} of {r.dataHealth.transactionCount}{" "}
-                  transactions categorized
-                </Txt>
-              </View>
-              <Txt mono size={26} tone={r.dataHealth.categorizedPercent >= 90 ? "green" : "amber"}>
+              <Txt bold size={16}>
+                Categorised
+              </Txt>
+              <Txt mono size={22} tone={r.dataHealth.categorizedPercent >= 90 ? "green" : "amber"}>
                 {r.dataHealth.categorizedPercent}%
               </Txt>
             </View>
@@ -308,38 +482,35 @@ export function HomeScreen({ navigation }: any) {
               value={r.dataHealth.categorizedPercent / 100}
               color={r.dataHealth.categorizedPercent >= 90 ? undefined : "#F59E0B"}
             />
-            <View style={{ flexDirection: "row" }}>
-              {[
-                ["Transactions", r.dataHealth.transactionCount],
-                ["To review", r.dataHealth.uncategorizedCount],
-                ["Rules", r.dataHealth.ruleCount],
-                ["Merchants", r.dataHealth.merchantCount],
-              ].map(([label, value]) => (
-                <View key={label} style={{ flex: 1, alignItems: "center", gap: 2 }}>
-                  <Txt mono size={17}>
-                    {value}
-                  </Txt>
-                  <Txt muted size={11}>
-                    {label}
-                  </Txt>
-                </View>
-              ))}
-            </View>
+            <Txt muted size={13}>
+              {r.dataHealth.uncategorizedCount} of {r.dataHealth.transactionCount} without a category ·{" "}
+              {r.dataHealth.ruleCount} import rules
+            </Txt>
           </Card>
-          {r.dataHealth.uncategorizedCount > 0 && (
-            <Banner
-              tone="amber"
-              icon="alert-circle-outline"
-              title={`${r.dataHealth.uncategorizedCount} transactions need a category`}
-              message="Categorize them below so your reports stay accurate."
-            />
+
+          {(r.stagedImports || []).length > 0 && (
+            <Section title="Waiting to commit">
+              <Group>
+                {r.stagedImports.map((draft: any) => (
+                  <ListItem
+                    key={draft.id}
+                    icon="layers-outline"
+                    title={draft.filename}
+                    subtitle={`${draft.rowCount} rows · staged ${fmtDate(draft.updatedAt, false)}`}
+                    chevron
+                    onPress={() => navigation.navigate("Draft", { ids: [draft.id] })}
+                  />
+                ))}
+              </Group>
+            </Section>
           )}
-          <Section title="Uncategorized">
+
+          <Section title={`Without a category${r.dataHealth.uncategorizedCount ? ` (${r.dataHealth.uncategorizedCount})` : ""}`}>
             <Card style={{ padding: 0, gap: 0, paddingTop: 6 }}>
               {r.reviewQueue.uncategorized.length === 0 && (
-                <Empty icon="checkmark-done-outline" title="All caught up" />
+                <Empty icon="checkmark-done-outline" title="Everything has a category" />
               )}
-              {r.reviewQueue.uncategorized.slice(0, 8).map((item: any) => (
+              {r.reviewQueue.uncategorized.slice(0, uncategorizedShown).map((item: any) => (
                 <CategorizeRow
                   key={item.id}
                   item={item}
@@ -348,300 +519,286 @@ export function HomeScreen({ navigation }: any) {
                   onDone={review.reload}
                 />
               ))}
-            </Card>
-          </Section>
-          <Section title="Large Transactions">
-            <Card style={{ paddingVertical: 6, gap: 0 }}>
-              {r.reviewQueue.largeTransactions.length === 0 && (
-                <Empty icon="checkmark-done-outline" title="Nothing unusual" />
+              {r.reviewQueue.uncategorized.length > uncategorizedShown && (
+                <View style={{ padding: 12, paddingTop: 0 }}>
+                  <Button
+                    title={`Show more (${r.reviewQueue.uncategorized.length - uncategorizedShown})`}
+                    secondary
+                    compact
+                    onPress={() => setUncategorizedShown((n) => n + 10)}
+                  />
+                </View>
               )}
-              {r.reviewQueue.largeTransactions.slice(0, 5).map((item: any) => (
-                <TransactionRow
-                  key={item.id}
-                  item={item}
-                  onPress={() =>
-                    navigation.navigate("Transaction", { id: item.id, item })
-                  }
-                />
-              ))}
             </Card>
           </Section>
-          {r.reviewQueue.newMerchants.length > 0 && (
-            <Section title="New merchants">
+
+          {missing.length > 0 && (
+            <Section title="Possibly missing statements" hint="Months with no transactions after an account's first statement.">
               <Group>
-                {r.reviewQueue.newMerchants.map((m: any) => (
+                {missing.map((account: any) => (
                   <ListItem
-                    key={m.key}
-                    icon="storefront-outline"
-                    title={m.name}
-                    subtitle={
-                      m.transactionCount
-                        ? `${m.transactionCount} transactions`
-                        : undefined
-                    }
-                    value={m.totalOut != null ? money(m.totalOut, currency) : undefined}
-                    onPress={() =>
-                      navigation.navigate("Transactions", { search: m.name })
-                    }
+                    key={account.label}
+                    color={account.color}
+                    title={account.label}
+                    subtitle={account.missingMonths.map((m: string) => fmtMonth(m, true)).join(", ")}
+                    onPress={() => navigation.navigate("Import")}
                   />
                 ))}
               </Group>
             </Section>
           )}
-          <Section
-            title="Recent Imports"
-            action="All imports"
-            onAction={() =>
-              navigation.navigate("Import", { openTab: "History", refreshKey: Date.now() })
-            }
-          >
-            {r.importSummaries.length === 0 && (
-              <Card>
-                <Empty icon="document-text-outline" title="No imports yet" />
-              </Card>
-            )}
-            {r.importSummaries.slice(0, 4).map((item: any) => (
-              <ImportSummaryCard
-                key={item.key}
-                item={item}
-                onPress={() => navigation.navigate("ImportDetail", { key: item.key })}
-              />
-            ))}
-          </Section>
+
+          {r.reviewQueue.newMerchants.length > 0 && (
+            <Section title={`New in ${fmtMonth(r.reviewQueue.newMerchantsMonth || selected, true)}`}>
+              <Group>
+                {r.reviewQueue.newMerchants.slice(0, 5).map((m: any) => (
+                  <ListItem
+                    key={m.key}
+                    icon="storefront-outline"
+                    title={m.name}
+                    subtitle={m.transactionCount ? `${m.transactionCount} transaction${m.transactionCount === 1 ? "" : "s"}` : undefined}
+                    value={m.totalOut ? `-${money(m.totalOut, currency)}` : undefined}
+                    valueTone="red"
+                    onPress={() => navigation.navigate("Transactions", { search: m.name })}
+                  />
+                ))}
+              </Group>
+            </Section>
+          )}
+
           <Button
-            title="Staged imports"
-            icon="layers-outline"
+            title="Import history"
+            icon="time-outline"
             secondary
-            onPress={() =>
-              navigation.navigate("Import", { openTab: "Staged", refreshKey: Date.now() })
-            }
+            onPress={() => navigation.navigate("Import", { openTab: "History", refreshKey: Date.now() })}
           />
         </>
       )}
     </Screen>
   );
 }
-function Legend({ color, label }: { color: string; label: string }) {
-  return (
-    <View style={[styles.row, { gap: 6 }]}>
-      <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: color }} />
-      <Txt muted size={12}>
-        {label}
-      </Txt>
-    </View>
-  );
-}
-const RANGES: Record<string, string> = {
+
+type Period = "month" | "last3" | "last12" | "ytd" | "custom";
+const PERIODS: Record<Period, string> = {
   month: "Month",
   last3: "3 months",
-  ytd: "Year to date",
   last12: "12 months",
+  ytd: "Year to date",
   custom: "Custom",
 };
 const METRICS: Record<string, string> = {
   spending: "Spending",
   income: "Income",
-  inOut: "In vs out",
+  inOut: "Both",
   net: "Net",
 };
-const GROUPS: Record<string, string> = {
-  month: "Month",
-  day: "Day",
-  category: "Category",
-  merchant: "Merchant",
-};
-const CHARTS: Record<string, string> = { bar: "Bars", line: "Line", pie: "Pie" };
+const ORDERINGS = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "largest", label: "Largest amount" },
+  { value: "smallest", label: "Smallest amount" },
+];
 const csvCell = (v: any) => JSON.stringify(String(v ?? ""));
+const daysBetween = (from?: string, to?: string) =>
+  from && to ? (Date.parse(to) - Date.parse(from)) / 86400000 : Infinity;
+
 function ReportTab({ navigation, currency }: any) {
   const { colors } = useTheme();
-  const [filters, setFilters] = useState<any>({
-    range: "month",
-    metric: "spending",
-    groupBy: "category",
-  });
-  const [chart, setChart] = useState("bar");
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<any>(filters);
-  const params = useMemo(() => {
-    const { range, ...rest } = filters;
-    return range === "custom" ? { ...rest, range: "month" } : filters;
-  }, [filters]);
+  const accountColors = useAccountColors();
+  const [period, setPeriod] = useState<Period>("month");
+  const [month, setMonth] = useState<string | undefined>();
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [metric, setMetric] = useState("spending");
+  const [categoryId, setCategoryId] = useState("");
+  const [merchantKey, setMerchantKey] = useState("");
+  const [breakdown, setBreakdown] = useState("Category");
+  const [ordering, setOrdering] = useState("newest");
+  const [shown, setShown] = useState(20);
+  const [lastTap, setLastTap] = useState<string | null>(null);
+
+  const custom = period === "custom";
+  const interval = period === "month" || (custom && daysBetween(dateFrom, dateTo) <= 62) ? "day" : "month";
+  const params = useMemo(
+    () => ({
+      month,
+      range: custom ? "month" : period,
+      ...(custom && dateFrom ? { dateFrom } : {}),
+      ...(custom && dateTo ? { dateTo } : {}),
+      metric,
+      groupBy: interval,
+      interval,
+      ...(categoryId ? { categoryId } : {}),
+      ...(merchantKey ? { merchantKey } : {}),
+    }),
+    [month, period, custom, dateFrom, dateTo, metric, interval, categoryId, merchantKey],
+  );
   const report = useResource("getAnalyticsReport", params);
   const r = report.data;
-  const metricOf = (row: any) =>
-    filters.metric === "income"
-      ? row.totalIn
-      : filters.metric === "net"
-        ? row.totalIn - row.totalOut
-        : row.totalOut;
-  const timeGrouped = filters.groupBy === "month" || filters.groupBy === "day";
-  const metricColor =
-    filters.metric === "income" ? colors.green : filters.metric === "net" ? colors.purple : colors.red;
-  const series = (r?.chartSeries || [])
-    .filter((row: any) => timeGrouped || Number(row.metricValue ?? metricOf(row)) !== 0)
-    .map((row: any) => ({
-    key: row.key,
-    label:
-      row.label ||
-      (filters.groupBy === "day" ? fmtDate(row.key, false) : fmtMonth(row.key, true)),
-    value: filters.metric === "inOut" ? row.totalOut : Number(row.metricValue ?? metricOf(row)),
-    secondary: filters.metric === "inOut" ? row.totalIn : undefined,
-    color: timeGrouped ? undefined : row.color,
+
+  const value = (t: any) =>
+    metric === "income" ? t.totalIn : metric === "net" ? t.totalIn - t.totalOut : t.totalOut;
+  const series = ((r?.timeSeries || r?.chartSeries || []) as any[]).map((t) => ({
+    key: t.key,
+    label: interval === "day" ? fmtDate(t.key, false) : fmtMonth(t.key, true),
+    value: metric === "inOut" ? t.totalOut : value(t),
+    secondary: metric === "inOut" ? t.totalIn : undefined,
   }));
-  const activeChips = [
-    filters.categoryId &&
-      `Category: ${r?.categories?.find((c: any) => c.id === filters.categoryId)?.name || "…"}`,
-    filters.merchantKey &&
-      `Merchant: ${r?.merchants?.find((m: any) => m.key === filters.merchantKey)?.name || "…"}`,
-    filters.range === "custom" &&
-      `${fmtDate(filters.dateFrom) || "Start"} – ${fmtDate(filters.dateTo) || "today"}`,
-  ].filter(Boolean) as string[];
+  const metricColor = metric === "income" ? colors.green : metric === "net" ? colors.purple : colors.red;
+
+  /** First tap reads a bar; tapping it again zooms in (month → days, day → that day). */
+  const onBar = (d: any) => {
+    if (lastTap !== d.key) {
+      setLastTap(d.key);
+      return;
+    }
+    setLastTap(null);
+    setShown(20);
+    if (interval === "month") {
+      setPeriod("month");
+      setMonth(d.key);
+    } else {
+      setPeriod("custom");
+      setDateFrom(d.key);
+      setDateTo(d.key);
+    }
+  };
+
+  const total = r ? value(r.summary) : 0;
+  const prev = r?.previousPeriod?.summary;
+  const prevTotal = prev ? value(prev) : null;
+  const hasPrev = !!prev && prev.transactionCount > 0;
+  const invert = metric === "income" || metric === "net";
+  const rows = ((breakdown === "Category" ? r?.categoryBreakdown || r?.breakdown : r?.merchantBreakdown) || [])
+    .filter((b: any) => Math.abs(Number(b.metricValue)) > 0.004);
+  const merchantName = r?.merchants?.find((m: any) => m.key === merchantKey)?.name;
+  const amount = (t: any) => Math.max(Number(t.originalAmountIn ?? t.amountIn) || 0, Number(t.originalAmountOut ?? t.amountOut) || 0);
+  const transactions = [...(r?.transactions || [])].sort((a: any, b: any) => {
+    if (ordering === "largest") return amount(b) - amount(a);
+    if (ordering === "smallest") return amount(a) - amount(b);
+    const byDate = String(a.date).localeCompare(String(b.date));
+    return ordering === "oldest" ? byDate : -byDate;
+  });
+
   return (
     <>
-      <View style={styles.row}>
-        <View style={{ flex: 1 }}>
-          <Chips
-            values={Object.keys(RANGES)}
-            labels={RANGES}
-            value={filters.range}
-            onChange={(range) => {
-              if (range === "custom") {
-                setDraft({ ...filters, range });
-                setEditing(true);
-              } else
-                setFilters(({ dateFrom, dateTo, ...old }: any) => ({ ...old, range }));
-            }}
-          />
-        </View>
-      </View>
-      <Segmented
-        values={Object.keys(METRICS)}
-        labels={METRICS}
-        value={filters.metric}
-        onChange={(metric) => setFilters((old: any) => ({ ...old, metric }))}
+      <Chips
+        values={Object.keys(PERIODS)}
+        labels={PERIODS}
+        value={period}
+        onChange={(next) => {
+          setLastTap(null);
+          if (next === "custom" && r) {
+            setDateFrom(String(r.period.start).slice(0, 10));
+            setDateTo(String(r.period.end).slice(0, 10));
+          }
+          setPeriod(next as Period);
+        }}
       />
-      <View style={[styles.row, { gap: 8 }]}>
-        <View style={{ flex: 1 }}>
-          <Choice
-            compact
-            label="Group by"
-            value={filters.groupBy}
-            options={Object.entries(GROUPS).map(([value, label]) => ({
-              value,
-              label: `By ${label.toLowerCase()}`,
-            }))}
-            onChange={(groupBy) => setFilters((old: any) => ({ ...old, groupBy }))}
-          />
+      {period === "month" && r?.importedMonths?.length > 0 && (
+        <MonthHeader months={r.importedMonths} value={r.selectedMonth} onChange={setMonth} />
+      )}
+      {custom && (
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <View style={{ flex: 1 }}>
+            <DateField label="From" value={dateFrom} onChange={setDateFrom} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <DateField label="To" value={dateTo} onChange={setDateTo} />
+          </View>
         </View>
-        <Button
-          compact
-          secondary
-          icon="options-outline"
-          title="Filters"
-          onPress={() => {
-            setDraft(filters);
-            setEditing(true);
-          }}
-        />
-      </View>
-      {activeChips.length > 0 && (
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-          {activeChips.map((c) => (
-            <Pill key={c} label={c} tone="purple" icon="funnel-outline" />
-          ))}
-          <Pressable
-            accessibilityRole="button"
-            onPress={() =>
-              setFilters(({ categoryId, merchantKey, dateFrom, dateTo, ...old }: any) => ({
-                ...old,
-                range: old.range === "custom" ? "month" : old.range,
-              }))
-            }
-          >
-            <Pill label="Clear" tone="red" icon="close" />
-          </Pressable>
-        </View>
+      )}
+      <Segmented values={Object.keys(METRICS)} labels={METRICS} value={metric} onChange={setMetric} />
+      <Choice
+        compact
+        label="Category"
+        value={categoryId}
+        options={[
+          { label: "All categories", value: "" },
+          ...(r?.categories || []).map((c: any) => ({ label: c.name, value: c.id, color: c.color || "#9ca3af" })),
+        ]}
+        onChange={(id) => setCategoryId(id || "")}
+      />
+      {!!merchantKey && (
+        <Pressable accessibilityRole="button" accessibilityLabel="Remove merchant filter" onPress={() => setMerchantKey("")} style={{ alignSelf: "flex-start" }}>
+          <Pill label={merchantName || "Merchant"} tone="purple" icon="close" />
+        </Pressable>
       )}
       <State {...report} />
       {r && (
         <>
-          <Txt muted size={13}>
-            {fmtDate(r.period.start)} – {fmtDate(r.period.end)}
-          </Txt>
-          <Summary summary={r.summary} currency={currency} />
+          <Card style={{ gap: 4 }}>
+            <Txt muted bold size={13}>
+              {METRICS[metric] === "Both" ? "Spending" : METRICS[metric]} · {fmtDate(r.period.start, false)} – {fmtDate(r.period.end)}
+            </Txt>
+            <Txt mono size={28} tone={metric === "income" ? "green" : metric === "net" ? (total >= 0 ? "green" : "red") : "red"}>
+              {metric === "net" ? signed(total, currency) : money(total, currency)}
+            </Txt>
+            <Txt size={13} tone={hasPrev ? changeTone(total - (prevTotal || 0), invert) : undefined} muted={!hasPrev}>
+              {hasPrev ? `${changeText(total - (prevTotal || 0), prevTotal, currency)} vs previous period` : "No previous period to compare"}
+            </Txt>
+            <Txt muted size={12}>
+              {r.summary.transactionCount} transactions · in {money(r.summary.totalIn, currency)} · out {money(r.summary.totalOut, currency)}
+            </Txt>
+          </Card>
           <Card>
             <View style={styles.between}>
-              <Txt bold size={17}>
-                {METRICS[filters.metric]} by {GROUPS[filters.groupBy].toLowerCase()}
+              <Txt bold size={16}>
+                By {interval}
+              </Txt>
+              <Txt muted size={12}>
+                {interval === "month" ? "Tap twice to open a month" : series.length > 1 ? "Tap twice to open a day" : ""}
               </Txt>
             </View>
-            <Segmented values={Object.keys(CHARTS)} labels={CHARTS} value={chart} onChange={setChart} />
-            {series.length === 0 ? (
-              <Empty title="No data for this period" />
-            ) : chart === "pie" ? (
-              <Donut
-                data={(timeGrouped ? series : r.breakdown.map((b: any) => ({
-                  key: b.key,
-                  label: b.name,
-                  value: Math.abs(b.metricValue),
-                  color: b.color,
-                }))).map((d: any) => ({ ...d, value: Math.abs(d.value) }))}
-                currency={currency}
-                centerLabel={METRICS[filters.metric]}
-              />
-            ) : chart === "line" ? (
-              <AreaChart data={series} currency={currency} height={160} color={metricColor} />
+            {series.every((d) => !d.value && !d.secondary) ? (
+              <Empty title="No transactions in this period" />
             ) : (
               <ColumnChart
                 data={series}
                 currency={currency}
-                color={timeGrouped ? metricColor : undefined}
+                color={metric === "inOut" ? colors.red : metricColor}
                 secondaryColor={colors.green}
-                primaryLabel={filters.metric === "inOut" ? "Spending" : undefined}
-                secondaryLabel={filters.metric === "inOut" ? "Income" : undefined}
+                primaryLabel={metric === "inOut" ? "Spending" : undefined}
+                secondaryLabel={metric === "inOut" ? "Income" : undefined}
+                onSelect={onBar}
+                showLatest={false}
               />
             )}
           </Card>
-          <Section title={filters.groupBy === "merchant" ? "Merchants" : "Categories"}>
+          <Section title="Breakdown">
             <Card>
-              {r.breakdown.length === 0 && <Empty title="Nothing to break down" />}
-              <RankBars
-                currency={currency}
-                limit={12}
-                data={r.breakdown.map((b: any) => ({
-                  key: b.key,
-                  label: `${b.name} · ${b.percentOfTotal}%`,
-                  value: Number(b.metricValue),
-                  color: b.color,
-                }))}
-                onSelect={(d) =>
-                  setFilters((old: any) =>
-                    filters.groupBy === "merchant"
-                      ? { ...old, merchantKey: d.key }
-                      : { ...old, categoryId: d.key },
-                  )
-                }
-              />
+              <Segmented values={["Category", "Merchant"]} value={breakdown} onChange={setBreakdown} />
+              {rows.length === 0 ? (
+                <Empty title="Nothing to break down" />
+              ) : (
+                <RankBars
+                  currency={currency}
+                  limit={8}
+                  data={rows.map((b: any) => ({
+                    key: b.key,
+                    label: `${b.name} · ${b.percentOfTotal}%`,
+                    value: Math.abs(Number(b.metricValue)),
+                    color: b.color,
+                  }))}
+                  onSelect={(d) => {
+                    setShown(20);
+                    if (breakdown === "Category") setCategoryId(d.key === categoryId ? "" : d.key || "");
+                    else setMerchantKey(d.key === merchantKey ? "" : d.key || "");
+                  }}
+                />
+              )}
             </Card>
           </Section>
           <Section
-            title={`Transactions (${r.transactions.length})`}
+            title={`Transactions (${transactions.length})`}
             action="Share CSV"
             onAction={() =>
               void shareCsv(
                 "fortuna-report.csv",
                 [
                   "Date,Label,Description,Category,Merchant,In,Out",
-                  ...r.transactions.map((t: any) =>
-                    [
-                      String(t.date).slice(0, 10),
-                      t.label,
-                      t.description,
-                      t.category?.name,
-                      t.merchant,
-                      t.amountIn || 0,
-                      t.amountOut || 0,
-                    ]
+                  ...transactions.map((t: any) =>
+                    [String(t.date).slice(0, 10), t.label, t.description, t.category?.name, t.merchant, t.amountIn || 0, t.amountOut || 0]
                       .map(csvCell)
                       .join(","),
                   ),
@@ -649,107 +806,35 @@ function ReportTab({ navigation, currency }: any) {
               )
             }
           >
+            <Choice compact label="Order" value={ordering} options={ORDERINGS} onChange={setOrdering} />
             <Card style={{ paddingVertical: 6, gap: 0 }}>
-              {r.transactions.slice(0, 50).map((item: any) => (
+              {transactions.length === 0 && <Empty title="No transactions" />}
+              {transactions.slice(0, shown).map((item: any) => (
                 <TransactionRow
                   key={item.id}
-                  item={item}
+                  item={{
+                    ...item,
+                    amountIn: item.originalAmountIn ?? item.amountIn,
+                    amountOut: item.originalAmountOut ?? item.amountOut,
+                    accountColor: accountColors[item.accountIdentifier],
+                  }}
+                  showDate={ordering === "largest" || ordering === "smallest" || interval === "month"}
                   onPress={() => navigation.navigate("Transaction", { id: item.id, item })}
                 />
               ))}
-              {r.transactions.length > 50 && (
-                <Txt muted size={12} style={{ padding: 10, textAlign: "center" }}>
-                  Showing 50 of {r.transactions.length}. Share the CSV for all of them.
-                </Txt>
+              {transactions.length > shown && (
+                <View style={{ padding: 10 }}>
+                  <Button title={`Show more (${transactions.length - shown})`} secondary compact onPress={() => setShown((n) => n + 30)} />
+                </View>
               )}
             </Card>
           </Section>
         </>
       )}
-      <Sheet
-        visible={editing}
-        onClose={() => setEditing(false)}
-        title="Report filters"
-        footer={
-          <Button
-            title="Apply filters"
-            onPress={() => {
-              setFilters(
-                Object.fromEntries(
-                  Object.entries(draft).filter(([, v]) => v !== "" && v != null),
-                ),
-              );
-              setEditing(false);
-            }}
-          />
-        }
-      >
-        <Choice
-          label="Month"
-          value={draft.month || r?.selectedMonth}
-          options={(r?.importedMonths || []).map((m: string) => ({
-            label: fmtMonth(m),
-            value: m,
-          }))}
-          onChange={(month) => setDraft((d: any) => ({ ...d, month }))}
-        />
-        <Choice
-          label="Period"
-          value={draft.range}
-          options={Object.entries(RANGES).map(([value, label]) => ({ value, label }))}
-          onChange={(range) => setDraft((d: any) => ({ ...d, range }))}
-        />
-        {draft.range === "custom" && (
-          <>
-            <DateField
-              label="From"
-              value={draft.dateFrom || ""}
-              onChange={(dateFrom) => setDraft((d: any) => ({ ...d, dateFrom }))}
-            />
-            <DateField
-              label="To"
-              value={draft.dateTo || ""}
-              onChange={(dateTo) => setDraft((d: any) => ({ ...d, dateTo }))}
-            />
-          </>
-        )}
-        <Choice
-          label="Category"
-          value={draft.categoryId || ""}
-          options={[
-            { label: "All categories", value: "" },
-            ...(r?.categories || []).map((c: any) => ({
-              label: c.name,
-              value: c.id,
-              color: c.color,
-            })),
-          ]}
-          onChange={(categoryId) => setDraft((d: any) => ({ ...d, categoryId }))}
-        />
-        <Choice
-          label="Merchant"
-          value={draft.merchantKey || ""}
-          options={[
-            { label: "All merchants", value: "" },
-            ...(r?.merchants || []).map((m: any) => ({ label: m.name, value: m.key })),
-          ]}
-          onChange={(merchantKey) => setDraft((d: any) => ({ ...d, merchantKey }))}
-        />
-      </Sheet>
     </>
   );
 }
-function DeltaStat({ label, delta, currency }: any) {
-  const n = Number(delta || 0);
-  return (
-    <Stat
-      tone={n > 0 ? "red" : "green"}
-      label={label}
-      value={signed(n, currency)}
-      detail={n > 0 ? "More spending" : n < 0 ? "Less spending" : "No change"}
-    />
-  );
-}
+
 function ChangeList({ rows, currency }: any) {
   if (!rows?.length) return <Empty title="No changes" />;
   return (
@@ -757,87 +842,90 @@ function ChangeList({ rows, currency }: any) {
       {rows.map((row: any) => (
         <ListItem
           key={row.key}
-          icon={row.delta > 0 ? "arrow-up" : "arrow-down"}
-          tone={row.delta > 0 ? "red" : "green"}
-          color={undefined}
+          color={row.color || "#9ca3af"}
           title={row.name}
           subtitle={`${money(row.previousTotalOut, currency)} → ${money(row.totalOut, currency)}`}
-          value={signed(row.delta, currency)}
+          value={row.previousTotalOut ? changeText(row.delta, row.previousTotalOut, currency) : "New"}
           valueTone={row.delta > 0 ? "red" : "green"}
-          detail={row.percentDelta != null ? `${row.percentDelta > 0 ? "+" : ""}${row.percentDelta}%` : undefined}
         />
       ))}
     </Group>
   );
 }
+
 function InsightsTab({ navigation, currency }: any) {
   const [month, setMonth] = useState<string | undefined>();
   const insights = useResource("getAnalyticsInsights", month);
   const i = insights.data;
+  const s = i?.monthlySummary;
+  const changes = (i?.categoryChanges || []).filter((c: any) => Math.abs(c.delta) > 0.004).slice(0, 5);
   return (
     <>
-      {i?.importedMonths?.length > 0 && (
-        <MonthStrip months={i.importedMonths} value={month || i.selectedMonth} onChange={setMonth} />
-      )}
       <State {...insights} />
       {i && !i.hasTransactions && (
         <Card>
           <Empty title="No insights yet" message="Import a few months of statements to compare." />
         </Card>
       )}
-      {i?.hasTransactions && (
+      {i?.hasTransactions && s && (
         <>
-          <Summary
-            summary={i.monthlySummary}
+          <MonthHeader months={i.importedMonths} value={i.selectedMonth} onChange={setMonth} />
+          <MonthCard
+            summary={s}
             currency={currency}
-            title={`Net cash flow · ${fmtMonth(i.selectedMonth)}`}
+            label={`Spent in ${fmtMonth(i.selectedMonth)}`}
+            lines={[
+              ...(s.spendingDelta != null && s.previousMonth
+                ? [{ text: `${changeText(s.spendingDelta, s.previousTotalOut, currency)} vs ${fmtMonth(s.previousMonth, true)}`, tone: changeTone(s.spendingDelta) }]
+                : []),
+              ...(s.threeMonthDelta != null
+                ? [{ text: `${changeText(s.threeMonthDelta, s.threeMonthAverage, currency)} vs 3-month average`, tone: changeTone(s.threeMonthDelta) }]
+                : []),
+            ]}
           />
-          <StatGrid>
-            <DeltaStat label={`Vs ${fmtMonth(i.monthlySummary.previousMonth, true)}`} delta={i.monthlySummary.spendingDelta} currency={currency} />
-            <DeltaStat label="Vs 3-month average" delta={i.monthlySummary.threeMonthDelta} currency={currency} />
-          </StatGrid>
-          <Section title="Main spending drivers">
-            <ChangeList rows={i.monthlySummary.mainDrivers} currency={currency} />
-          </Section>
-          <Section title="Top merchants">
-            <Card>
-              <RankBars
-                currency={currency}
-                data={(i.merchantInsights?.topMerchants || []).map((m: any) => ({
-                  key: m.key,
-                  label: m.name,
-                  value: m.totalOut,
-                }))}
-                onSelect={(d) => navigation.navigate("Transactions", { search: d.label })}
-              />
-              {!i.merchantInsights?.topMerchants?.length && <Empty title="No merchants" />}
-            </Card>
-          </Section>
-          {i.merchantInsights?.newMerchants?.length > 0 && (
-            <Section title="New merchants this month">
+          {changes.length > 0 && (
+            <Section title={s.previousMonth ? `What changed since ${fmtMonth(s.previousMonth, true).split(" ")[0]}` : "What changed"}>
+              <ChangeList rows={changes} currency={currency} />
+            </Section>
+          )}
+          {(i.merchantInsights?.topMerchants || []).length > 0 && (
+            <Section title="Top merchants">
+              <Card>
+                <RankBars
+                  currency={currency}
+                  limit={5}
+                  data={i.merchantInsights.topMerchants
+                    .filter((m: any) => m.totalOut > 0)
+                    .map((m: any) => ({ key: m.key, label: m.name, value: m.totalOut }))}
+                  onSelect={(d) => navigation.navigate("Transactions", { search: d.label })}
+                />
+              </Card>
+            </Section>
+          )}
+          {(i.merchantInsights?.newMerchants || []).length > 0 && (
+            <Section title="First time this month">
               <Group>
-                {i.merchantInsights.newMerchants.map((m: any) => (
+                {i.merchantInsights.newMerchants.slice(0, 5).map((m: any) => (
                   <ListItem
                     key={m.key}
                     icon="sparkles-outline"
                     title={m.name}
-                    value={money(m.totalOut, currency)}
+                    value={m.totalOut ? `-${money(m.totalOut, currency)}` : undefined}
+                    valueTone="red"
                     onPress={() => navigation.navigate("Transactions", { search: m.name })}
                   />
                 ))}
               </Group>
             </Section>
           )}
-          <Section title="Category changes">
-            <ChangeList rows={i.categoryChanges} currency={currency} />
-          </Section>
-          {i.anomalies?.length > 0 && (
-            <Section title="Worth a second look">
+          {(i.anomalies || []).length > 0 && (
+            <Section title="Unusually large">
               <Card style={{ paddingVertical: 6, gap: 0 }}>
-                {i.anomalies.map((item: any) => (
+                {i.anomalies.slice(0, 3).map((item: any) => (
                   <TransactionRow
                     key={item.id}
                     item={item}
+                    showDate
                     onPress={() => navigation.navigate("Transaction", { id: item.id, item })}
                   />
                 ))}
@@ -849,96 +937,71 @@ function InsightsTab({ navigation, currency }: any) {
     </>
   );
 }
-function RecurringList({ rows, currency, navigation }: any) {
-  if (!rows?.length) return <Empty title="No recurring spend found" />;
-  return (
-    <Group>
-      {rows.map((m: any) => (
-        <ListItem
-          key={m.key}
-          icon="repeat-outline"
-          title={m.name}
-          subtitle={`${m.frequency} · ${m.monthsSeen} months · ${m.stability}`}
-          value={money(m.averageAmount, currency)}
-          detail="average"
-          onPress={() => navigation.navigate("Transactions", { search: m.name })}
-        />
-      ))}
-    </Group>
-  );
-}
+
 function OverallTab({ navigation, currency }: any) {
   const { colors } = useTheme();
   const overview = useResource("getAnalyticsOverview");
   const o = overview.data;
+  const months = o?.importedMonths?.length || 0;
+  const net = Number(o?.summary?.net || 0);
   return (
     <>
       <State {...overview} />
       {o && (
         <>
-          <Summary summary={o.summary} currency={currency} title="All-time net cash flow" />
           <StatGrid>
-            <Stat tone="blue" label="Transactions" value={String(o.summary.transactionCount)} />
-            <Stat label="Months" value={String(o.monthlyTrend?.length || 0)} />
+            <Stat label="Spent a month" tone="red" value={money(months ? o.summary.totalOut / months : 0, currency)} detail="on average" />
+            <Stat label="Earned a month" tone="green" value={money(months ? o.summary.totalIn / months : 0, currency)} detail="on average" />
           </StatGrid>
-          <Section title="Long-term cash flow">
-            <Card>
-              <ColumnChart
-                currency={currency}
-                primaryLabel="Spending"
-                secondaryLabel="Income"
-                color={colors.red}
-                secondaryColor={colors.green}
-                data={(o.monthlyTrend || []).map((t: any) => ({
-                  key: t.month,
-                  label: fmtMonth(t.month, true),
-                  value: t.totalOut,
-                  secondary: t.totalIn,
-                }))}
-              />
-            </Card>
-          </Section>
+          <Txt muted size={13}>
+            {months} months of statements · net {signed(net, currency)}
+            {o.summary.totalIn > 0 ? ` · ${Math.round((net / o.summary.totalIn) * 100)}% of income kept` : ""}
+          </Txt>
+          <Card>
+            <Txt bold size={16}>
+              Last 12 months
+            </Txt>
+            <ColumnChart
+              currency={currency}
+              primaryLabel="Spending"
+              secondaryLabel="Income"
+              color={colors.red}
+              secondaryColor={colors.green}
+              data={(o.monthlyTrend || []).map((t: any) => ({
+                key: t.month,
+                label: fmtMonth(t.month, true),
+                value: t.totalOut,
+                secondary: t.totalIn,
+              }))}
+            />
+          </Card>
           <Section title="Top categories">
             <Card>
               <Donut
                 currency={currency}
                 centerLabel="Spent"
-                data={(o.topCategories || []).map((c: any) => ({
-                  key: c.key,
-                  label: c.name,
-                  value: c.totalOut,
-                  color: c.color,
-                }))}
+                limit={6}
+                data={(o.topCategories || [])
+                  .filter((c: any) => c.totalOut > 0)
+                  .map((c: any) => ({ key: c.key, label: c.name, value: c.totalOut, color: c.color }))}
               />
             </Card>
           </Section>
-          <Section title="Top merchants">
-            <Card>
-              <RankBars
-                currency={currency}
-                data={(o.topMerchants || []).map((m: any) => ({
-                  key: m.key,
-                  label: m.name,
-                  value: m.totalOut,
-                }))}
-                onSelect={(d) => navigation.navigate("Transactions", { search: d.label })}
-              />
-            </Card>
-          </Section>
-          <Section title="Recurring spend">
-            <RecurringList rows={o.recurringMerchants} currency={currency} navigation={navigation} />
-          </Section>
-          {o.anomalies?.length > 0 && (
-            <Section title="Large unusual transactions">
-              <Card style={{ paddingVertical: 6, gap: 0 }}>
-                {o.anomalies.map((item: any) => (
-                  <TransactionRow
-                    key={item.id}
-                    item={item}
-                    onPress={() => navigation.navigate("Transaction", { id: item.id, item })}
+          {(o.recurringMerchants || []).length > 0 && (
+            <Section title="Recurring payments" hint="Merchants charged in two or more months.">
+              <Group>
+                {o.recurringMerchants.slice(0, 6).map((m: any) => (
+                  <ListItem
+                    key={m.key}
+                    icon="repeat-outline"
+                    title={m.name}
+                    subtitle={`${m.monthsSeen} months · ${m.stability === "fixed" ? "fixed amount" : "varies"}${m.lastDate ? ` · last ${fmtDate(m.lastDate, false)}` : ""}`}
+                    value={money(m.averageAmount, currency)}
+                    detail="typical"
+                    onPress={() => navigation.navigate("Transactions", { search: m.name })}
                   />
                 ))}
-              </Card>
+              </Group>
             </Section>
           )}
         </>
@@ -946,16 +1009,17 @@ function OverallTab({ navigation, currency }: any) {
     </>
   );
 }
+
 export function AnalyticsScreen({ navigation }: any) {
   const [tab, setTab] = useState("Reports");
   const user = useResource("getCurrentUser");
   const currency = user.data?.baseCurrency || "SGD";
   return (
     <Screen>
-      <Tabs values={["Reports", "Insights", "Overall"]} value={tab} onChange={setTab} />
+      <Tabs values={["Reports", "Month", "All time"]} value={tab} onChange={setTab} />
       {tab === "Reports" && <ReportTab navigation={navigation} currency={currency} />}
-      {tab === "Insights" && <InsightsTab navigation={navigation} currency={currency} />}
-      {tab === "Overall" && <OverallTab navigation={navigation} currency={currency} />}
+      {tab === "Month" && <InsightsTab navigation={navigation} currency={currency} />}
+      {tab === "All time" && <OverallTab navigation={navigation} currency={currency} />}
     </Screen>
   );
 }

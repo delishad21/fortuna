@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 import Svg, {
   Circle,
@@ -18,6 +18,9 @@ export type Datum = {
   value: number;
   color?: string;
   secondary?: number;
+  /** Small line under the label in legends, e.g. a change vs last month. */
+  note?: string;
+  noteTone?: "red" | "green";
 };
 const useWidth = () => {
   const [width, setWidth] = useState(0);
@@ -36,6 +39,8 @@ export function ColumnChart({
   secondaryLabel,
   primaryLabel,
   onSelect,
+  selectedKey,
+  showLatest = true,
 }: {
   data: Datum[];
   height?: number;
@@ -45,10 +50,16 @@ export function ColumnChart({
   primaryLabel?: string;
   secondaryLabel?: string;
   onSelect?: (d: Datum) => void;
+  /** Column highlighted until one is tapped (defaults to the last). */
+  selectedKey?: string;
+  /** false: no column is highlighted (or dimmed) until one is tapped. */
+  showLatest?: boolean;
 }) {
   const { colors } = useTheme();
   const { width, onLayout } = useWidth();
   const [active, setActive] = useState<number | null>(null);
+  const dataKey = data.map((d) => d.key ?? d.label).join("|");
+  useEffect(() => setActive(null), [selectedKey, dataKey]);
   const paired = data.some((d) => d.secondary != null);
   const max = Math.max(
     1,
@@ -56,8 +67,11 @@ export function ColumnChart({
   );
   const n = Math.max(1, data.length);
   const slot = width / n;
-  const barW = Math.max(3, Math.min(paired ? 12 : 26, slot * (paired ? 0.3 : 0.6)));
-  const shown = active ?? (data.length ? data.length - 1 : null);
+  // Few columns get wide bars; many get thin ones.
+  const barW = Math.max(3, Math.min(paired ? 20 : 36, slot * (paired ? 0.32 : 0.6)));
+  const selectedIndex = selectedKey ? data.findIndex((d) => d.key === selectedKey) : -1;
+  const shown =
+    active ?? (selectedIndex >= 0 ? selectedIndex : showLatest && data.length ? data.length - 1 : null);
   const current = shown != null ? data[shown] : null;
   const labelEvery = Math.ceil(n / 6);
   const main = color || colors.purple;
@@ -143,18 +157,26 @@ export function ColumnChart({
           ))}
         </View>
       </View>
-      <View style={{ flexDirection: "row" }}>
-        {data.map((d, i) => (
-          <Txt
-            key={d.key || i}
-            muted
-            size={10}
-            numberOfLines={1}
-            style={{ flex: 1, textAlign: "center" }}
-          >
-            {i % labelEvery === 0 ? (d.label.length <= 6 ? d.label : d.label.split(" ")[0]) : ""}
-          </Txt>
-        ))}
+      <View style={{ height: 14 }}>
+        {width > 0 &&
+          data.map((d, i) =>
+            i % labelEvery === 0 ? (
+              <Txt
+                key={d.key || i}
+                muted
+                size={10}
+                numberOfLines={1}
+                style={{
+                  position: "absolute",
+                  left: Math.min(Math.max(slot * i + slot / 2 - 24, 0), width - 48),
+                  width: 48,
+                  textAlign: "center",
+                }}
+              >
+                {slot * labelEvery < 48 || d.label.length > 6 ? d.label.split(" ")[0] : d.label}
+              </Txt>
+            ) : null,
+          )}
       </View>
     </View>
   );
@@ -384,7 +406,7 @@ export function Donut({
               {
                 paddingVertical: 8,
                 paddingHorizontal: 8,
-                borderRadius: 12,
+                borderRadius: 8,
                 backgroundColor:
                   active === i ? colors.sunken : pressed ? colors.sunken : "transparent",
               },
@@ -392,9 +414,14 @@ export function Donut({
           >
             <View style={[styles.row, { flex: 1, gap: 10 }]}>
               <Dot color={d.color!} size={10} />
-              <Txt numberOfLines={1} style={{ flex: 1 }}>
-                {d.label}
-              </Txt>
+              <View style={{ flex: 1 }}>
+                <Txt numberOfLines={1}>{d.label}</Txt>
+                {!!d.note && (
+                  <Txt size={11} tone={d.noteTone} muted={!d.noteTone} numberOfLines={1}>
+                    {d.note}
+                  </Txt>
+                )}
+              </View>
             </View>
             <Txt muted size={12} style={{ width: 40, textAlign: "right" }}>
               {Math.round((Math.abs(d.value) / total) * 100)}%

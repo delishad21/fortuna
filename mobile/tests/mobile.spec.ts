@@ -242,10 +242,8 @@ test("mobile authentication, financial workflows and phone navigation", async ({
     await page.getByLabel("Username", { exact: true }).fill(username);
     await page.getByLabel("Password", { exact: true }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
-    await expect(page.getByText("Spending and Income Trend", { exact: true })).toBeVisible(
-      { timeout: 30000 },
-    );
-    await expect(page.getByText("Net flow", { exact: true })).toBeVisible();
+    await expect(page.getByText(/^Spent in /).first()).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText("Income", { exact: true }).first()).toBeVisible();
     await page.screenshot({
       path: "test-results/home-phone.png",
       fullPage: true,
@@ -495,9 +493,7 @@ test("opens a committed statement from import history", async ({ page, request }
     await page.getByLabel("Username", { exact: true }).fill(username);
     await page.getByLabel("Password", { exact: true }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
-    await expect(page.getByText("Spending and Income Trend", { exact: true })).toBeVisible({
-      timeout: 30000,
-    });
+    await expect(page.getByText(/^Spent in /).first()).toBeVisible({ timeout: 30000 });
     await page.getByRole("tab", { name: /Import/ }).click();
     await page.getByRole("button", { name: "Imported history", exact: true }).click();
     await expect(page.getByText("detail-qa.csv", { exact: true })).toBeVisible();
