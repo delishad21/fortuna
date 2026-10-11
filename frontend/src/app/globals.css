@@ -264,3 +264,49 @@ select option {
   font-family: inherit;
   padding: 8px;
 }
+
+/* Landing page sky: faint stars, a slowly drifting orbit and a twinkling sparkle. */
+.landing-sky::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -10;
+  pointer-events: none;
+  background-image:
+    radial-gradient(1px 1px at 12% 18%, rgba(255, 255, 255, 0.7), transparent 60%),
+    radial-gradient(1px 1px at 28% 62%, rgba(255, 255, 255, 0.5), transparent 60%),
+    radial-gradient(1.5px 1.5px at 44% 12%, rgba(255, 255, 255, 0.8), transparent 60%),
+    radial-gradient(1px 1px at 63% 38%, rgba(255, 255, 255, 0.5), transparent 60%),
+    radial-gradient(1.5px 1.5px at 78% 22%, rgba(245, 208, 254, 0.9), transparent 60%),
+    radial-gradient(1px 1px at 88% 58%, rgba(255, 255, 255, 0.6), transparent 60%),
+    radial-gradient(1px 1px at 6% 78%, rgba(255, 255, 255, 0.4), transparent 60%),
+    radial-gradient(1px 1px at 52% 84%, rgba(255, 255, 255, 0.35), transparent 60%),
+    radial-gradient(1.5px 1.5px at 94% 8%, rgba(255, 255, 255, 0.7), transparent 60%),
+    radial-gradient(1px 1px at 36% 32%, rgba(196, 181, 253, 0.7), transparent 60%);
+}
+
+@keyframes landing-drift {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(4deg); }
+}
+
+@keyframes landing-twinkle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.8); }
+}
+
+.landing-orbit {
+  animation: landing-drift 14s ease-in-out infinite alternate;
+}
+
+.landing-twinkle {
+  display: inline-block;
+  animation: landing-twinkle 2.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-orbit,
+  .landing-twinkle {
+    animation: none;
+  }
+}
