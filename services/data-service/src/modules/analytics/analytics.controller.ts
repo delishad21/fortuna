@@ -344,6 +344,15 @@ const buildRecurringMerchantInsights = (
     .slice(0, limit);
 };
 
+/** A serialized transaction plus what the web's transaction cards need. */
+const serializeForCard = (tx: AnalyticsTransaction & { accountIdentifier?: string | null; linkage?: unknown }) => ({
+  ...serializeTransaction(tx),
+  accountIdentifier: tx.accountIdentifier ?? null,
+  linkage: tx.linkage ?? null,
+  originalAmountIn: tx.amountIn === null || tx.amountIn === undefined ? null : Number(tx.amountIn),
+  originalAmountOut: tx.amountOut === null || tx.amountOut === undefined ? null : Number(tx.amountOut),
+});
+
 /** No category, or the placeholder category literally named "Uncategorized". */
 const isUncategorized = (tx: { categoryId?: string | null; category?: { name: string } | null }) =>
   !tx.categoryId || tx.category?.name.trim().toLowerCase() === "uncategorized";
@@ -591,7 +600,7 @@ analyticsRouter.get("/dashboard-overview", async (req: Request, res: Response) =
       .filter((tx) => getAnalyticsEffectiveOut(tx) > 0)
       .sort((a, b) => getAnalyticsEffectiveOut(b) - getAnalyticsEffectiveOut(a))
       .slice(0, 5)
-      .map(serializeTransaction);
+      .map(serializeForCard);
 
     const [recentTransactions, openDrafts] = await Promise.all([
       prisma.transaction.findMany({
@@ -624,7 +633,6 @@ analyticsRouter.get("/dashboard-overview", async (req: Request, res: Response) =
       trend,
       spendingByCategory,
       largestExpenses,
-      recurringPayments: buildRecurringMerchantInsights(importedMonthGroups, 6),
       attention: {
         stagedImports: openDrafts.length,
         stagedRows: openDrafts.reduce((sum, draft) => sum + draft._count.rows, 0),
@@ -979,14 +987,7 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
       breakdown: withMetricPercent(breakdown),
       categoryBreakdown: withMetricPercent(categoryBreakdown),
       merchantBreakdown: withMetricPercent(merchantBreakdown),
-      // Extra fields so the web can render the usual transaction cards.
-      transactions: [...transactions].reverse().map((tx) => ({
-        ...serializeTransaction(tx),
-        accountIdentifier: tx.accountIdentifier ?? null,
-        linkage: tx.linkage ?? null,
-        originalAmountIn: tx.amountIn === null ? null : Number(tx.amountIn),
-        originalAmountOut: tx.amountOut === null ? null : Number(tx.amountOut),
-      })),
+      transactions: [...transactions].reverse().map(serializeForCard),
       categories: availableCategories.map((item) => ({ id: item.key, name: item.name, color: item.color })),
       merchants: availableMerchants.map((item) => ({ key: item.key, name: item.name })),
     });
