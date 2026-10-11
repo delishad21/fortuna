@@ -105,10 +105,14 @@ export function CategorySelect({
     a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
   );
 
+  const isReserved = (id: string) =>
+    reservedNames.includes(
+      categories.find((c) => c.id === id)?.name.toLowerCase() ?? "",
+    );
+
   // Reserved picks open their own dialogs instead of changing the value.
   const holdChoice = (id: string) => {
-    const name = categories.find((c) => c.id === id)?.name.toLowerCase();
-    if (!name || !reservedNames.includes(name)) setCommittedId(id);
+    if (!isReserved(id)) setCommittedId(id);
   };
 
   const clearTypeahead = () => {
@@ -130,6 +134,9 @@ export function CategorySelect({
     setIsOpen(false);
     if (next !== (valueRef.current ?? "")) {
       holdChoice(next);
+      onChangeRef.current(next);
+    } else if (isReserved(next)) {
+      // Picking Reimbursement again reopens its picker, as a click does.
       onChangeRef.current(next);
     }
     return true;
