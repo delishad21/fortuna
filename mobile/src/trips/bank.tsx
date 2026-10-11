@@ -32,10 +32,10 @@ import {
 } from "./common";
 
 type Mode = "entries" | "funding" | "outgoing";
-const TITLES: Record<Mode, [string, string]> = {
-  entries: ["Add from bank", "Bring bank transactions into this trip."],
-  funding: ["Choose bank transaction", "Link the bank transaction that paid for this funding."],
-  outgoing: ["From another trip", "Turn money sent out of another trip into funding here."],
+const TITLES: Record<Mode, string> = {
+  entries: "Add from bank",
+  funding: "Choose bank transaction",
+  outgoing: "Funding from another trip",
 };
 export function BankPickerScreen({ route, navigation }: any) {
   const { tripId, fundingId } = route.params;
@@ -110,7 +110,7 @@ export function BankPickerScreen({ route, navigation }: any) {
       setBusy(false);
     }
   };
-  const [title, subtitle] = TITLES[mode];
+  const title = TITLES[mode];
   return (
     <Screen
       footer={
@@ -126,7 +126,7 @@ export function BankPickerScreen({ route, navigation }: any) {
         </>
       }
     >
-      <Heading title={title} subtitle={subtitle} />
+      <Heading title={title} />
       {mode === "entries" && (
         <Card>
           <Segmented

@@ -13,7 +13,6 @@ import {
   fmtDate,
   Group,
   Heading,
-  IconBubble,
   Input,
   KeyValue,
   money,
@@ -33,7 +32,6 @@ function PersonCard({ person, base, viewer, onSettle, onRename, onRemove }: any)
   return (
     <Card style={{ gap: 10 }}>
       <View style={styles.row}>
-        <IconBubble text={person.name.slice(0, 1).toUpperCase()} size={42} tone={person.openBase > 0 ? "amber" : "green"} />
         <View style={{ flex: 1 }}>
           <Txt bold size={16}>
             {person.name}
@@ -95,7 +93,6 @@ export function PeopleScreen({ route, navigation }: any) {
     <Screen refreshControl={<RefreshControl refreshing={balances.loading && !!balances.data} onRefresh={balances.reload} />}>
       <Heading
         title="People"
-        subtitle="Who paid for what, and what you still owe."
         right={!viewer ? <Button title="Add" compact icon="person-add-outline" onPress={() => { setName(""); setEditing({}); }} /> : undefined}
       />
       <ViewerBanner trip={t} />
@@ -198,7 +195,7 @@ export function SettleScreen({ route, navigation }: any) {
         </>
       }
     >
-      <Heading title="Settle up" subtitle={person ? `With ${person.name}` : "Choose who you paid back."} />
+      <Heading title="Settle up" subtitle={person ? `With ${person.name}` : undefined} />
       <State {...entries} />
       <Card>
         <Choice

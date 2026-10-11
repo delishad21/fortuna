@@ -54,7 +54,7 @@ export function TripCover({
 }) {
   const [failed, setFailed] = useState(false);
   return (
-    <View style={{ height, borderRadius: 24, overflow: "hidden" }}>
+    <View style={{ height, borderRadius: 8, overflow: "hidden" }}>
       <Image
         source={trip.coverImageUrl && !failed ? { uri: trip.coverImageUrl } : DEFAULT_COVER}
         onError={() => setFailed(true)}

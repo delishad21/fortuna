@@ -11,7 +11,7 @@ import {
   Choice,
   confirm,
   DateField,
-  dayLabel,
+  DateHeader,
   Empty,
   Footer,
   Group,
@@ -208,15 +208,20 @@ export function TripEntriesScreen({ route, navigation }: any) {
             <State {...list} data={list.loaded ? true : null} />
           </View>
         }
-        renderSectionHeader={({ section }) => (
-          <Txt bold size={13} muted style={{ paddingTop: 14, paddingBottom: 4, paddingHorizontal: 4 }}>
-            {dayLabel(section.key)}
-          </Txt>
-        )}
+        renderSectionHeader={({ section }) => <DateHeader date={section.key} />}
         renderItem={({ item }) => {
           const n = note(item);
           return (
-            <View>
+            <View
+              style={{
+                backgroundColor: colors.card,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: colors.line,
+                marginBottom: 8,
+                overflow: "hidden",
+              }}
+            >
               <TransactionRow
                 item={item}
                 baseCurrency={base}
@@ -229,7 +234,7 @@ export function TripEntriesScreen({ route, navigation }: any) {
                 onPress={() => (selecting ? toggle(item.id) : navigation.navigate("TripEntry", { tripId, trip: t, item }))}
               />
               {!!n && (
-                <Txt size={12} style={{ color: "#8b5cf6", marginLeft: 56, marginTop: -8, marginBottom: 6 }}>
+                <Txt size={12} style={{ color: "#8b5cf6", marginLeft: 15, marginTop: -8, marginBottom: 8 }}>
                   {n}
                 </Txt>
               )}

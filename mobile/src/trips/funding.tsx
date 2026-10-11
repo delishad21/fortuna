@@ -14,7 +14,6 @@ import {
   Group,
   Heading,
   humanize,
-  IconBubble,
   Input,
   KeyValue,
   ListItem,
@@ -94,7 +93,6 @@ export function FundingListScreen({ route, navigation }: any) {
     <Screen refreshControl={<RefreshControl refreshing={fundings.loading && !!fundings.data} onRefresh={() => { void fundings.reload(); void outs.reload(); }} />}>
       <Heading
         title="Funding"
-        subtitle="Money moving into and out of your trip wallets."
         right={
           !viewer ? (
             <ActionMenu
@@ -270,7 +268,7 @@ function FundingCreate({ trip, tripId, initialMode, navigation }: any) {
         </>
       }
     >
-      <Heading title="Fund your journey" subtitle="Record money moved into a trip wallet." />
+      <Heading title="Add funding" />
       <Segmented values={["manual", "bank"]} labels={{ manual: "Manual", bank: "From bank" }} value={mode} onChange={setMode} />
       <Card>
         <Choice
@@ -679,7 +677,6 @@ export function FundingReviewScreen({ route, navigation }: any) {
         <>
           <Card style={{ gap: 8 }}>
             <View style={styles.row}>
-              <IconBubble icon={opening ? "flag-outline" : "wallet-outline"} tone="amber" />
               <View style={{ flex: 1 }}>
                 <Txt bold>{fundingTitle(current)}</Txt>
                 <Txt muted size={13}>

@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
-import { FlatList, Pressable, View } from "react-native";
+import { FlatList, Pressable, TextInput, View } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useApi, useResource } from "../api";
 import {
   Banner,
@@ -15,12 +16,12 @@ import {
   Group,
   Heading,
   humanize,
-  IconBubble,
   IconButton,
   Input,
   KeyValue,
   ListItem,
   money,
+  moneyCode,
   notice,
   Pill,
   Screen,
@@ -34,7 +35,8 @@ import {
   Txt,
   useTheme,
 } from "../ui";
-import { appendFile, FILE_TYPES } from "../imports";
+import { FILE_TYPES } from "../imports";
+import { appendFile } from "../upload";
 import { FundingOutFields, fundingOutFromMetadata, emptyFundingOut } from "./common";
 
 const ROUTED = ["revolut_statement", "youtrip_statement"];
@@ -122,9 +124,9 @@ export function TripImportScreen({ route, navigation }: any) {
     for (const file of files) {
       try {
         const form = new FormData();
-        appendFile(form, "file", file);
+        await appendFile(form, "file", file);
         form.append("parserId", parserId);
-        if (supplement && parserId === "revolut_statement" && files.length === 1) appendFile(form, "supplementalFile", supplement);
+        if (supplement && parserId === "revolut_statement" && files.length === 1) await appendFile(form, "supplementalFile", supplement);
         const result = await parse(form);
         if (!result?.success) throw new Error(result?.error || "Could not read this file");
         all.push(...normalize(result.transactions || [], base, file.name, parserId));
@@ -273,7 +275,7 @@ export function TripImportScreen({ route, navigation }: any) {
           {files.length === 0 && <Txt muted size={13}>PDF or CSV statements.</Txt>}
           {files.map((f, i) => (
             <View key={f.uri + i} style={styles.row}>
-              <IconBubble icon="document-outline" size={36} />
+              <Ionicons name="document-outline" size={20} color={colors.muted} />
               <Txt style={{ flex: 1 }} numberOfLines={1}>
                 {f.name}
               </Txt>
@@ -339,51 +341,24 @@ export function TripImportScreen({ route, navigation }: any) {
             <Empty icon="filter-outline" title="No rows in this view" />
           </Card>
         }
-        renderItem={({ item: { r, i } }) => {
-          const income = Number(r.amountIn || 0) > 0;
-          const checks = checksOf(r);
-          return (
-            <Card style={{ padding: 12, gap: 6, opacity: selected.has(i) ? 1 : 0.55 }}>
-              <View style={[styles.row, { alignItems: "flex-start" }]}>
-                <Checkbox
-                  checked={selected.has(i)}
-                  label={`Include ${r.label || r.description}`}
-                  onChange={(c) =>
-                    setSelected((o) => {
-                      const n = new Set(o);
-                      if (c) n.add(i);
-                      else n.delete(i);
-                      return n;
-                    })
-                  }
-                />
-                <Pressable accessibilityRole="button" accessibilityLabel={`Edit ${r.label || r.description}`} onPress={() => setEditing(i)} style={{ flex: 1, gap: 2 }}>
-                  <View style={[styles.between, { alignItems: "flex-start" }]}>
-                    <Txt bold numberOfLines={2} style={{ flex: 1 }}>
-                      {r.label || r.description}
-                    </Txt>
-                    <Txt mono size={14} tone={income ? "green" : undefined}>
-                      {income ? "+" : "−"}
-                      {money(amountOf(r), currencyOf(r, base))}
-                    </Txt>
-                  </View>
-                  <Txt muted size={12} numberOfLines={1}>
-                    {fmtDate(r.date)}
-                    {r.categoryId ? ` · ${(categories.data || []).find((c: any) => c.id === r.categoryId)?.name || ""}` : ""}
-                  </Txt>
-                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 2 }}>
-                    {isFundingIn(r) && <Pill tone="purple" label="Funding in" />}
-                    {r.entryTypeOverride === "funding_out" && <Pill tone="amber" label="Funding out" />}
-                    {r.entryTypeOverride === "reimbursement" && <Pill tone="green" label="Reimbursement" />}
-                    {isConversion(r) && <Pill tone={conversionResolved(r) ? "blue" : "red"} label={conversionResolved(r) ? `Conversion · ${humanize(meta(r).conversionReview?.mode || "funding out")}` : "Conversion: decide"} />}
-                    {checks.length > 0 && <Pill tone="amber" icon="alert-circle-outline" label={checks[0]} />}
-                    {meta(r).baseValuationMode && meta(r).baseValuationMode !== "auto" && <Pill label="Manual value" />}
-                  </View>
-                </Pressable>
-              </View>
-            </Card>
-          );
-        }}
+        renderItem={({ item: { r, i } }) => (
+          <ImportRow
+            row={r}
+            base={base}
+            included={selected.has(i)}
+            categories={categories.data || []}
+            onInclude={(c: boolean) =>
+              setSelected((o) => {
+                const n = new Set(o);
+                if (c) n.add(i);
+                else n.delete(i);
+                return n;
+              })
+            }
+            onEdit={(patch: Row) => update(i, (x) => ({ ...x, ...patch }))}
+            onOpen={() => setEditing(i)}
+          />
+        )}
       />
       <Footer>
         <Button title={busy ? "Importing…" : `Import ${selected.size} rows`} icon="cloud-done-outline" loading={busy} disabled={busy || !selected.size} onPress={() => void commit()} />
@@ -405,6 +380,108 @@ export function TripImportScreen({ route, navigation }: any) {
           />
         )}
       </Sheet>
+    </View>
+  );
+}
+/** A statement row with the label and category edited in place, like the web review table. */
+function ImportRow({ row: r, base, included, categories, onInclude, onEdit, onOpen }: any) {
+  const { colors } = useTheme();
+  const income = Number(r.amountIn || 0) > 0;
+  const checks = checksOf(r);
+  const [label, setLabel] = useState(r.label || "");
+  React.useEffect(() => setLabel(r.label || ""), [r.label]);
+  const saveLabel = () => {
+    if (label !== (r.label || "")) onEdit({ label: label.trim() || undefined });
+  };
+  const spending = !income && !r.entryTypeOverride;
+  return (
+    <View
+      style={{
+        backgroundColor: colors.card,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: colors.line,
+        borderLeftWidth: 3,
+        borderLeftColor: checks.length ? "#F59E0B" : isConversion(r) && !conversionResolved(r) ? colors.red : "transparent",
+        padding: 12,
+        gap: 8,
+        opacity: included ? 1 : 0.55,
+      }}
+    >
+      <View style={[styles.row, { alignItems: "flex-start", gap: 10 }]}>
+        <Checkbox checked={included} label={`Include ${r.label || r.description}`} onChange={onInclude} />
+        <View style={{ flex: 1, gap: 2 }}>
+          <View style={[styles.between, { alignItems: "flex-start" }]}>
+            <Txt bold numberOfLines={2} style={{ flex: 1 }}>
+              {r.description}
+            </Txt>
+            <Txt mono size={14} style={{ color: income ? colors.green : colors.red }}>
+              {income ? "+" : "-"}
+              {moneyCode(amountOf(r), currencyOf(r, base))}
+            </Txt>
+          </View>
+          <Txt muted size={12}>
+            {fmtDate(r.date)}
+          </Txt>
+        </View>
+      </View>
+      <TextInput
+        accessibilityLabel={`Label for ${r.description}`}
+        value={label}
+        placeholder="Label"
+        placeholderTextColor={colors.faint}
+        onChangeText={setLabel}
+        onBlur={saveLabel}
+        onSubmitEditing={saveLabel}
+        returnKeyType="done"
+        style={{
+          borderWidth: 1,
+          borderColor: colors.line,
+          borderRadius: 8,
+          paddingHorizontal: 10,
+          paddingVertical: 8,
+          fontSize: 14,
+          fontFamily: "DMSans_400Regular",
+          color: colors.text,
+        }}
+      />
+      <View style={[styles.row, { gap: 8 }]}>
+        <View style={{ flex: 1 }}>
+          {spending ? (
+            <Choice
+              compact
+              label="Category"
+              placeholder="Uncategorized"
+              value={r.categoryId || ""}
+              options={[
+                { label: "Uncategorized", value: "" },
+                ...categories.map((c: any) => ({ label: c.name, value: c.id, color: c.color })),
+              ]}
+              onChange={(categoryId) => onEdit({ categoryId: categoryId || undefined })}
+            />
+          ) : (
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4 }}>
+              {isFundingIn(r) && <Pill tone="purple" label="Funding in" />}
+              {r.entryTypeOverride === "funding_out" && <Pill tone="amber" label="Funding out" />}
+              {r.entryTypeOverride === "reimbursement" && <Pill tone="green" label="Reimbursement" />}
+              {income && !r.entryTypeOverride && <Pill label="Money in" />}
+            </View>
+          )}
+        </View>
+        <Button title="Details" label={`Edit ${r.label || r.description}`} compact secondary onPress={onOpen} />
+      </View>
+      {(checks.length > 0 || isConversion(r) || (meta(r).baseValuationMode && meta(r).baseValuationMode !== "auto")) && (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4 }}>
+          {isConversion(r) && (
+            <Pill
+              tone={conversionResolved(r) ? "blue" : "red"}
+              label={conversionResolved(r) ? `Conversion · ${humanize(meta(r).conversionReview?.mode || "funding out")}` : "Conversion: decide"}
+            />
+          )}
+          {checks.length > 0 && <Pill tone="amber" icon="alert-circle-outline" label={checks[0]} />}
+          {meta(r).baseValuationMode && meta(r).baseValuationMode !== "auto" && <Pill label="Manual value" />}
+        </View>
+      )}
     </View>
   );
 }

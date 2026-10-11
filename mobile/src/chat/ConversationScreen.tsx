@@ -26,6 +26,7 @@ import {
   IMAGE_UPLOAD_BYTES,
   stepLabel,
 } from "./api";
+import { appendFile } from "../upload";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { ChatReviewCards } from "./ReviewCards";
 import { ChatHistory } from "./History";
@@ -194,15 +195,11 @@ export function ChatConversationScreen({ route, navigation }: any) {
       for (const asset of assets) {
         const form = new FormData();
         form.append("conversationId", target);
-        if (Platform.OS === "web") {
-          const blob = await fetch(asset.uri).then((r) => r.blob());
-          form.append("file", blob, asset.name);
-        } else
-          form.append("file", {
-            uri: asset.uri,
-            name: asset.name,
-            type: asset.mimeType || "application/octet-stream",
-          } as any);
+        await appendFile(form, "file", {
+          uri: asset.uri,
+          name: asset.name,
+          mimeType: asset.mimeType,
+        });
         const result = await api("/files", { method: "POST", body: form });
         setFiles((prev) => [
           ...prev.filter((f) => f.attachmentId !== result.attachmentId),
@@ -416,7 +413,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
               gap: 12,
               padding: item.role === "user" ? 14 : 0,
               backgroundColor: item.role === "user" ? colors.tint : undefined,
-              borderRadius: 16,
+              borderRadius: 8,
             }}
           >
             <View
@@ -427,7 +424,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
                   style={{
                     width: 32,
                     height: 32,
-                    borderRadius: 16,
+                    borderRadius: 8,
                     backgroundColor: colors.bg,
                     alignItems: "center",
                     justifyContent: "center",
@@ -444,7 +441,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
                   style={{
                     width: 32,
                     height: 32,
-                    borderRadius: 16,
+                    borderRadius: 8,
                     overflow: "hidden",
                     backgroundColor: "#080808",
                   }}

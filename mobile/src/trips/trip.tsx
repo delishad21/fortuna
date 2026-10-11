@@ -8,7 +8,9 @@ import {
   Empty,
   fmtDate,
   Group,
-  IconBubble,
+  Banner,
+  Button,
+  Tabs,
   ListItem,
   money,
   Screen,
@@ -27,23 +29,8 @@ import {
 import { AreaChart, Donut } from "../charts";
 import { isViewer, RolePill, roleOf, TripCover, tripDates, ViewerBanner } from "./common";
 
-function Action({ icon, label, onPress }: any) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      onPress={() => {
-        tap();
-        onPress();
-      }}
-      style={({ pressed }) => ({ alignItems: "center", gap: 6, width: 76, opacity: pressed ? 0.6 : 1 })}
-    >
-      <IconBubble icon={icon} size={48} />
-      <Txt size={12} bold numberOfLines={1}>
-        {label}
-      </Txt>
-    </Pressable>
-  );
+function Action({ icon, label, onPress, primary }: any) {
+  return <Button title={label} icon={icon} compact secondary={!primary} onPress={onPress} />;
 }
 export function WalletCard({ wallet, base, onPress }: any) {
   const { colors } = useTheme();
@@ -51,7 +38,7 @@ export function WalletCard({ wallet, base, onPress }: any) {
     <Card
       onPress={onPress}
       accessibilityLabel={wallet.name}
-      style={{ width: 220, padding: 16, gap: 8, borderLeftWidth: 5, borderLeftColor: wallet.color || colors.purple }}
+      style={{ width: 220, gap: 6, borderLeftWidth: 3, borderLeftColor: wallet.color || colors.purple }}
     >
       <View style={styles.between}>
         <Txt bold numberOfLines={1} style={{ flex: 1 }}>
@@ -151,8 +138,8 @@ export function TripScreen({ route, navigation }: any) {
           </TripCover>
           <ViewerBanner trip={t} />
           {!viewer && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 4 }}>
-              <Action icon="add" label="Add entry" onPress={() => navigation.navigate("TripEntry", params)} />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              <Action primary icon="add" label="Add entry" onPress={() => navigation.navigate("TripEntry", params)} />
               <Action icon="business-outline" label="From bank" onPress={() => navigation.navigate("BankPicker", { tripId, mode: "entries" })} />
               <Action icon="cloud-upload-outline" label="Import" onPress={() => navigation.navigate("TripImport", params)} />
               <Action icon="wallet-outline" label="Funding" onPress={() => navigation.navigate("TripFundings", params)} />
@@ -160,31 +147,30 @@ export function TripScreen({ route, navigation }: any) {
             </ScrollView>
           )}
           {pendingReviews > 0 && !viewer && (
-            <Card onPress={() => navigation.navigate("FundingReview", params)} style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-              <IconBubble icon="git-compare-outline" tone="amber" />
-              <View style={{ flex: 1 }}>
-                <Txt bold>{pendingReviews} funding {pendingReviews === 1 ? "row needs" : "rows need"} a bank match</Txt>
-                <Txt muted size={13}>Link top-ups to the bank transactions that paid for them.</Txt>
-              </View>
-            </Card>
+            <Banner
+              tone="amber"
+              icon="git-compare-outline"
+              title={`${pendingReviews} funding ${pendingReviews === 1 ? "row needs" : "rows need"} a bank match`}
+              action="Review funding"
+              onAction={() => navigation.navigate("FundingReview", params)}
+            />
           )}
-          <Segmented values={["Overview", "Wallets", "People"]} value={tab} onChange={setTab} />
+          <Tabs values={["Overview", "Wallets", "People"]} value={tab} onChange={setTab} />
           {tab === "Overview" && (
             <>
               <State {...analytics} />
               {a && (
                 <>
                   <StatGrid>
-                    <Stat icon="airplane-outline" label="Net trip cost" value={money(a.totals.netTripCost, base)} />
-                    <Stat icon="cart-outline" tone="red" label="Total spent" value={money(a.totals.totalSpent, base)} />
+                    <Stat label="Net trip cost" value={money(a.totals.netTripCost, base)} />
+                    <Stat tone="red" label="Total spent" value={money(a.totals.totalSpent, base)} />
                     <Stat
-                      icon="arrow-down"
                       tone="green"
                       label="Funding in"
                       value={money(a.totals.totalFundingIn ?? a.totals.totalFunding, base)}
                       onPress={() => navigation.navigate("TripFundings", params)}
                     />
-                    <Stat icon="arrow-up" tone="amber" label="Funding out" value={money(a.totals.totalFundingOut || 0, base)} />
+                    <Stat tone="amber" label="Funding out" value={money(a.totals.totalFundingOut || 0, base)} />
                   </StatGrid>
                   {a.totals.totalReimbursed > 0 && (
                     <Txt muted size={13} style={{ paddingHorizontal: 4 }}>

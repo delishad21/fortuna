@@ -3,14 +3,17 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  TextInput,
   Platform,
   Pressable,
   RefreshControl,
   View,
 } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useApi, useResource } from "./api";
+import { appendFile } from "./upload";
 import {
   ActionMenu,
   Banner,
@@ -30,12 +33,13 @@ import {
   Group,
   Heading,
   humanize,
-  IconBubble,
+  Tabs,
   IconButton,
   Input,
   KeyValue,
   ListItem,
   money,
+  moneyCode,
   MultiSelect,
   notice,
   PALETTE,
@@ -66,19 +70,6 @@ export const FILE_TYPES = [
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "text/plain",
 ];
-export function appendFile(
-  form: FormData,
-  key: string,
-  file: DocumentPicker.DocumentPickerAsset,
-) {
-  if (Platform.OS === "web" && file.file) form.append(key, file.file);
-  else
-    form.append(key, {
-      uri: file.uri,
-      name: file.name,
-      type: file.mimeType || "application/octet-stream",
-    } as any);
-}
 const CLOSED = ["committed", "discarded", "expired"];
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 type PendingFile = {
@@ -134,7 +125,7 @@ function UploadTab({ navigation, onStaged }: any) {
       try {
         if ((file.asset.size || 0) > 25 * 1024 * 1024) throw new Error("Statements must be under 25 MB");
         const form = new FormData();
-        appendFile(form, "file", file.asset);
+        await appendFile(form, "file", file.asset);
         form.append("parserId", file.parserId || parser);
         const { draft } = await stage(form);
         drafts.push(draft);
@@ -211,67 +202,44 @@ function UploadTab({ navigation, onStaged }: any) {
   const ready = files.filter((f) => f.status === "pending" || f.status === "error").length;
   return (
     <>
+      <Txt bold size={13} style={{ letterSpacing: 0.4 }}>
+        UPLOAD STATEMENT
+      </Txt>
       <Card>
-        <View style={styles.row}>
-          <IconBubble icon="document-text-outline" />
-          <View style={{ flex: 1 }}>
-            <Txt bold size={16}>
-              Statement type
-            </Txt>
-            <Txt muted size={13}>
-              Each file can use its own parser.
-            </Txt>
-          </View>
-        </View>
         <State {...parsers} />
-        <Choice label="Statement parser" value={parser} options={options} onChange={setParser} />
-      </Card>
-      <Card>
-        <View style={styles.between}>
-          <View style={{ flex: 1 }}>
-            <Txt bold size={16}>
-              Files
-            </Txt>
-            <Txt muted size={13}>
-              PDF, CSV or spreadsheet · up to 25 MB each
-            </Txt>
-          </View>
-          <Button title="Choose statements" compact icon="add" onPress={() => void pick().catch(notice)} />
-        </View>
-        {files.length === 0 && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Choose statement files"
-            onPress={() => void pick().catch(notice)}
-            style={{
-              borderWidth: 2,
-              borderStyle: "dashed",
-              borderColor: colors.line,
-              borderRadius: 18,
-              padding: 26,
-              alignItems: "center",
-              gap: 8,
-            }}
-          >
-            <IconBubble icon="cloud-upload-outline" size={48} />
-            <Txt muted>Tap to add one or more statements</Txt>
-          </Pressable>
-        )}
+        <Choice label="Parser for new files" value={parser} options={options} onChange={setParser} />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Choose statements"
+          onPress={() => void pick().catch(notice)}
+          style={{
+            borderWidth: 1.5,
+            borderStyle: "dashed",
+            borderColor: colors.line,
+            borderRadius: 8,
+            padding: 20,
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          <Ionicons name="cloud-upload-outline" size={24} color={colors.purple} />
+          <Txt size={14}>
+            <Txt size={14} style={{ color: colors.purple }}>
+              Choose files
+            </Txt>{" "}
+            to upload
+          </Txt>
+          <Txt muted size={12}>
+            CSV, PDF · up to 25 MB each
+          </Txt>
+        </Pressable>
         {files.map((f, i) => (
-          <View key={f.asset.uri + i} style={{ gap: 8, paddingVertical: 6 }}>
+          <View key={f.asset.uri + i} style={{ gap: 6 }}>
             <View style={styles.row}>
-              <IconBubble
-                icon={
-                  f.status === "staged"
-                    ? "checkmark"
-                    : f.status === "error"
-                      ? "alert"
-                      : f.asset.name.toLowerCase().endsWith(".pdf")
-                        ? "document-outline"
-                        : "grid-outline"
-                }
-                tone={f.status === "staged" ? "green" : f.status === "error" ? "red" : "purple"}
-                size={36}
+              <Ionicons
+                name={f.status === "staged" ? "checkmark-circle" : f.status === "error" ? "alert-circle" : "document-outline"}
+                size={20}
+                color={f.status === "staged" ? colors.green : f.status === "error" ? colors.red : colors.muted}
               />
               <View style={{ flex: 1 }}>
                 <Txt bold numberOfLines={1}>
@@ -302,9 +270,7 @@ function UploadTab({ navigation, onStaged }: any) {
                 label="Parser for this file"
                 value={f.parserId || parser}
                 options={options}
-                onChange={(parserId) =>
-                  setFiles((old) => old.map((x) => (x === f ? { ...x, parserId } : x)))
-                }
+                onChange={(parserId) => setFiles((old) => old.map((x) => (x === f ? { ...x, parserId } : x)))}
               />
             )}
           </View>
@@ -312,8 +278,8 @@ function UploadTab({ navigation, onStaged }: any) {
       </Card>
       {!!message && <Banner tone="amber" icon="alert-circle-outline" message={message} />}
       <Button
-        title={busy ? "Staging statements…" : `Upload & review${ready ? ` (${ready})` : ""}`}
-        icon="sparkles-outline"
+        title={busy ? "Parsing…" : `Parse File${ready > 1 ? `s (${ready})` : ""}`}
+        icon="cloud-upload-outline"
         loading={busy}
         disabled={busy || !parser || !ready}
         onPress={() => void start()}
@@ -321,9 +287,6 @@ function UploadTab({ navigation, onStaged }: any) {
       {staged.length > 0 && newAccounts.length === 0 && (
         <Button title={`Review ${staged.length} staged statement${staged.length === 1 ? "" : "s"}`} secondary onPress={() => finish(staged)} />
       )}
-      <Txt muted size={12} style={{ textAlign: "center" }}>
-        Statements are staged first. Nothing is saved until you review and commit.
-      </Txt>
       <Sheet
         visible={newAccounts.length > 0}
         onClose={() => finish(staged)}
@@ -523,10 +486,9 @@ export function ImportsScreen({ navigation, route }: any) {
         <RefreshControl refreshing={tab !== "Upload" && resource.loading && !!resource.data} onRefresh={resource.reload} />
       }
     >
-      <Heading title="Imports" subtitle="Bring statements in. Review every detail before saving." />
-      <Segmented
+      <Tabs
         values={["Upload", "Staged", "History"]}
-        labels={{ Upload: "Upload", Staged: count ? `Staged · ${count}` : "Staged", History: "History" }}
+        labels={{ Upload: "Import", Staged: `Staged (${count})`, History: "Imported history" }}
         value={tab}
         onChange={setTab}
       />
@@ -871,8 +833,8 @@ export function DraftReviewScreen({ route, navigation }: any) {
       {closed && <Banner tone="green" icon="checkmark-circle-outline" message={`This import is ${drafts[0]?.status}.`} />}
       {drafts.length > 0 && (
         <StatGrid>
-          <Stat icon="alert-circle-outline" tone="amber" label="Needs review" value={String(counts["Needs review"])} />
-          <Stat icon="checkmark-circle-outline" tone="green" label="Ready" value={String(counts.Ready)} />
+          <Stat tone="amber" label="Needs review" value={String(counts["Needs review"])} />
+          <Stat tone="green" label="Ready" value={String(counts.Ready)} />
         </StatGrid>
       )}
       {!!message && (
@@ -954,9 +916,12 @@ export function DraftReviewScreen({ route, navigation }: any) {
             item={item}
             multiple={multiple}
             disabled={closed}
-            categoryName={categoryName}
+            categories={categories.data || []}
             onToggle={() => void updateRow(item.draft.id, item.row.id, (r) => ({ selected: !r.selected }))}
             onOpen={() => setEditing({ draftId: item.draft.id, rowId: item.row.id })}
+            onEdit={(patch: any) =>
+              void updateRow(item.draft.id, item.row.id, (r) => ({ currentPayload: { ...r.currentPayload, ...patch } }))
+            }
           />
         )}
       />
@@ -1099,58 +1064,114 @@ export function DraftReviewScreen({ route, navigation }: any) {
     </View>
   );
 }
-function DraftRowCard({ item, multiple, disabled, categoryName, onToggle, onOpen }: any) {
+/**
+ * One staged row. Like the web review table, the label and category are edited
+ * in place; everything else opens the row sheet.
+ */
+function DraftRowCard({ item, multiple, disabled, categories, onToggle, onOpen, onEdit }: any) {
   const { colors } = useTheme();
   const p = item.row.currentPayload || {};
   const r = item.row.review || {};
   const income = Number(p.amountIn || 0) > 0;
   const proposals = (item.row.proposals || []).filter((x: any) => x.status === "proposed");
   const internal = p.linkage?.type === "internal";
+  const [label, setLabel] = useState(p.label || "");
+  useEffect(() => setLabel(p.label || ""), [p.label]);
+  const saveLabel = () => {
+    if (label.trim() !== (p.label || "")) onEdit({ label: label.trim() || null });
+  };
+  // Same tints the web table uses for rows that need a label or carry suggestions.
+  const edge = r.labelling ? "#F59E0B" : proposals.length ? colors.purple : p.suggestionApplied || p.suggestionSource ? "#3B82F6" : "transparent";
   return (
-    <Card style={{ padding: 12, gap: 8, opacity: item.row.selected ? 1 : 0.6 }}>
-      <View style={[styles.row, { alignItems: "flex-start" }]}>
+    <View
+      style={{
+        backgroundColor: colors.card,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: colors.line,
+        borderLeftWidth: 3,
+        borderLeftColor: edge,
+        padding: 12,
+        gap: 8,
+        opacity: item.row.selected ? 1 : 0.6,
+      }}
+    >
+      <View style={[styles.row, { alignItems: "flex-start", gap: 10 }]}>
         <Checkbox checked={!!item.row.selected} label={`Include ${nameOf(item.row)}`} onChange={disabled ? undefined : onToggle} />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Edit ${nameOf(item.row)}`}
-          onPress={onOpen}
-          style={{ flex: 1, gap: 2 }}
-        >
+        <View style={{ flex: 1, gap: 2 }}>
           <View style={[styles.between, { alignItems: "flex-start" }]}>
             <Txt bold numberOfLines={2} style={{ flex: 1 }}>
-              {p.label || p.description}
-            </Txt>
-            <Txt mono size={14} style={{ color: internal ? colors.muted : income ? colors.green : colors.text }}>
-              {income ? "+" : "−"}
-              {money(p.amountIn || p.amountOut)}
-            </Txt>
-          </View>
-          {!!p.label && (
-            <Txt muted size={12} numberOfLines={1}>
               {p.description}
             </Txt>
-          )}
+            <Txt mono size={14} style={{ color: internal ? colors.muted : income ? colors.green : colors.red }}>
+              {income ? "+" : "-"}
+              {moneyCode(p.amountIn || p.amountOut, p.currency || "SGD")}
+            </Txt>
+          </View>
           <Txt muted size={12} numberOfLines={1}>
-            {fmtDate(p.date)} · {categoryName(p.categoryId) || "Uncategorized"}
+            {fmtDate(p.date)}
             {multiple ? ` · ${item.draft.sourceFilename}` : ""}
           </Txt>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
-            {r.labelling && <Pill tone="amber" label="Needs label" />}
-            {r.reconciliation && <Pill tone="blue" label="Reconcile" />}
-            {!r.needsReview && <Pill tone="green" label="Ready" />}
-            {internal && <Pill tone="blue" label="Internal" />}
-            {p.linkage?.type === "reimbursement" && <Pill tone="green" label="Reimbursement" />}
-            {item.row.links?.linkedAmount > 0 && <Pill icon="link-outline" label={`${money(item.row.links.linkedAmount)} linked`} />}
-            {proposals.length > 0 && <Pill tone="purple" icon="sparkles-outline" label="Suggestion" />}
-            {item.row.reviewStatus === "edited" && <Pill label="Edited" />}
-          </View>
-        </Pressable>
+        </View>
       </View>
-    </Card>
+      {disabled ? (
+        <Txt size={14}>{p.label || "No label"}</Txt>
+      ) : (
+        <TextInput
+          accessibilityLabel={`Label for ${p.description}`}
+          value={label}
+          placeholder="Label"
+          placeholderTextColor={colors.faint}
+          onChangeText={setLabel}
+          onBlur={saveLabel}
+          onSubmitEditing={saveLabel}
+          returnKeyType="done"
+          style={{
+            borderWidth: 1,
+            borderColor: colors.line,
+            borderRadius: 8,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+            fontSize: 14,
+            fontFamily: "DMSans_400Regular",
+            color: colors.text,
+            backgroundColor: colors.card,
+          }}
+        />
+      )}
+      <View style={[styles.row, { gap: 8 }]}>
+        <View style={{ flex: 1 }}>
+          {internal || p.linkage?.type === "reimbursement" ? (
+            <Pill tone={internal ? "blue" : "green"} label={internal ? "Internal" : "Reimbursement"} />
+          ) : (
+            <Choice
+              compact
+              label="Category"
+              placeholder="Uncategorized"
+              value={p.categoryId || ""}
+              options={[
+                { label: "Uncategorized", value: "" },
+                ...categories.map((c: any) => ({ label: c.name, value: c.id, color: c.color })),
+              ]}
+              onChange={(categoryId) => !disabled && onEdit({ categoryId: categoryId || null })}
+            />
+          )}
+        </View>
+        <Button title="Details" label={`Edit ${nameOf(item.row)}`} compact secondary onPress={onOpen} />
+      </View>
+      {(r.reconciliation || proposals.length > 0 || item.row.links?.linkedAmount > 0) && (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4 }}>
+          {r.reconciliation && <Pill tone="blue" label="Reconcile" />}
+          {item.row.links?.linkedAmount > 0 && <Pill icon="link-outline" label={`${money(item.row.links.linkedAmount)} linked`} />}
+          {proposals.length > 0 && <Pill tone="purple" icon="sparkles-outline" label="Suggestion" />}
+        </View>
+      )}
+    </View>
   );
 }
 function RowEditor({ item, busy, closed, categories, accounts, contextDraftIds, navigation, close, update, decide }: any) {
   const { call } = useApi();
+  const { colors } = useTheme();
   const p = item.row.currentPayload || {};
   const main = item.draft.mode !== "trip";
   const income = Number(p.amountIn || 0) > 0;
@@ -1191,7 +1212,7 @@ function RowEditor({ item, busy, closed, categories, accounts, contextDraftIds, 
       {(item.row.proposals || []).map((proposal: any) => (
         <Card key={proposal.id} style={{ gap: 8 }}>
           <View style={styles.row}>
-            <IconBubble icon="sparkles-outline" size={32} />
+            <Ionicons name="sparkles-outline" size={18} color={colors.purple} />
             <View style={{ flex: 1 }}>
               <Txt bold>Agent suggestion</Txt>
               <Txt muted size={12}>
@@ -1331,7 +1352,7 @@ export function ImportDetailScreen({ navigation, route }: any) {
       <State {...result} />
       {d && (
         <>
-          <Heading eyebrow="Statement" title={d.filename} subtitle={`${d.transactionCount} transactions`} />
+          <Heading title={d.filename} subtitle={`${d.transactionCount} transactions`} />
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
             <Pill icon="calendar-outline" label={`${fmtDate(d.startDate, false)} – ${fmtDate(d.endDate)}`} />
             {d.parserId && <Pill icon="document-text-outline" tone="purple" label={d.parserId} />}

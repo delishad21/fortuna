@@ -15,12 +15,13 @@ import {
   BRAND,
   Button,
   Card,
-  categoryIcon,
   Checkbox,
   Choice,
   Chips,
   confirm,
   DateField,
+  DateHeader,
+  Dot,
   Empty,
   fmtDate,
   Footer,
@@ -28,12 +29,12 @@ import {
   Group,
   Heading,
   humanize,
-  IconBubble,
   IconButton,
   Input,
   KeyValue,
   ListItem,
   money,
+  moneyCode,
   MultiSelect,
   notice,
   Pill,
@@ -276,17 +277,20 @@ export function TransactionsScreen({ navigation, route }: any) {
     () => Object.fromEntries((accounts.data || []).map((a: any) => [a.accountIdentifier, a.label || a.accountIdentifier])),
     [accounts.data],
   );
+  const accountColors = useMemo(
+    () => Object.fromEntries((accounts.data || []).map((a: any) => [a.accountIdentifier, a.color])),
+    [accounts.data],
+  );
   const sections = useMemo(() => {
-    const out: { key: string; title: string; data: any[]; net: number }[] = [];
+    const out: { key: string; title: string; data: any[] }[] = [];
     for (const row of list.items) {
       const key = String(row.date || "").slice(0, 10);
       let last = out[out.length - 1];
       if (last?.key !== key) {
-        last = { key, title: "", data: [], net: 0 };
+        last = { key, title: "", data: [] };
         out.push(last);
       }
       last.data.push(row);
-      if (row.linkage?.type !== "internal") last.net += Number(row.amountIn || 0) - Number(row.amountOut || 0);
     }
     return out;
   }, [list.items]);
@@ -337,8 +341,7 @@ export function TransactionsScreen({ navigation, route }: any) {
         ListHeaderComponent={
           <View style={[styles.stack, { marginBottom: 6 }]}>
             <Heading
-              title="Activity"
-              subtitle={`${list.total} transaction${list.total === 1 ? "" : "s"}`}
+              title={plural(list.total, "transaction")}
               right={
                 <View style={[styles.row, { gap: 8 }]}>
                   <IconButton
@@ -373,7 +376,7 @@ export function TransactionsScreen({ navigation, route }: any) {
                   gap: 6,
                   paddingHorizontal: 14,
                   paddingVertical: 9,
-                  borderRadius: 24,
+                  borderRadius: 8,
                   backgroundColor: active ? colors.tint : colors.card,
                   borderWidth: 1,
                   borderColor: active ? colors.purple : colors.line,
@@ -431,20 +434,20 @@ export function TransactionsScreen({ navigation, route }: any) {
             <State {...list} data={list.loaded ? true : null} />
           </View>
         }
-        renderSectionHeader={({ section }) => (
-          <View style={[styles.between, { paddingTop: 14, paddingBottom: 4, paddingHorizontal: 4 }]}>
-            <Txt bold size={13} muted>
-              {dayHeader(section.key)}
-            </Txt>
-            <Txt mono size={12} muted>
-              {section.net > 0 ? "+" : ""}
-              {money(section.net)}
-            </Txt>
-          </View>
-        )}
+        renderSectionHeader={({ section }) => <DateHeader date={section.key} />}
         renderItem={({ item }) => (
+          <View
+            style={{
+              backgroundColor: colors.card,
+              borderRadius: 8,
+              borderWidth: 1,
+              borderColor: colors.line,
+              marginBottom: 8,
+              overflow: "hidden",
+            }}
+          >
           <TransactionRow
-            item={{ ...item, accountLabel: names[item.accountIdentifier] }}
+            item={{ ...item, accountLabel: names[item.accountIdentifier], accountColor: accountColors[item.accountIdentifier] }}
             selectable={selecting}
             selected={selecting && isSelected(item.id)}
             onLongPress={() => {
@@ -457,6 +460,7 @@ export function TransactionsScreen({ navigation, route }: any) {
               selecting ? toggle(item.id) : navigation.navigate("Transaction", { id: item.id, item })
             }
           />
+          </View>
         )}
         ListEmptyComponent={
           list.loaded && !list.loading && !list.error ? (
@@ -524,22 +528,6 @@ export function TransactionsScreen({ navigation, route }: any) {
     </View>
   );
 }
-const dayHeader = (key: string) => {
-  const d = new Date(`${key}T12:00:00`);
-  if (!Number.isFinite(d.getTime())) return key;
-  const today = new Date();
-  const y = new Date();
-  y.setDate(today.getDate() - 1);
-  const same = (a: Date, b: Date) => a.toDateString() === b.toDateString();
-  if (same(d, today)) return "Today";
-  if (same(d, y)) return "Yesterday";
-  return d.toLocaleDateString("en-SG", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    ...(d.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}),
-  });
-};
 type LinkKind = "none" | "internal" | "reimbursement";
 export function TransactionScreen({ navigation, route }: any) {
   const id = route.params.id || route.params.item?.id;
@@ -602,77 +590,73 @@ export function TransactionScreen({ navigation, route }: any) {
   );
   return (
     <Screen refreshControl={<RefreshControl refreshing={tx.loading && !!tx.data} onRefresh={reload} />}>
-      <Card style={{ alignItems: "center", gap: 10, paddingVertical: 24 }}>
-        <IconBubble
-          icon={kind === "internal" ? "swap-horizontal-outline" : categoryIcon(category?.name)}
-          color={category?.color}
-          size={56}
-        />
-        <Txt bold size={18} style={{ textAlign: "center" }}>
-          {t.label || t.description}
-        </Txt>
-        {!!t.label && (
-          <Txt muted size={13} style={{ textAlign: "center" }}>
-            {t.description}
+      <Card style={{ gap: 8 }}>
+        <View style={[styles.between, { alignItems: "flex-start" }]}>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Txt bold size={18}>
+              {t.label || t.description}
+            </Txt>
+            {!!t.label && (
+              <Txt muted size={13}>
+                {t.description}
+              </Txt>
+            )}
+          </View>
+          <Txt mono size={20} style={{ color: kind === "internal" ? colors.muted : income ? colors.green : colors.red }}>
+            {income ? "+" : "-"}
+            {moneyCode(income ? amountIn : amountOut, t.currency || "SGD")}
           </Txt>
-        )}
-        <Txt mono style={{ fontSize: 32, lineHeight: 40, color: kind === "internal" ? colors.muted : income ? colors.green : colors.text }}>
-          {income ? "+" : "−"}
-          {money(income ? amountIn : amountOut, t.currency || "SGD")}
-        </Txt>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
-          <Pill icon="calendar-outline" label={fmtDate(t.date)} />
-          {category && <Pill icon="pricetag-outline" tone="purple" label={category.name} />}
-          {kind === "internal" && <Pill tone="blue" label="Internal transfer" />}
+        </View>
+        <View style={[styles.row, { gap: 6, flexWrap: "wrap" }]}>
+          <Dot color={category?.color || colors.faint} size={8} />
+          <Txt muted size={13}>
+            {category?.name || "Uncategorized"} · {fmtDate(t.date)}
+          </Txt>
+          {kind === "internal" && <Pill tone="blue" label="Internal" />}
           {kind === "reimbursement" && <Pill tone="green" label="Reimbursement" />}
           {reimbursedBy.length > 0 && <Pill tone="green" label="Reimbursed" />}
           {t.metadata?.splitFromTransactionId && <Pill tone="amber" label="Split" />}
         </View>
       </Card>
-      <View style={[styles.row, { justifyContent: "space-around" }]}>
-        {[
-          { icon: "create-outline", label: "Edit", onPress: () => setEditing(true) },
-          {
-            icon: "cut-outline",
-            label: "Split",
-            onPress: () =>
-              kind === "reimbursement" || reimbursedBy.length
-                ? Alert.alert(
-                    "Can’t split this yet",
-                    "Reimbursement transactions cannot be split. Remove the reimbursement links first, then link the split transactions.",
-                  )
-                : navigation.navigate("Split", { item: t }),
-          },
-          {
-            icon: "link-outline",
-            label: income ? "Pays back" : "Reimbursed by",
-            onPress: () => (income ? (kind === "reimbursement" ? openPicker("expenses") : setKind("reimbursement")) : openPicker("reimbursements")),
-          },
-          {
-            icon: "trash-outline",
-            label: "Delete",
-            danger: true,
-            onPress: () =>
-              confirm("Delete transaction?", "This permanently removes the transaction.", async () => {
-                await call("deleteTransaction", t.id);
-                toast("Transaction deleted");
-                navigation.goBack();
-              }, "Delete"),
-          },
-        ].map((a) => (
-          <Pressable
-            key={a.label}
-            accessibilityRole="button"
-            accessibilityLabel={a.label}
-            onPress={a.onPress}
-            style={{ alignItems: "center", gap: 6, width: 78 }}
-          >
-            <IconBubble icon={a.icon} tone={a.danger ? "red" : "purple"} size={48} />
-            <Txt size={12} bold numberOfLines={1} tone={a.danger ? "red" : undefined}>
-              {a.label}
-            </Txt>
-          </Pressable>
-        ))}
+      <View style={[styles.row, { gap: 8, flexWrap: "wrap" }]}>
+        <Button title="Edit" compact secondary icon="create-outline" onPress={() => setEditing(true)} />
+        <Button
+          title="Split"
+          compact
+          secondary
+          icon="cut-outline"
+          onPress={() =>
+            kind === "reimbursement" || reimbursedBy.length
+              ? Alert.alert(
+                  "Can’t split this yet",
+                  "Reimbursement transactions cannot be split. Remove the reimbursement links first, then link the split transactions.",
+                )
+              : navigation.navigate("Split", { item: t })
+          }
+        />
+        <Button
+          title={income ? "Pays back" : "Reimbursed by"}
+          compact
+          secondary
+          icon="link-outline"
+          onPress={() =>
+            income ? (kind === "reimbursement" ? openPicker("expenses") : setKind("reimbursement")) : openPicker("reimbursements")
+          }
+        />
+        <Button
+          title="Delete"
+          compact
+          secondary
+          danger
+          icon="trash-outline"
+          onPress={() =>
+            confirm("Delete transaction?", "This permanently removes the transaction.", async () => {
+              await call("deleteTransaction", t.id);
+              toast("Transaction deleted");
+              navigation.goBack();
+            }, "Delete")
+          }
+        />
       </View>
       <Section title="Details">
         <Card style={{ gap: 12 }}>
@@ -689,14 +673,7 @@ export function TransactionScreen({ navigation, route }: any) {
           )}
         </Card>
       </Section>
-      <Section
-        title="Reconciliation"
-        hint={
-          income
-            ? "Mark money coming back to you as a reimbursement, then choose the expenses it pays back."
-            : "Mark transfers between your own accounts as internal so they stay out of spending."
-        }
-      >
+      <Section title="Reconciliation"      >
         <Segmented
           values={income ? ["none", "internal", "reimbursement"] : ["none", "internal"]}
           labels={{ none: "None", internal: "Internal", reimbursement: "Reimbursement" }}
@@ -898,7 +875,7 @@ export function SplitScreen({ navigation, route }: any) {
         />
       }
     >
-      <Heading title="Split in two" subtitle="Keep the total. Give each part its own purpose." />
+      <Heading title="Split transaction" subtitle={item.label || item.description} />
       <Card style={{ gap: 6 }}>
         <KeyValue label="Original" mono value={money(total)} />
         <KeyValue label="Part 1" mono value={money(first)} />
@@ -965,8 +942,15 @@ export function LinkPickerScreen({ navigation, route }: any) {
   const [error, setError] = useState("");
   const requestId = useRef(0);
   const categories = useResource("getCategories", { scope: "settings" });
+  const [narrow, setNarrow] = useState<{ categoryId: string | null; dateFrom: string; dateTo: string; sameAmount: boolean }>(
+    { categoryId: null, dateFrom: "", dateTo: "", sameAmount: false },
+  );
+  const [showFilters, setShowFilters] = useState(false);
+  const narrowRef = useRef(narrow);
+  narrowRef.current = narrow;
   const load = async (offset: number, q: string) => {
     const id = ++requestId.current;
+    const f = narrowRef.current;
     setLoading(true);
     setError("");
     try {
@@ -977,6 +961,10 @@ export function LinkPickerScreen({ navigation, route }: any) {
         limit: 30,
         offset,
         contextDraftIds: contextDraftIds?.length ? contextDraftIds : undefined,
+        ...(f.categoryId !== null ? { categoryId: f.categoryId } : {}),
+        ...(f.dateFrom ? { dateFrom: f.dateFrom } : {}),
+        ...(f.dateTo ? { dateTo: f.dateTo } : {}),
+        ...(f.sameAmount && data?.subject.amount ? { amountEquals: data.subject.amount } : {}),
       });
       if (id !== requestId.current) return;
       setData(result);
@@ -1006,6 +994,10 @@ export function LinkPickerScreen({ navigation, route }: any) {
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
+  useEffect(() => {
+    if (data) void load(0, query);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [narrow]);
   const readOnly = subjectIsSaved ? (data?.subject.linked || []).filter((l: any) => l.key.startsWith("r:")) : [];
   useEffect(() => {
     if (!data || initialized) return;
@@ -1200,7 +1192,23 @@ export function LinkPickerScreen({ navigation, route }: any) {
           value={tab}
           onChange={setTab}
         />
-        <SearchBar value={search} onChangeText={setSearch} placeholder="Search label or description" />
+        <View style={[styles.row, { gap: 8 }]}>
+          <View style={{ flex: 1 }}>
+            <SearchBar value={search} onChangeText={setSearch} placeholder="Search label or description" />
+          </View>
+          <IconButton
+            icon="options-outline"
+            label="Filter candidates"
+            tone={narrow.categoryId !== null || narrow.dateFrom || narrow.dateTo ? "purple" : "neutral"}
+            onPress={() => setShowFilters(true)}
+          />
+        </View>
+        <Chips
+          values={["off", "on"]}
+          labels={{ off: "Any amount", on: `Same amount (${money(subjectAmount)})` }}
+          value={narrow.sameAmount ? "on" : "off"}
+          onChange={(v) => setNarrow((n) => ({ ...n, sameAmount: v === "on" }))}
+        />
         {loading && !data && <ActivityIndicator color={BRAND} style={{ padding: 20 }} />}
         {visible.length === 0 && !loading && (
           <Card>
@@ -1278,6 +1286,40 @@ export function LinkPickerScreen({ navigation, route }: any) {
           <Button title={loading ? "Loading…" : "Show more"} compact ghost disabled={loading} onPress={() => void load(saved.length, query)} />
         )}
       </Section>
+      <Sheet
+        visible={showFilters}
+        onClose={() => setShowFilters(false)}
+        title="Filter candidates"
+        footer={
+          <View style={styles.row}>
+            <Button
+              title="Reset"
+              secondary
+              style={{ flex: 1 }}
+              onPress={() => {
+                setNarrow({ categoryId: null, dateFrom: "", dateTo: "", sameAmount: false });
+                setShowFilters(false);
+              }}
+            />
+            <Button title="Done" style={{ flex: 2 }} onPress={() => setShowFilters(false)} />
+          </View>
+        }
+      >
+        <Choice
+          label="Category"
+          value={narrow.categoryId === null ? "__all__" : narrow.categoryId || "__none__"}
+          options={[
+            { label: "All categories", value: "__all__" },
+            { label: "Uncategorized", value: "__none__" },
+            ...(categories.data || []).map((c: any) => ({ label: c.name, value: c.id, color: c.color })),
+          ]}
+          onChange={(v) =>
+            setNarrow((n) => ({ ...n, categoryId: v === "__all__" ? null : v === "__none__" ? "" : v }))
+          }
+        />
+        <DateField label="From" value={narrow.dateFrom} onChange={(dateFrom) => setNarrow((n) => ({ ...n, dateFrom }))} />
+        <DateField label="To" value={narrow.dateTo} onChange={(dateTo) => setNarrow((n) => ({ ...n, dateTo }))} />
+      </Sheet>
     </Screen>
   );
 }

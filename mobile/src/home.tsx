@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from "react";
 import { Pressable, RefreshControl, ScrollView, View } from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useApi, useResource } from "./api";
 import {
@@ -15,9 +14,11 @@ import {
   fmtDate,
   fmtMonth,
   Group,
-  Heading,
-  IconBubble,
+  DateHeader,
+  Dot,
+  groupByDay,
   ListItem,
+  Tabs,
   money,
   notice,
   Pill,
@@ -42,11 +43,11 @@ import { shareCsv } from "./sharing";
 const signed = (n: number, currency?: string) =>
   `${n > 0 ? "+" : n < 0 ? "−" : ""}${money(Math.abs(n), currency)}`;
 
-/** Gradient hero showing net cash flow with money in and out. */
+/** Income, spending and net flow cards, as on the web analytics page. */
 export function Summary({
   summary,
   currency = "SGD",
-  title = "Net cash flow",
+  title,
   footer,
 }: {
   summary: any;
@@ -54,55 +55,24 @@ export function Summary({
   title?: string;
   footer?: React.ReactNode;
 }) {
+  const net = Number(summary?.net ?? Number(summary?.totalIn || 0) - Number(summary?.totalOut || 0));
   return (
-    <LinearGradient
-      colors={[BRAND, "#8136DA"]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={{ borderRadius: 26, padding: 22, gap: 18 }}
-    >
-      <View style={{ gap: 6 }}>
-        <Txt size={13} style={{ color: "#E6E2FF" }}>
+    <View style={{ gap: 8 }}>
+      {!!title && (
+        <Txt muted bold size={13}>
           {title}
         </Txt>
-        <Txt
-          mono
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          style={{ fontSize: 34, lineHeight: 44, color: "#FFFFFF", letterSpacing: -1 }}
-        >
-          {money(summary?.net, currency)}
-        </Txt>
-      </View>
-      <View style={{ flexDirection: "row", gap: 10 }}>
-        {[
-          ["arrow-down", "Money in", summary?.totalIn],
-          ["arrow-up", "Money out", summary?.totalOut],
-        ].map(([icon, label, value]) => (
-          <View
-            key={label}
-            style={{
-              flex: 1,
-              borderRadius: 16,
-              padding: 12,
-              gap: 4,
-              backgroundColor: "rgba(255,255,255,0.14)",
-            }}
-          >
-            <View style={[styles.row, { gap: 6 }]}>
-              <Ionicons name={icon as any} size={14} color="#E6E2FF" />
-              <Txt size={12} style={{ color: "#E6E2FF" }}>
-                {label}
-              </Txt>
-            </View>
-            <Txt mono numberOfLines={1} adjustsFontSizeToFit style={{ color: "#FFFFFF" }}>
-              {money(value, currency)}
-            </Txt>
-          </View>
-        ))}
-      </View>
+      )}
+      <StatGrid>
+        <Stat label="Income" tone="green" value={money(summary?.totalIn, currency)} />
+        <Stat label="Spending" tone="red" value={money(summary?.totalOut, currency)} />
+        <Stat label="Net flow" tone={net >= 0 ? "green" : "red"} value={money(net, currency)} />
+        {summary?.transactionCount != null && (
+          <Stat label="Transactions" value={String(summary.transactionCount)} />
+        )}
+      </StatGrid>
       {footer}
-    </LinearGradient>
+    </View>
   );
 }
 /** Horizontal month chips; newest first. */
@@ -135,20 +105,17 @@ export function MonthStrip({
               onChange(m);
             }}
             style={{
-              paddingHorizontal: 14,
-              paddingVertical: 8,
-              borderRadius: 14,
-              backgroundColor: on ? BRAND : colors.card,
+              paddingHorizontal: 12,
+              paddingVertical: 7,
+              borderRadius: 8,
+              backgroundColor: on ? colors.tint : colors.card,
               borderWidth: 1,
-              borderColor: on ? BRAND : colors.line,
+              borderColor: on ? colors.purple : colors.line,
               alignItems: "center",
             }}
           >
-            <Txt bold size={13} style={{ color: on ? "#FFFFFF" : colors.text }}>
-              {fmtMonth(m, true).split(" ")[0]}
-            </Txt>
-            <Txt size={11} style={{ color: on ? "#E6E2FF" : colors.muted }}>
-              {m.slice(0, 4)}
+            <Txt bold size={13} style={{ color: on ? colors.purple : colors.text }}>
+              {fmtMonth(m, true)}
             </Txt>
           </Pressable>
         );
@@ -156,34 +123,10 @@ export function MonthStrip({
     </ScrollView>
   );
 }
-function QuickAction({ icon, label, onPress }: any) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      onPress={() => {
-        tap();
-        onPress();
-      }}
-      style={({ pressed }) => ({
-        flex: 1,
-        alignItems: "center",
-        gap: 6,
-        opacity: pressed ? 0.6 : 1,
-      })}
-    >
-      <IconBubble icon={icon} size={48} />
-      <Txt size={12} bold numberOfLines={1}>
-        {label}
-      </Txt>
-    </Pressable>
-  );
-}
 function ImportSummaryCard({ item, onPress }: any) {
   return (
-    <Card onPress={onPress} accessibilityLabel={item.filename} style={{ gap: 10 }}>
+    <Card onPress={onPress} accessibilityLabel={item.filename} style={{ gap: 8 }}>
       <View style={styles.row}>
-        <IconBubble icon="document-text-outline" size={40} />
         <View style={{ flex: 1 }}>
           <Txt bold numberOfLines={1}>
             {item.filename}
@@ -198,11 +141,16 @@ function ImportSummaryCard({ item, onPress }: any) {
         <Txt mono size={13} tone="green">
           +{money(item.totalIn)}
         </Txt>
-        <Txt mono size={13}>
-          −{money(item.totalOut)}
+        <Txt mono size={13} tone="red">
+          -{money(item.totalOut)}
         </Txt>
         {item.topCategory && (
-          <Pill label={item.topCategory.name} tone="purple" />
+          <View style={[styles.row, { gap: 5 }]}>
+            <Dot color={item.topCategory.color || BRAND} size={8} />
+            <Txt muted size={12}>
+              {item.topCategory.name}
+            </Txt>
+          </View>
         )}
       </View>
     </Card>
@@ -250,7 +198,7 @@ export function HomeScreen({ navigation }: any) {
   const r = review.data;
   const currency = user.data?.baseCurrency || "SGD";
   const delta = Number(o?.summary?.previousMonth?.spendingDelta || 0);
-  const now = new Date();
+  const { colors } = useTheme();
   return (
     <Screen
       refreshControl={
@@ -263,16 +211,7 @@ export function HomeScreen({ navigation }: any) {
         />
       }
     >
-      <Heading
-        eyebrow={now.toLocaleDateString("en-SG", {
-          weekday: "long",
-          day: "numeric",
-          month: "long",
-        })}
-        title={`Hello, ${user.data?.name?.split(" ")[0] || "you"}.`}
-        subtitle="A little clarity for your money."
-      />
-      <Segmented values={["Overview", "Review"]} value={tab} onChange={setTab} />
+      <Tabs values={["Overview", "Review"]} value={tab} onChange={setTab} />
       <State {...resource} />
       {tab === "Overview" && o && (
         <>
@@ -286,129 +225,66 @@ export function HomeScreen({ navigation }: any) {
           <Summary
             summary={o.summary}
             currency={currency}
-            title={`Net cash flow · ${fmtMonth(o.selectedMonth)}`}
             footer={
               o.summary.previousMonth ? (
-                <View style={[styles.row, { gap: 6 }]}>
-                  <Ionicons
-                    name={delta > 0 ? "trending-up" : "trending-down"}
-                    size={16}
-                    color="#FFFFFF"
-                  />
-                  <Txt size={13} style={{ color: "#FFFFFF" }}>
-                    {money(Math.abs(delta), currency)} {delta > 0 ? "more" : "less"}{" "}
-                    spending than {fmtMonth(o.summary.previousMonth.month, true)}
-                  </Txt>
-                </View>
+                <Txt muted size={13}>
+                  {money(Math.abs(delta), currency)} {delta > 0 ? "more" : "less"} spending than{" "}
+                  {fmtMonth(o.summary.previousMonth.month, true)}
+                </Txt>
               ) : null
             }
           />
-          <Card style={{ flexDirection: "row", paddingVertical: 16 }}>
-            <QuickAction
-              icon="cloud-upload-outline"
-              label="Import"
-              onPress={() => navigation.navigate("Import")}
-            />
-            <QuickAction
-              icon="receipt-outline"
-              label="Activity"
-              onPress={() => navigation.navigate("Transactions")}
-            />
-            <QuickAction
-              icon="stats-chart-outline"
-              label="Analytics"
-              onPress={() => navigation.navigate("Analytics")}
-            />
-            <QuickAction
-              icon="pricetags-outline"
-              label="Categories"
-              onPress={() => navigation.navigate("Manage", { kind: "categories" })}
-            />
-          </Card>
-          {!o.hasTransactions && o.recentTransactions?.length === 0 && (
-            <Card>
-              <Empty
-                icon="cloud-upload-outline"
-                title="Bring in your first statement"
-                message="Import a statement to see your money in one place."
-                action="Import a statement"
-                onAction={() => navigation.navigate("Import")}
-              />
-            </Card>
-          )}
           {o.trend?.length > 0 && (
-            <Section title="Cash flow">
-              <Card>
-                <ColumnChart
-                  currency={currency}
-                  primaryLabel="Out"
-                  secondaryLabel="In"
-                  data={o.trend.map((t: any) => ({
-                    key: t.month,
-                    label: fmtMonth(t.month, true),
-                    value: t.totalOut,
-                    secondary: t.totalIn,
-                  }))}
-                  onSelect={(d) => setMonth(d.key)}
-                />
-                <View style={[styles.row, { gap: 16 }]}>
-                  <Legend color={BRAND} label="Spending" />
-                  <Legend color="#1A8245" label="Income" />
-                </View>
-              </Card>
-            </Section>
-          )}
-          <StatGrid>
-            {o.summary.topCategory && (
-              <Stat
-                icon="pie-chart-outline"
-                label="Top category"
-                value={money(o.summary.topCategory.totalOut, currency)}
-                detail={o.summary.topCategory.name}
+            <Card>
+              <Txt bold size={16}>
+                Spending and Income Trend
+              </Txt>
+              <ColumnChart
+                currency={currency}
+                primaryLabel="Spending"
+                secondaryLabel="Income"
+                color={colors.red}
+                secondaryColor={colors.green}
+                data={o.trend.map((t: any) => ({
+                  key: t.month,
+                  label: fmtMonth(t.month, true),
+                  value: t.totalOut,
+                  secondary: t.totalIn,
+                }))}
+                onSelect={(d) => setMonth(d.key)}
               />
-            )}
-            {o.summary.largestTransaction && (
-              <Stat
-                icon="flash-outline"
-                tone="amber"
-                label="Largest spend"
-                value={money(
-                  o.summary.largestTransaction.amountOut ||
-                    o.summary.largestTransaction.amountIn,
-                  currency,
-                )}
-                detail={
-                  o.summary.largestTransaction.label ||
-                  o.summary.largestTransaction.description
-                }
-                onPress={() =>
-                  navigation.navigate("Transaction", {
-                    id: o.summary.largestTransaction.id,
-                  })
-                }
-              />
-            )}
-          </StatGrid>
-          <Section
-            title="Recent activity"
-            action="See all"
-            onAction={() => navigation.navigate("Transactions")}
-          >
-            <Card style={{ paddingVertical: 6, gap: 0 }}>
-              {o.recentTransactions.length === 0 && (
-                <Empty title="No activity this month" />
-              )}
-              {o.recentTransactions.map((item: any) => (
-                <TransactionRow
-                  key={item.id}
-                  item={item}
-                  onPress={() =>
-                    navigation.navigate("Transaction", { id: item.id, item })
-                  }
-                />
-              ))}
             </Card>
-          </Section>
+          )}
+          <Card>
+            <Txt bold size={16}>
+              Quick Actions
+            </Txt>
+            <Button title="Import Statement" icon="cloud-upload-outline" onPress={() => navigation.navigate("Import")} />
+            <Button title="Open Analytics" secondary onPress={() => navigation.navigate("Analytics")} />
+            <Button title="Review Transactions" secondary onPress={() => navigation.navigate("Transactions")} />
+            <Button title="Manage Categories" secondary onPress={() => navigation.navigate("Manage", { kind: "categories" })} />
+          </Card>
+          <Card style={{ gap: 0 }}>
+            <View style={styles.between}>
+              <Txt bold size={16}>
+                Recent Transactions
+              </Txt>
+              <Button title="See all" compact ghost onPress={() => navigation.navigate("Transactions")} />
+            </View>
+            {o.recentTransactions.length === 0 && <Empty title="No transactions this month" />}
+            {groupByDay(o.recentTransactions).map((day) => (
+              <View key={day.key}>
+                <DateHeader date={day.key} />
+                {day.data.map((item: any) => (
+                  <TransactionRow
+                    key={item.id}
+                    item={item}
+                    onPress={() => navigation.navigate("Transaction", { id: item.id, item })}
+                  />
+                ))}
+              </View>
+            ))}
+          </Card>
         </>
       )}
       {tab === "Review" && r && (
@@ -416,8 +292,8 @@ export function HomeScreen({ navigation }: any) {
           <Card>
             <View style={styles.between}>
               <View style={{ flex: 1, gap: 2 }}>
-                <Txt bold size={17}>
-                  Data health
+                <Txt bold size={16}>
+                  Data Health
                 </Txt>
                 <Txt muted size={13}>
                   {r.dataHealth.categorizedCount} of {r.dataHealth.transactionCount}{" "}
@@ -458,7 +334,7 @@ export function HomeScreen({ navigation }: any) {
               message="Categorize them below so your reports stay accurate."
             />
           )}
-          <Section title="Needs a category">
+          <Section title="Uncategorized">
             <Card style={{ padding: 0, gap: 0, paddingTop: 6 }}>
               {r.reviewQueue.uncategorized.length === 0 && (
                 <Empty icon="checkmark-done-outline" title="All caught up" />
@@ -474,7 +350,7 @@ export function HomeScreen({ navigation }: any) {
               ))}
             </Card>
           </Section>
-          <Section title="Larger transactions">
+          <Section title="Large Transactions">
             <Card style={{ paddingVertical: 6, gap: 0 }}>
               {r.reviewQueue.largeTransactions.length === 0 && (
                 <Empty icon="checkmark-done-outline" title="Nothing unusual" />
@@ -513,7 +389,7 @@ export function HomeScreen({ navigation }: any) {
             </Section>
           )}
           <Section
-            title="Recent imports"
+            title="Recent Imports"
             action="All imports"
             onAction={() =>
               navigation.navigate("Import", { openTab: "History", refreshKey: Date.now() })
@@ -577,6 +453,7 @@ const GROUPS: Record<string, string> = {
 const CHARTS: Record<string, string> = { bar: "Bars", line: "Line", pie: "Pie" };
 const csvCell = (v: any) => JSON.stringify(String(v ?? ""));
 function ReportTab({ navigation, currency }: any) {
+  const { colors } = useTheme();
   const [filters, setFilters] = useState<any>({
     range: "month",
     metric: "spending",
@@ -598,6 +475,8 @@ function ReportTab({ navigation, currency }: any) {
         ? row.totalIn - row.totalOut
         : row.totalOut;
   const timeGrouped = filters.groupBy === "month" || filters.groupBy === "day";
+  const metricColor =
+    filters.metric === "income" ? colors.green : filters.metric === "net" ? colors.purple : colors.red;
   const series = (r?.chartSeries || [])
     .filter((row: any) => timeGrouped || Number(row.metricValue ?? metricOf(row)) !== 0)
     .map((row: any) => ({
@@ -689,17 +568,7 @@ function ReportTab({ navigation, currency }: any) {
           <Txt muted size={13}>
             {fmtDate(r.period.start)} – {fmtDate(r.period.end)}
           </Txt>
-          <StatGrid>
-            <Stat icon="arrow-down" tone="green" label="Money in" value={money(r.summary.totalIn, currency)} />
-            <Stat icon="arrow-up" label="Money out" value={money(r.summary.totalOut, currency)} />
-            <Stat
-              icon="swap-vertical"
-              tone={r.summary.net >= 0 ? "green" : "red"}
-              label="Net"
-              value={signed(r.summary.net, currency)}
-            />
-            <Stat icon="list-outline" tone="blue" label="Transactions" value={String(r.summary.transactionCount)} />
-          </StatGrid>
+          <Summary summary={r.summary} currency={currency} />
           <Card>
             <View style={styles.between}>
               <Txt bold size={17}>
@@ -721,13 +590,15 @@ function ReportTab({ navigation, currency }: any) {
                 centerLabel={METRICS[filters.metric]}
               />
             ) : chart === "line" ? (
-              <AreaChart data={series} currency={currency} height={160} />
+              <AreaChart data={series} currency={currency} height={160} color={metricColor} />
             ) : (
               <ColumnChart
                 data={series}
                 currency={currency}
-                primaryLabel={filters.metric === "inOut" ? "Out" : undefined}
-                secondaryLabel={filters.metric === "inOut" ? "In" : undefined}
+                color={timeGrouped ? metricColor : undefined}
+                secondaryColor={colors.green}
+                primaryLabel={filters.metric === "inOut" ? "Spending" : undefined}
+                secondaryLabel={filters.metric === "inOut" ? "Income" : undefined}
               />
             )}
           </Card>
@@ -872,7 +743,6 @@ function DeltaStat({ label, delta, currency }: any) {
   const n = Number(delta || 0);
   return (
     <Stat
-      icon={n > 0 ? "trending-up" : "trending-down"}
       tone={n > 0 ? "red" : "green"}
       label={label}
       value={signed(n, currency)}
@@ -998,6 +868,7 @@ function RecurringList({ rows, currency, navigation }: any) {
   );
 }
 function OverallTab({ navigation, currency }: any) {
+  const { colors } = useTheme();
   const overview = useResource("getAnalyticsOverview");
   const o = overview.data;
   return (
@@ -1007,15 +878,17 @@ function OverallTab({ navigation, currency }: any) {
         <>
           <Summary summary={o.summary} currency={currency} title="All-time net cash flow" />
           <StatGrid>
-            <Stat icon="list-outline" tone="blue" label="Transactions" value={String(o.summary.transactionCount)} />
-            <Stat icon="calendar-outline" label="Months" value={String(o.monthlyTrend?.length || 0)} />
+            <Stat tone="blue" label="Transactions" value={String(o.summary.transactionCount)} />
+            <Stat label="Months" value={String(o.monthlyTrend?.length || 0)} />
           </StatGrid>
           <Section title="Long-term cash flow">
             <Card>
               <ColumnChart
                 currency={currency}
-                primaryLabel="Out"
-                secondaryLabel="In"
+                primaryLabel="Spending"
+                secondaryLabel="Income"
+                color={colors.red}
+                secondaryColor={colors.green}
                 data={(o.monthlyTrend || []).map((t: any) => ({
                   key: t.month,
                   label: fmtMonth(t.month, true),
@@ -1079,8 +952,7 @@ export function AnalyticsScreen({ navigation }: any) {
   const currency = user.data?.baseCurrency || "SGD";
   return (
     <Screen>
-      <Heading title="The bigger picture" subtitle="Understand where your money goes." />
-      <Segmented values={["Reports", "Insights", "Overall"]} value={tab} onChange={setTab} />
+      <Tabs values={["Reports", "Insights", "Overall"]} value={tab} onChange={setTab} />
       {tab === "Reports" && <ReportTab navigation={navigation} currency={currency} />}
       {tab === "Insights" && <InsightsTab navigation={navigation} currency={currency} />}
       {tab === "Overall" && <OverallTab navigation={navigation} currency={currency} />}

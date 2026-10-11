@@ -242,16 +242,15 @@ test("mobile authentication, financial workflows and phone navigation", async ({
     await page.getByLabel("Username", { exact: true }).fill(username);
     await page.getByLabel("Password", { exact: true }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
-    await expect(page.getByText("Hello, Mobile.", { exact: true })).toBeVisible(
+    await expect(page.getByText("Spending and Income Trend", { exact: true })).toBeVisible(
       { timeout: 30000 },
     );
-    await expect(page.getByText(/^Net cash flow/).first()).toBeVisible();
+    await expect(page.getByText("Net flow", { exact: true })).toBeVisible();
     await page.screenshot({
       path: "test-results/home-phone.png",
       fullPage: true,
     });
-    await page.getByRole("tab", { name: /Activity/ }).click();
-    await expect(page.getByText("Activity", { exact: true }).first()).toBeVisible();
+    await page.getByRole("tab", { name: /Transactions/ }).click();
     await expect(
       page.getByText("Coffee catch-up", { exact: true }).last(),
     ).toBeVisible();
@@ -316,11 +315,17 @@ test("mobile authentication, financial workflows and phone navigation", async ({
       .fill("Phone reviewed expense");
     await page.getByRole("button", { name: "Save row", exact: true }).click();
     await expect(
-      page.getByText("Phone reviewed expense", { exact: true }).first(),
-    ).toBeVisible();
+      page.getByLabel("Label for Staged expense 1", { exact: true }),
+    ).toHaveValue("Phone reviewed expense");
     expect(
       (await rpc("getAgentDraft", draft.id)).draft.reviewSummary,
     ).toMatchObject({ needsReview: 0, ready: 4, selected: 4 });
+    const inlineLabel = page.getByLabel("Label for Staged expense 3", { exact: true });
+    await inlineLabel.fill("Inline label");
+    await inlineLabel.press("Enter");
+    await expect
+      .poll(async () => (await rpc("getAgentDraft", draft.id)).draft.rows[2].currentPayload.label)
+      .toBe("Inline label");
     await page.screenshot({
       path: "test-results/staged-review-phone.png",
       fullPage: true,
@@ -352,12 +357,12 @@ test("mobile authentication, financial workflows and phone navigation", async ({
       .poll(async () => (await rpc("getAgentDraft", draft.id)).draft.status)
       .toBe("committed");
     await expect(page.getByText("qa.csv", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Upload", exact: true }).click();
+    await page.getByRole("button", { name: "Import", exact: true }).click();
     await expect(
-      page.getByText("Statement type", { exact: true }),
+      page.getByText("UPLOAD STATEMENT", { exact: true }),
     ).toBeVisible();
     await page
-      .getByRole("button", { name: "Statement parser", exact: true })
+      .getByRole("button", { name: "Parser for new files", exact: true })
       .click();
     await page.getByRole("button", { name: "Close" }).last().click();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -490,11 +495,11 @@ test("opens a committed statement from import history", async ({ page, request }
     await page.getByLabel("Username", { exact: true }).fill(username);
     await page.getByLabel("Password", { exact: true }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
-    await expect(page.getByText("Hello, Import.", { exact: true })).toBeVisible({
+    await expect(page.getByText("Spending and Income Trend", { exact: true })).toBeVisible({
       timeout: 30000,
     });
     await page.getByRole("tab", { name: /Import/ }).click();
-    await page.getByRole("button", { name: "History", exact: true }).click();
+    await page.getByRole("button", { name: "Imported history", exact: true }).click();
     await expect(page.getByText("detail-qa.csv", { exact: true })).toBeVisible();
     await page
       .getByRole("button", { name: "detail-qa.csv", exact: true })

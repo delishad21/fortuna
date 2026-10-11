@@ -33,7 +33,7 @@ function Frame({
       style={{
         borderWidth: 1,
         borderColor: colors.line,
-        borderRadius: 14,
+        borderRadius: 8,
         padding: 14,
         gap: 12,
       }}

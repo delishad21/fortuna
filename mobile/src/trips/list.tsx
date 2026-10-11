@@ -64,11 +64,9 @@ export function TripsScreen({ navigation }: any) {
         />
       }
     >
-      <Heading
-        title="Trips"
-        subtitle="Every journey. Every currency. One place."
-        right={<Button title="New trip" icon="add" compact onPress={() => navigation.navigate("TripEditor", {})} />}
-      />
+      <View style={{ alignItems: "flex-start" }}>
+        <Button title="New Trip" icon="add" compact onPress={() => navigation.navigate("TripEditor", {})} />
+      </View>
       {(invitations.data || []).length > 0 && (
         <Section title="Invitations">
           {invitations.data.map((inv: any) => (
@@ -112,7 +110,6 @@ export function TripsScreen({ navigation }: any) {
           <Empty
             icon="airplane-outline"
             title="No trips yet"
-            message="Create a trip to organize wallets, spending and funding for your next journey."
             action="Plan a trip"
             onAction={() => navigation.navigate("TripEditor", {})}
           />
@@ -123,21 +120,26 @@ export function TripsScreen({ navigation }: any) {
           key={trip.id}
           onPress={() => navigation.navigate("Trip", { tripId: trip.id })}
           accessibilityLabel={trip.name}
-          style={{ padding: 0, borderWidth: 0 }}
+          style={{ padding: 12, gap: 10 }}
         >
-          <TripCover trip={trip}>
+          <TripCover trip={trip} height={130} />
+          <View style={[styles.between, { alignItems: "flex-start" }]}>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Txt bold size={16} numberOfLines={1}>
+                {trip.name}
+              </Txt>
+              <Txt muted size={13}>
+                {tripDates(trip)}
+              </Txt>
+            </View>
+            <Pill label={trip.baseCurrency} />
+          </View>
+          {(trip.status !== "active" || trip.sharing) && (
             <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
-              <Pill label={trip.baseCurrency} tone="purple" />
               {trip.status !== "active" && <Pill label={humanize(trip.status)} />}
               <RolePill trip={trip} />
             </View>
-            <Txt bold size={22} style={{ color: "#FFFFFF" }} numberOfLines={1}>
-              {trip.name}
-            </Txt>
-            <Txt size={13} style={{ color: "#E6E2FF" }}>
-              {tripDates(trip)}
-            </Txt>
-          </TripCover>
+          )}
         </Card>
       ))}
     </Screen>
@@ -247,7 +249,7 @@ export function TripEditorScreen({ route, navigation }: any) {
     <Screen
       footer={<Button title={trip ? "Save trip" : "Create trip"} icon="checkmark" loading={busy} disabled={busy} onPress={() => void save()} />}
     >
-      <Heading title={trip ? "Trip details" : "Where to next?"} subtitle={trip ? trip.name : "Set up wallets and spending once you're in."} />
+      <Heading title={trip ? "Trip details" : "New trip"} subtitle={trip?.name} />
       {locked && (
         <Banner
           tone="amber"

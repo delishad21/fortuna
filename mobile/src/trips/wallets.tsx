@@ -63,7 +63,7 @@ export function WalletsScreen({ route, navigation }: any) {
         </Card>
       )}
       {(summaries.data || []).map((w: any) => (
-        <Card key={w.id} onPress={() => navigation.navigate("Wallet", { tripId, trip: t, walletId: w.id })} accessibilityLabel={w.name} style={{ borderLeftWidth: 5, borderLeftColor: w.color }}>
+        <Card key={w.id} onPress={() => navigation.navigate("Wallet", { tripId, trip: t, walletId: w.id })} accessibilityLabel={w.name} style={{ borderLeftWidth: 3, borderLeftColor: w.color }}>
           <View style={styles.between}>
             <View style={{ flex: 1 }}>
               <Txt bold size={17}>
@@ -183,13 +183,11 @@ export function WalletScreen({ route, navigation }: any) {
       <ViewerBanner trip={t} />
       <StatGrid>
         <Stat
-          icon="swap-horizontal-outline"
           label={`Rate to ${base}`}
           value={summary.intrinsicFxRate != null ? Number(summary.intrinsicFxRate).toFixed(6) : "—"}
           detail="Weighted from funding"
         />
         <Stat
-          icon="cash-outline"
           tone="green"
           label="Value"
           value={summary.intrinsicBaseValue != null ? money(summary.intrinsicBaseValue, base) : "—"}
@@ -455,7 +453,6 @@ export function WalletAccountsScreen() {
     <Screen>
       <Heading
         title="Wallet accounts"
-        subtitle="Group wallets from the same provider across trips."
         right={<Button title="Add" compact icon="add" onPress={() => open(null)} />}
       />
       <State {...accounts} />

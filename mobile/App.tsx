@@ -15,7 +15,6 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { StatusBar } from "expo-status-bar";
-import { LinearGradient } from "expo-linear-gradient";
 import { useFonts } from "expo-font";
 import { DMSans_400Regular } from "@expo-google-fonts/dm-sans/400Regular";
 import { DMSans_600SemiBold } from "@expo-google-fonts/dm-sans/600SemiBold";
@@ -67,19 +66,13 @@ import {
 } from "./src/settings";
 const Stack = createNativeStackNavigator();
 const Tabs = createBottomTabNavigator();
-function BrandTitle() {
-  return (
-    <View style={{ flexDirection: "row", gap: 9, alignItems: "center" }}>
-      <Image
-        source={require("./assets/icon.png")}
-        style={{ width: 28, height: 28, borderRadius: 14 }}
-      />
-      <Txt style={{ fontFamily: "Montserrat_800ExtraBold", letterSpacing: 1.2 }}>
-        FORTUNA
-      </Txt>
-    </View>
-  );
-}
+const TAB_TITLES: Record<string, string> = {
+  Home: "Dashboard",
+  Transactions: "Transactions",
+  Import: "Imports",
+  Trips: "Trips",
+  Chat: "Chat",
+};
 const TAB_ICONS: Record<string, [string, string]> = {
   Home: ["home", "home-outline"],
   Transactions: ["receipt", "receipt-outline"],
@@ -92,8 +85,10 @@ function MainTabs() {
   return (
     <Tabs.Navigator
       screenOptions={({ route, navigation }) => ({
-        headerTitle: () => <BrandTitle />,
+        title: TAB_TITLES[route.name],
+        tabBarLabel: TAB_TITLES[route.name],
         headerTitleAlign: "left",
+        headerTitleStyle: { fontFamily: "DMSans_600SemiBold", fontSize: 18, color: colors.text },
         headerRight: () => (
           <View style={{ flexDirection: "row", paddingRight: 8 }}>
             {route.name === "Home" && (
@@ -116,15 +111,15 @@ function MainTabs() {
             </Pressable>
           </View>
         ),
-        headerStyle: { backgroundColor: colors.bg },
-        headerShadowVisible: false,
+        headerStyle: { backgroundColor: colors.card },
+        headerShadowVisible: true,
         tabBarStyle: {
           backgroundColor: colors.card,
           borderTopColor: colors.line,
         },
         tabBarActiveTintColor: colors.purple,
         tabBarInactiveTintColor: colors.faint,
-        tabBarLabelStyle: { fontFamily: "DMSans_600SemiBold", fontSize: 11, lineHeight: 14 },
+        tabBarLabelStyle: { fontFamily: "DMSans_600SemiBold", fontSize: 10, lineHeight: 13 },
         tabBarIcon: ({ color, size, focused }) => (
           <Ionicons
             name={TAB_ICONS[route.name][focused ? 0 : 1] as any}
@@ -135,16 +130,8 @@ function MainTabs() {
       })}
     >
       <Tabs.Screen name="Home" component={HomeScreen} />
-      <Tabs.Screen
-        name="Transactions"
-        component={TransactionsScreen}
-        options={{ tabBarLabel: "Activity" }}
-      />
-      <Tabs.Screen
-        name="Import"
-        component={ImportsScreen}
-        options={{ tabBarLabel: "Imports" }}
-      />
+      <Tabs.Screen name="Transactions" component={TransactionsScreen} />
+      <Tabs.Screen name="Import" component={ImportsScreen} />
       <Tabs.Screen name="Trips" component={TripsScreen} />
       <Tabs.Screen name="Chat" component={ChatScreen} />
     </Tabs.Navigator>
@@ -155,111 +142,62 @@ function Login() {
   const { colors } = useTheme();
   const [register, setRegister] = useState(false);
   return (
-    <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      <ScrollView keyboardShouldPersistTaps="handled">
-        <LinearGradient
-          colors={[BRAND, "#8136DA"]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={{ borderBottomLeftRadius: 36, borderBottomRightRadius: 36 }}
-        >
-          <SafeAreaView edges={["top"]}>
-            <View style={{ padding: 24, paddingTop: 36, paddingBottom: 56, gap: 18 }}>
-              <Image
-                source={require("./assets/icon.png")}
-                style={{ width: 72, height: 72, borderRadius: 22 }}
-              />
-              <Txt
-                style={{
-                  fontFamily: "Montserrat_800ExtraBold",
-                  fontSize: 30,
-                  lineHeight: 37,
-                  color: "#FFFFFF",
-                  letterSpacing: -0.8,
-                }}
-              >
-                {register ? "Your money, together." : "A little more clarity."}
-              </Txt>
-              <Txt style={{ color: "#E6E2FF" }}>
-                {register
-                  ? "Create your Fortuna account."
-                  : "Welcome to Fortuna. Make room for what matters."}
-              </Txt>
-            </View>
-          </SafeAreaView>
-        </LinearGradient>
-        <View style={{ padding: 16, marginTop: -32, gap: 16 }}>
-          <View
-            style={[
-              styles.card,
-              { backgroundColor: colors.card, borderColor: colors.line, padding: 20 },
-            ]}
-          >
-            <Form
-              key={String(register)}
-              initial={{
-                server: process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000",
-                baseCurrency: "SGD",
-              }}
-              submit={register ? "Create account" : "Sign in"}
-              submitIcon={register ? "person-add-outline" : "log-in-outline"}
-              fields={[
-                { key: "server", label: "Fortuna server domain or URL", required: true },
-                ...(register
-                  ? [
-                      { key: "name", label: "Name", required: true },
-                      {
-                        key: "baseCurrency",
-                        label: "Base currency (ISO code)",
-                        type: "currency" as const,
-                        required: true,
-                      },
-                    ]
-                  : []),
-                { key: "username", label: "Username", required: true },
-                {
-                  key: "password",
-                  label: "Password",
-                  type: "password",
-                  required: true,
-                },
-              ]}
-              onSave={async (v) => {
-                if (register) {
-                  const server = normalizeServer(v.server);
-                  const response = await fetch(`${server}/api/auth/register`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      name: v.name,
-                      username: v.username,
-                      password: v.password,
-                      baseCurrency: v.baseCurrency,
-                    }),
-                  });
-                  const body = await response.json();
-                  if (!response.ok) throw new Error(body.error || "Registration failed");
-                }
-                await signIn(v.server, v.username, v.password);
-              }}
-            />
-            <Button
-              title={
-                register
-                  ? "Already have an account? Sign in"
-                  : "New here? Create an account"
-              }
-              ghost
-              onPress={() => setRegister(!register)}
-            />
-          </View>
-          <Txt muted size={12} style={{ textAlign: "center", paddingHorizontal: 12 }}>
-            Enter the domain where you host Fortuna, such as fortuna.example.com.
-            The app uses the same account and API as your web app.
-          </Txt>
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
+      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 16, gap: 20, paddingTop: 48 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10, alignSelf: "center" }}>
+          <Image source={require("./assets/icon.png")} style={{ width: 44, height: 44, borderRadius: 22 }} />
+          <Txt style={{ fontFamily: "Montserrat_800ExtraBold", fontSize: 26, letterSpacing: 0.5 }}>FORTUNA</Txt>
         </View>
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.line, padding: 20 }]}>
+          <Txt style={styles.title}>{register ? "Create account" : "Sign in"}</Txt>
+          <Form
+            key={String(register)}
+            initial={{
+              server: process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000",
+              baseCurrency: "SGD",
+            }}
+            submit={register ? "Create account" : "Sign in"}
+            fields={[
+              { key: "server", label: "Fortuna server domain or URL", required: true },
+              ...(register
+                ? [
+                    { key: "name", label: "Name", required: true },
+                    { key: "baseCurrency", label: "Base currency (ISO code)", type: "currency" as const, required: true },
+                  ]
+                : []),
+              { key: "username", label: "Username", required: true },
+              { key: "password", label: "Password", type: "password", required: true },
+            ]}
+            onSave={async (v) => {
+              if (register) {
+                const server = normalizeServer(v.server);
+                const response = await fetch(`${server}/api/auth/register`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    name: v.name,
+                    username: v.username,
+                    password: v.password,
+                    baseCurrency: v.baseCurrency,
+                  }),
+                });
+                const body = await response.json();
+                if (!response.ok) throw new Error(body.error || "Registration failed");
+              }
+              await signIn(v.server, v.username, v.password);
+            }}
+          />
+          <Button
+            title={register ? "Already have an account? Sign in" : "New here? Create an account"}
+            ghost
+            onPress={() => setRegister(!register)}
+          />
+        </View>
+        <Txt muted size={12} style={{ textAlign: "center", paddingHorizontal: 12 }}>
+          Enter the domain where you host Fortuna, such as fortuna.example.com.
+        </Txt>
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 const SCREENS: Record<string, [React.ComponentType<any>, string]> = {
@@ -328,8 +266,8 @@ function Navigation() {
             screenOptions={{
               headerBackButtonDisplayMode: "minimal",
               headerTitleStyle: { fontFamily: "DMSans_600SemiBold" },
-              headerStyle: { backgroundColor: colors.bg },
-              headerShadowVisible: false,
+              headerStyle: { backgroundColor: colors.card },
+              headerShadowVisible: true,
               headerTintColor: colors.purple,
               contentStyle: { backgroundColor: colors.bg },
             }}

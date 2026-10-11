@@ -31,19 +31,19 @@ import {
 } from "react-native-safe-area-context";
 
 const light = {
-  bg: "#F4F5F9",
+  bg: "#F3F4F6",
   card: "#FFFFFF",
-  sunken: "#F7F8FB",
+  sunken: "#F9FAFB",
   text: "#111928",
   muted: "#6B7280",
   faint: "#9CA3AF",
-  line: "#E8EBF2",
+  line: "#E6EBF1",
   purple: "#5750F1",
   tint: "#EEEDFF",
-  green: "#1A8245",
-  greenTint: "#E5F6EC",
-  red: "#DC2626",
-  redTint: "#FDECEC",
+  green: "#22AD5C",
+  greenTint: "#E7F7EE",
+  red: "#F23030",
+  redTint: "#FEECEC",
   amber: "#B45309",
   amberTint: "#FEF3C7",
   blue: "#2563EB",
@@ -138,22 +138,31 @@ export const styles = StyleSheet.create({
   },
   stack: { gap: 16 },
   content: { padding: 16, gap: 16, paddingBottom: 48 },
-  card: { borderRadius: 22, padding: 18, gap: 14, borderWidth: 1 },
+  card: {
+    borderRadius: 8,
+    padding: 16,
+    gap: 12,
+    borderWidth: 1,
+    shadowColor: "#000",
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
   title: {
-    fontFamily: "Montserrat_700Bold",
-    fontSize: 28,
-    lineHeight: 35,
-    letterSpacing: -0.9,
+    fontFamily: "DMSans_600SemiBold",
+    fontSize: 20,
+    lineHeight: 26,
   },
   body: { fontFamily: "DMSans_400Regular", fontSize: 15, lineHeight: 22 },
   label: { fontFamily: "DMSans_600SemiBold", fontSize: 13 },
   money: { fontFamily: "DMMono_400Regular", fontSize: 16 },
   input: {
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
-    minHeight: 50,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     fontSize: 16,
     fontFamily: "DMSans_400Regular",
   },
@@ -182,11 +191,8 @@ export function Txt({
               : colors.text,
           fontSize: size,
           lineHeight: Math.round(size * 1.4),
-          fontFamily: mono
-            ? "DMMono_400Regular"
-            : bold
-              ? "DMSans_600SemiBold"
-              : "DMSans_400Regular",
+          fontFamily: mono || bold ? "DMSans_600SemiBold" : "DMSans_400Regular",
+          ...(mono ? { fontVariant: ["tabular-nums" as const] } : {}),
         },
         style,
       ]}
@@ -226,8 +232,11 @@ export function Button({
   compact = false,
   icon,
   style,
+  label,
 }: {
   title: string;
+  /** Accessible name when it should differ from the visible title. */
+  label?: string;
   onPress: () => void;
   secondary?: boolean;
   danger?: boolean;
@@ -239,21 +248,20 @@ export function Button({
   style?: any;
 }) {
   const { colors } = useTheme();
-  const fg =
-    secondary || ghost ? (danger ? colors.red : colors.purple) : "#FFFFFF";
-  const bg = ghost
-    ? "transparent"
+  const fg = ghost
+    ? danger
+      ? colors.red
+      : colors.purple
     : secondary
       ? danger
-        ? colors.redTint
-        : colors.tint
-      : danger
         ? colors.red
-        : BRAND;
+        : colors.text
+      : "#FFFFFF";
+  const bg = ghost ? "transparent" : secondary ? colors.card : danger ? colors.red : BRAND;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={title}
+      accessibilityLabel={label || title}
       accessibilityState={{ disabled: disabled || loading }}
       disabled={disabled || loading}
       onPress={() => {
@@ -262,10 +270,12 @@ export function Button({
       }}
       style={({ pressed }) => [
         {
-          minHeight: compact ? 38 : 50,
-          borderRadius: compact ? 12 : 16,
-          paddingVertical: compact ? 8 : 13,
-          paddingHorizontal: compact ? 14 : 18,
+          minHeight: compact ? 36 : 44,
+          borderRadius: 8,
+          borderWidth: secondary && !ghost ? 1 : 0,
+          borderColor: danger ? colors.red : colors.line,
+          paddingVertical: compact ? 7 : 11,
+          paddingHorizontal: compact ? 12 : 16,
           alignItems: "center",
           justifyContent: "center",
           flexDirection: "row",
@@ -284,7 +294,7 @@ export function Button({
       )}
       <Txt
         bold
-        size={compact ? 13 : 15}
+        size={compact ? 13 : 14}
         style={{ color: fg, textAlign: "center", flexShrink: 1 }}
         numberOfLines={compact ? 1 : 2}
       >
@@ -325,7 +335,7 @@ export function IconButton({
       style={({ pressed }) => ({
         width: size,
         height: size,
-        borderRadius: size / 2,
+        borderRadius: 8,
         alignItems: "center",
         justifyContent: "center",
         backgroundColor: filled
@@ -340,7 +350,7 @@ export function IconButton({
     >
       <Ionicons
         name={icon}
-        size={size * 0.5}
+        size={Math.round(size * 0.48)}
         color={tone === "neutral" ? colors.text : t.fg}
       />
     </Pressable>
@@ -377,7 +387,7 @@ export function Input({
               : focused
                 ? colors.purple
                 : colors.line,
-            backgroundColor: colors.sunken,
+            backgroundColor: colors.card,
           },
         ]}
       >
@@ -394,8 +404,8 @@ export function Input({
             color: colors.text,
             fontSize: 16,
             fontFamily: "DMSans_400Regular",
-            paddingVertical: 13,
-            minHeight: props.multiline ? 96 : undefined,
+            paddingVertical: 10,
+            minHeight: props.multiline ? 88 : undefined,
             textAlignVertical: props.multiline ? "top" : "center",
             ...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {}),
           }}
@@ -415,25 +425,36 @@ export function SearchBar({
   onChangeText,
   placeholder = "Search",
   label,
+  autoFocus,
+  onSubmitEditing,
 }: {
   value: string;
   onChangeText: (v: string) => void;
   placeholder?: string;
   label?: string;
+  autoFocus?: boolean;
+  onSubmitEditing?: () => void;
 }) {
   const { colors } = useTheme();
+  const inputRef = useRef<TextInput>(null);
+  // Focus once a sheet has finished opening; autoFocus loses to the modal's own focus.
+  useEffect(() => {
+    if (!autoFocus) return;
+    const timer = setTimeout(() => inputRef.current?.focus(), 350);
+    return () => clearTimeout(timer);
+  }, [autoFocus]);
   return (
     <View
       style={{
         flexDirection: "row",
         alignItems: "center",
         gap: 8,
-        borderRadius: 14,
+        borderRadius: 8,
         paddingHorizontal: 12,
         backgroundColor: colors.card,
         borderWidth: 1,
         borderColor: colors.line,
-        minHeight: 46,
+        minHeight: 44,
       }}
     >
       <Ionicons name="search" size={18} color={colors.muted} />
@@ -443,13 +464,16 @@ export function SearchBar({
         onChangeText={onChangeText}
         placeholder={placeholder}
         placeholderTextColor={colors.faint}
+        ref={inputRef}
         autoCorrect={false}
+        onSubmitEditing={onSubmitEditing}
+        returnKeyType={onSubmitEditing ? "done" : undefined}
         style={{
           flex: 1,
           color: colors.text,
           fontSize: 15,
           fontFamily: "DMSans_400Regular",
-          paddingVertical: 11,
+          paddingVertical: 10,
           ...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {}),
         }}
       />
@@ -521,8 +545,8 @@ export function Sheet({
           style={{
             maxHeight: "92%",
             backgroundColor: colors.bg,
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
+            borderTopLeftRadius: 16,
+            borderTopRightRadius: 16,
             paddingBottom: footer ? 0 : Math.max(insets.bottom, 12),
             overflow: "hidden",
             transform: [
@@ -555,7 +579,7 @@ export function Sheet({
               <View style={{ flex: 1, gap: 2 }}>
                 {!!title && (
                   <Txt
-                    style={{ fontFamily: "Montserrat_700Bold", fontSize: 20 }}
+                    style={{ fontFamily: "DMSans_600SemiBold", fontSize: 18 }}
                   >
                     {title}
                   </Txt>
@@ -666,6 +690,17 @@ export function Choice({
   // Treat null, undefined and "" as the same "nothing chosen" value.
   const same = (a: any, b: any) => a === b || ((a == null || a === "") && (b == null || b === ""));
   const current = options.find((o) => same(o.value, value));
+  const searchable = options.length > 6;
+  const needle = search.trim().toLowerCase();
+  // Names starting with what was typed come first, then any other match.
+  const matches = needle
+    ? [
+        ...options.filter((o) => o.label.toLowerCase().startsWith(needle)),
+        ...options.filter(
+          (o) => !o.label.toLowerCase().startsWith(needle) && o.label.toLowerCase().includes(needle),
+        ),
+      ]
+    : options;
   return (
     <View style={{ gap: 7 }}>
       {!compact && (
@@ -682,8 +717,8 @@ export function Choice({
           styles.between,
           {
             borderColor: colors.line,
-            backgroundColor: compact ? colors.card : colors.sunken,
-            ...(compact ? { minHeight: 40, paddingVertical: 8 } : {}),
+            backgroundColor: colors.card,
+            ...(compact ? { minHeight: 38, paddingVertical: 7 } : {}),
           },
         ]}
       >
@@ -708,15 +743,22 @@ export function Choice({
         }}
         title={label}
       >
-        {options.length > 8 && (
-          <SearchBar value={search} onChangeText={setSearch} />
+        {searchable && (
+          <SearchBar
+            value={search}
+            onChangeText={setSearch}
+            placeholder={`Search ${label.toLowerCase()}`}
+            autoFocus
+            onSubmitEditing={() => {
+              if (!matches[0]) return;
+              onChange(matches[0].value);
+              setOpen(false);
+              setSearch("");
+            }}
+          />
         )}
         <Group>
-          {options
-            .filter((o) =>
-              o.label.toLowerCase().includes(search.toLowerCase()),
-            )
-            .map((o, i) => (
+          {matches.map((o, i) => (
               <Pressable
                 key={i}
                 accessibilityRole="button"
@@ -824,17 +866,17 @@ export function Checkbox({
   const box = (
     <View
       style={{
-        width: 24,
-        height: 24,
-        borderRadius: 8,
-        borderWidth: 2,
+        width: 20,
+        height: 20,
+        borderRadius: 4,
+        borderWidth: 1.5,
         borderColor: checked ? colors.purple : colors.faint,
         backgroundColor: checked ? colors.purple : "transparent",
         alignItems: "center",
         justifyContent: "center",
       }}
     >
-      {checked && <Ionicons name="checkmark" size={16} color="#FFFFFF" />}
+      {checked && <Ionicons name="checkmark" size={14} color="#FFFFFF" />}
     </View>
   );
   if (!onChange) return box;
@@ -890,15 +932,15 @@ export function Chips({
               flexDirection: "row",
               alignItems: "center",
               gap: 6,
-              borderRadius: 24,
-              paddingHorizontal: 15,
-              paddingVertical: 9,
-              backgroundColor: on ? colors.text : colors.card,
+              borderRadius: 8,
+              paddingHorizontal: 14,
+              paddingVertical: 7,
+              backgroundColor: on ? colors.tint : colors.card,
               borderWidth: 1,
-              borderColor: on ? colors.text : colors.line,
+              borderColor: on ? colors.purple : colors.line,
             }}
           >
-            <Txt bold size={13} style={{ color: on ? colors.bg : colors.muted }}>
+            <Txt bold size={13} style={{ color: on ? colors.purple : colors.muted }}>
               {labels?.[v] || v}
             </Txt>
             {counts?.[v] != null && (
@@ -941,7 +983,7 @@ export function Segmented({
       style={{
         flexDirection: "row",
         backgroundColor: colors.line,
-        borderRadius: 14,
+        borderRadius: 8,
         padding: 3,
       }}
     >
@@ -959,8 +1001,8 @@ export function Segmented({
             }}
             style={{
               flex: 1,
-              paddingVertical: 8,
-              borderRadius: 11,
+              paddingVertical: 7,
+              borderRadius: 6,
               alignItems: "center",
               backgroundColor: on ? colors.card : "transparent",
               ...(on
@@ -1033,23 +1075,77 @@ export function Footer({ children, inTab = false }: any) {
     </SafeAreaView>
   );
 }
-export function Heading({ title, subtitle, right, eyebrow }: any) {
+export function Heading({ title, subtitle, right }: any) {
   return (
-    <View style={[styles.between, { alignItems: "flex-end" }]}>
-      <View style={{ flex: 1, gap: 4 }}>
-        {!!eyebrow && (
-          <Txt
-            muted
-            bold
-            size={12}
-            style={{ textTransform: "uppercase", letterSpacing: 1 }}
-          >
-            {eyebrow}
+    <View style={[styles.between, { alignItems: "center" }]}>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Txt style={styles.title}>{title}</Txt>
+        {!!subtitle && (
+          <Txt muted size={13}>
+            {subtitle}
           </Txt>
         )}
-        <Txt style={styles.title}>{title}</Txt>
-        {!!subtitle && <Txt muted>{subtitle}</Txt>}
       </View>
+      {right}
+    </View>
+  );
+}
+/** Underline tabs, as on the web's page headers. */
+export function Tabs({
+  values,
+  value,
+  onChange,
+  labels,
+}: {
+  values: string[];
+  value: string;
+  onChange: (value: string) => void;
+  labels?: Record<string, string>;
+}) {
+  const { colors } = useTheme();
+  return (
+    <View style={{ flexDirection: "row", borderBottomWidth: 1, borderColor: colors.line, gap: 20 }}>
+      {values.map((v) => {
+        const on = v === value;
+        return (
+          <Pressable
+            key={v}
+            accessibilityRole="button"
+            accessibilityLabel={labels?.[v] || v}
+            accessibilityState={{ selected: on }}
+            onPress={() => {
+              tap();
+              onChange(v);
+            }}
+            style={{
+              paddingVertical: 10,
+              marginBottom: -1,
+              borderBottomWidth: 2,
+              borderColor: on ? colors.purple : "transparent",
+            }}
+          >
+            <Txt bold size={14} style={{ color: on ? colors.purple : colors.muted }}>
+              {labels?.[v] || v}
+            </Txt>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+/** "23 OCTOBER 2026" divider used to group transactions by day. */
+export function DateHeader({ date, right }: { date: string; right?: React.ReactNode }) {
+  const { colors } = useTheme();
+  const d = new Date(`${String(date).slice(0, 10)}T12:00:00`);
+  const label = Number.isFinite(d.getTime())
+    ? d.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }).toUpperCase()
+    : String(date);
+  return (
+    <View style={[styles.row, { gap: 10, paddingTop: 16, paddingBottom: 8 }]}>
+      <Txt bold size={12} style={{ letterSpacing: 0.4 }}>
+        {label}
+      </Txt>
+      <View style={{ flex: 1, height: 1, backgroundColor: colors.line }} />
       {right}
     </View>
   );
@@ -1072,7 +1168,7 @@ export function Section({
     <View style={{ gap: 10 }}>
       {(title || action) && (
         <View style={[styles.between, { paddingHorizontal: 4 }]}>
-          <Txt bold size={17}>
+          <Txt bold size={16}>
             {title}
           </Txt>
           {action && onAction && (
@@ -1107,7 +1203,7 @@ export function Group({ children, style }: any) {
     <View
       style={[
         {
-          borderRadius: 20,
+          borderRadius: 8,
           borderWidth: 1,
           borderColor: colors.line,
           backgroundColor: colors.card,
@@ -1152,7 +1248,7 @@ export function IconBubble({
       style={{
         width: size,
         height: size,
-        borderRadius: size * 0.34,
+        borderRadius: 8,
         backgroundColor: color ? `${color}22` : t.bg,
         alignItems: "center",
         justifyContent: "center",
@@ -1204,7 +1300,16 @@ export function ListItem({
   const { colors } = useTheme();
   const body = (
     <>
-      {left ?? (icon ? <IconBubble icon={icon} tone={tone} color={color} size={36} /> : null)}
+      {left ??
+        (icon ? (
+          <Ionicons
+            name={icon}
+            size={20}
+            color={color || (tone === "neutral" ? colors.muted : toneColors(colors, tone).fg)}
+          />
+        ) : color ? (
+          <Dot color={color} />
+        ) : null)}
       <View style={{ flex: 1, gap: 2 }}>
         {typeof title === "string" ? (
           <Txt bold numberOfLines={2} tone={titleTone}>
@@ -1252,9 +1357,9 @@ export function ListItem({
     flexDirection: "row" as const,
     alignItems: "center" as const,
     gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-    minHeight: 56,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    minHeight: 52,
     opacity: disabled ? 0.45 : 1,
   };
   if (!onPress) return <View style={style}>{body}</View>;
@@ -1325,36 +1430,27 @@ export function Stat({
   label,
   value,
   tone,
-  icon,
   detail,
   onPress,
 }: {
   label: string;
   value: string;
   tone?: Tone;
-  icon?: any;
   detail?: string;
   onPress?: () => void;
 }) {
   const { colors } = useTheme();
   return (
-    <Card
-      onPress={onPress}
-      accessibilityLabel={label}
-      style={{ flex: 1, minWidth: "45%", padding: 14, gap: 8, borderRadius: 18 }}
-    >
-      <View style={[styles.row, { gap: 8 }]}>
-        {icon && <IconBubble icon={icon} tone={tone || "purple"} size={28} />}
-        <Txt muted size={12} bold numberOfLines={1} style={{ flex: 1 }}>
-          {label}
-        </Txt>
-      </View>
+    <Card onPress={onPress} accessibilityLabel={label} style={{ flex: 1, minWidth: "45%", gap: 6 }}>
+      <Txt muted size={13} bold numberOfLines={1}>
+        {label}
+      </Txt>
       <Txt
         mono
-        size={18}
+        size={20}
         numberOfLines={1}
         adjustsFontSizeToFit
-        style={{ color: tone ? toneColors(colors, tone).fg : colors.text }}
+        style={{ color: tone && tone !== "purple" ? toneColors(colors, tone).fg : colors.text }}
       >
         {value}
       </Txt>
@@ -1457,8 +1553,8 @@ export function Banner({
       style={{
         flexDirection: "row",
         gap: 12,
-        padding: 14,
-        borderRadius: 18,
+        padding: 12,
+        borderRadius: 8,
         backgroundColor: t.bg,
       }}
     >
@@ -1500,8 +1596,8 @@ export function Empty({
 }) {
   return (
     <View style={{ alignItems: "center", gap: 10, paddingVertical: 32, paddingHorizontal: 20 }}>
-      <IconBubble icon={icon} size={56} />
-      <Txt bold size={17} style={{ textAlign: "center" }}>
+      <Ionicons name={icon} size={32} color={BRAND} />
+      <Txt bold size={16} style={{ textAlign: "center" }}>
         {title}
       </Txt>
       {!!message && (
@@ -1534,7 +1630,7 @@ export function State({ loading, error, reload, empty, data }: any) {
   if (empty)
     return (
       <Card>
-        <Empty title="A fresh start" message={empty} />
+        <Empty title={empty} />
       </Card>
     );
   return null;
@@ -1740,7 +1836,7 @@ function ToastHost() {
           alignSelf: "center",
           paddingHorizontal: 16,
           paddingVertical: 12,
-          borderRadius: 16,
+          borderRadius: 8,
           backgroundColor: colors.text,
           shadowColor: "#000",
           shadowOpacity: 0.2,
@@ -1971,26 +2067,21 @@ export function Form({
     </View>
   );
 }
-const CATEGORY_ICONS: [RegExp, string][] = [
-  [/food|dining|restaurant|eat|meal|grocer|supermarket|cafe|coffee/i, "restaurant-outline"],
-  [/transport|taxi|grab|bus|mrt|train|transit|fuel|petrol|car|parking/i, "bus-outline"],
-  [/flight|travel|hotel|trip|accommodation|airbnb/i, "airplane-outline"],
-  [/shop|retail|clothing|fashion|amazon|shopee|lazada/i, "bag-handle-outline"],
-  [/bill|utilit|electric|water|internet|phone|telco|mobile/i, "flash-outline"],
-  [/rent|housing|home|mortgage/i, "home-outline"],
-  [/health|medical|doctor|clinic|pharma|dental|insurance/i, "medkit-outline"],
-  [/entertain|movie|game|music|stream|netflix|spotify|subscription/i, "film-outline"],
-  [/salary|income|payroll|bonus|interest|dividend/i, "cash-outline"],
-  [/transfer|internal/i, "swap-horizontal-outline"],
-  [/invest|stock|crypto|saving/i, "trending-up-outline"],
-  [/gift|donat|charity/i, "gift-outline"],
-  [/educat|school|course|book/i, "school-outline"],
-  [/fee|charge|tax/i, "receipt-outline"],
-  [/reimburse|refund/i, "return-down-back-outline"],
-];
-export const categoryIcon = (name?: string) =>
-  (CATEGORY_ICONS.find(([re]) => re.test(name || ""))?.[1] ||
-    "pricetag-outline") as any;
+/** Amount with its currency code, as the web lists show it: "SGD 59.88". */
+export const moneyCode = (amount: any, currency = "SGD") => {
+  const n = Math.abs(Number(amount || 0));
+  try {
+    const digits = new Intl.NumberFormat("en-SG", { style: "currency", currency }).resolvedOptions()
+      .maximumFractionDigits;
+    return `${currency} ${n.toLocaleString("en-SG", { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+  } catch {
+    return `${currency} ${n.toFixed(2)}`;
+  }
+};
+/**
+ * One transaction, styled like the web's transaction card: a left edge in the
+ * account (or wallet) colour, label, description, a category dot and the amount.
+ */
 export function TransactionRow({
   item,
   onPress,
@@ -1998,7 +2089,7 @@ export function TransactionRow({
   selected,
   selectable,
   baseCurrency,
-  showDate = true,
+  showDate = false,
   right,
 }: any) {
   const { colors } = useTheme();
@@ -2006,34 +2097,26 @@ export function TransactionRow({
   const income = tripEntry
     ? ["reimbursement", "funding_in"].includes(item.type)
     : Number(item.amountIn || 0) > 0 || item.type === "reimbursement";
-  const category = item.category?.name;
+  const internal = item.linkage?.type === "internal";
   const walletColor =
     item.wallet?.id !== "__external__" && !/^#f{3}(f{3})?$/i.test(item.wallet?.color || "")
       ? item.wallet?.color
       : undefined;
-  const catColor = item.category?.color || walletColor;
-  const internal = item.linkage?.type === "internal";
+  const edge = item.accountColor || walletColor;
+  const category = item.category?.name || (tripEntry ? null : "Uncategorized");
   const badges: { label: string; tone: Tone }[] = [];
   if (internal) badges.push({ label: "Internal", tone: "blue" });
-  if (item.linkage?.type === "reimbursement" || item.type === "reimbursement")
-    badges.push({ label: "Reimbursement", tone: "green" });
-  if (item.linkage?.reimbursedByAllocations?.length)
-    badges.push({ label: "Reimbursed", tone: "green" });
-  if (item.type === "funding_out") badges.push({ label: "Transfer out", tone: "amber" });
-  if (item.type === "funding_in") badges.push({ label: "Funding", tone: "purple" });
+  if (item.linkage?.type === "reimbursement" && !tripEntry) badges.push({ label: "Reimbursement", tone: "green" });
+  if (item.linkage?.reimbursedByAllocations?.length) badges.push({ label: "Reimbursed", tone: "green" });
   if (item.metadata?.sourceDetached) badges.push({ label: "Bank row removed", tone: "red" });
-  const subtitle = [
+  const amount = tripEntry ? item.localAmount : income ? item.amountIn : item.amountOut;
+  const currency = item.localCurrency || item.currency || "SGD";
+  const meta = [
     showDate ? fmtDate(item.date, false) : null,
-    category || item.wallet?.name || (tripEntry ? null : "Uncategorized"),
-    !tripEntry && item.accountIdentifier ? item.accountLabel || item.accountIdentifier : null,
+    tripEntry ? item.wallet?.name && item.wallet.id !== "__external__" ? item.wallet.name : "No wallet" : item.accountLabel,
   ]
     .filter(Boolean)
     .join(" · ");
-  const amount = tripEntry
-    ? item.localAmount
-    : income
-      ? item.amountIn
-      : item.amountOut;
   return (
     <Pressable
       accessibilityRole="button"
@@ -2044,45 +2127,38 @@ export function TransactionRow({
       disabled={!onPress && !onLongPress}
       style={({ pressed }) => ({
         flexDirection: "row",
-        alignItems: "center",
-        gap: 12,
+        alignItems: "flex-start",
+        gap: 10,
         paddingVertical: 12,
-        paddingHorizontal: 4,
-        borderRadius: 14,
-        backgroundColor: selected
-          ? colors.tint
-          : pressed
-            ? colors.sunken
-            : "transparent",
+        paddingLeft: 12,
+        paddingRight: 4,
+        borderLeftWidth: 3,
+        borderLeftColor: edge || "transparent",
+        backgroundColor: selected ? colors.tint : pressed ? colors.sunken : "transparent",
       })}
     >
-      {selectable || selected ? (
-        <View style={{ width: 40, alignItems: "center" }}>
+      {(selectable || selected) && (
+        <View style={{ paddingTop: 2 }}>
           <Checkbox checked={!!selected} />
         </View>
-      ) : (
-        <IconBubble
-          icon={
-            internal
-              ? "swap-horizontal-outline"
-              : category
-                ? categoryIcon(category)
-                : income
-                  ? "arrow-down-outline"
-                  : "arrow-up-outline"
-          }
-          color={catColor || undefined}
-          tone={income ? "green" : "purple"}
-          size={40}
-        />
       )}
       <View style={{ flex: 1, gap: 2 }}>
         <Txt bold numberOfLines={1}>
           {item.label || item.description}
         </Txt>
-        <Txt muted size={12} numberOfLines={1}>
-          {subtitle}
-        </Txt>
+        {!!item.label && item.label !== item.description && (
+          <Txt muted size={12} numberOfLines={1}>
+            {item.description}
+          </Txt>
+        )}
+        {!!(category || meta) && (
+          <View style={[styles.row, { gap: 5 }]}>
+            {!!category && <Dot color={item.category?.color || colors.faint} size={8} />}
+            <Txt size={12} muted numberOfLines={1} style={{ flexShrink: 1 }}>
+              {[category, meta].filter(Boolean).join(" · ")}
+            </Txt>
+          </View>
+        )}
         {badges.length > 0 && (
           <View style={{ flexDirection: "row", gap: 4, marginTop: 2, flexWrap: "wrap" }}>
             {badges.slice(0, 2).map((b) => (
@@ -2095,21 +2171,16 @@ export function TransactionRow({
         <Txt
           mono
           size={14}
-          style={{
-            color: internal ? colors.muted : income ? colors.green : colors.text,
-          }}
+          style={{ color: internal ? colors.muted : income ? colors.green : colors.red }}
         >
-          {income ? "+" : "−"}
-          {money(amount, item.localCurrency || item.currency || "SGD")}
+          {income ? "+" : "-"}
+          {moneyCode(amount, currency)}
         </Txt>
-        {tripEntry &&
-          baseCurrency &&
-          item.baseAmount != null &&
-          item.localCurrency !== baseCurrency && (
-            <Txt muted mono size={11}>
-              {money(item.baseAmount, baseCurrency)}
-            </Txt>
-          )}
+        {tripEntry && baseCurrency && item.baseAmount != null && item.localCurrency !== baseCurrency && (
+          <Txt muted size={11}>
+            {moneyCode(item.baseAmount, baseCurrency)}
+          </Txt>
+        )}
       </View>
       {right}
     </Pressable>

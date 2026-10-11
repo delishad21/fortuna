@@ -54,7 +54,7 @@ export function ActionCard({
         alignItems: "center",
         gap: 12,
         padding: 12,
-        borderRadius: 14,
+        borderRadius: 8,
         borderWidth: 1,
         borderColor: colors.line,
         backgroundColor: colors.card,

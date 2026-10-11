@@ -5,6 +5,7 @@ import { useApi, useResource } from "./api";
 import {
   ActionMenu,
   Banner,
+  BRAND,
   Button,
   Card,
   Chips,
@@ -16,7 +17,6 @@ import {
   Group,
   Heading,
   humanize,
-  IconBubble,
   Input,
   ListItem,
   MultiSelect,
@@ -71,7 +71,11 @@ export function SettingsScreen({ navigation }: any) {
   return (
     <Screen>
       <Card onPress={() => navigation.navigate("Profile")} accessibilityLabel="Edit profile" style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
-        <IconBubble text={(u?.name || "?").slice(0, 1).toUpperCase()} size={56} />
+        <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: BRAND, alignItems: "center", justifyContent: "center" }}>
+          <Txt bold size={18} style={{ color: "#FFFFFF" }}>
+            {(u?.name || "?").slice(0, 1).toUpperCase()}
+          </Txt>
+        </View>
         <View style={{ flex: 1 }}>
           <Txt bold size={19}>
             {u?.name || "Your profile"}
@@ -87,9 +91,9 @@ export function SettingsScreen({ navigation }: any) {
       </Section>
       <Section title="Organize">
         <Group>
-          <ListItem icon="pricetags-outline" title="Categories" subtitle="Names and colors" onPress={() => navigation.navigate("Manage", { kind: "categories" })} />
-          <ListItem icon="card-outline" title="Accounts" subtitle="Friendly names for account numbers" onPress={() => navigation.navigate("Manage", { kind: "accounts" })} />
-          <ListItem icon="git-branch-outline" title="Import rules" subtitle="Label and categorize rows as they import" onPress={() => navigation.navigate("Manage", { kind: "rules" })} />
+          <ListItem icon="pricetags-outline" title="Categories" onPress={() => navigation.navigate("Manage", { kind: "categories" })} />
+          <ListItem icon="card-outline" title="Accounts" onPress={() => navigation.navigate("Manage", { kind: "accounts" })} />
+          <ListItem icon="git-branch-outline" title="Import rules" onPress={() => navigation.navigate("Manage", { kind: "rules" })} />
           <ListItem
             icon="bulb-outline"
             title="Learned rules"
@@ -101,13 +105,13 @@ export function SettingsScreen({ navigation }: any) {
       <Section title="Preferences">
         <Group>
           <ListItem icon="sparkles-outline" title="Auto-labeling & analytics" subtitle={u ? (u.autoLabelEnabled ? `Auto-apply at ${Math.round(u.autoLabelThreshold * 100)}% confidence` : "Suggestions only") : undefined} onPress={() => navigation.navigate("Preferences")} />
-          <ListItem icon="chatbubbles-outline" title="AI connection" subtitle="Assistant provider and memory" onPress={() => navigation.navigate("AIConnection")} />
+          <ListItem icon="chatbubbles-outline" title="AI connection" onPress={() => navigation.navigate("AIConnection")} />
         </Group>
       </Section>
       <Section title="Security">
         <Group>
           <ListItem icon="key-outline" title="Change password" onPress={() => navigation.navigate("Password")} />
-          <ListItem icon="phone-portrait-outline" title="API tokens & sessions" subtitle="Integrations and signed-in devices" onPress={() => navigation.navigate("Tokens")} />
+          <ListItem icon="phone-portrait-outline" title="API tokens & sessions" onPress={() => navigation.navigate("Tokens")} />
         </Group>
       </Section>
       <Button
@@ -275,7 +279,7 @@ export function PreferencesScreen() {
 }
 const configs: Record<string, { title: string; get: string; noun: string; subtitle: string }> = {
   categories: { title: "Categories", get: "getCategories", noun: "category", subtitle: "Trip category names are fixed; you can change their color." },
-  accounts: { title: "Accounts", get: "getAccountNumbers", noun: "account", subtitle: "Give account numbers a name you'll recognize." },
+  accounts: { title: "Accounts", get: "getAccountNumbers", noun: "account", subtitle: "" },
   rules: { title: "Import rules", get: "getImportRules", noun: "rule", subtitle: "Applied in priority order to rows as statements import." },
 };
 export function ManageScreen({ route, navigation }: any) {
@@ -299,7 +303,7 @@ export function ManageScreen({ route, navigation }: any) {
     <Screen refreshControl={<RefreshControl refreshing={result.loading && !!result.data} onRefresh={result.reload} />}>
       <Heading
         title={config.title}
-        subtitle={config.subtitle}
+        subtitle={config.subtitle || undefined}
         right={<Button title="Add" compact icon="add" onPress={() => navigation.navigate("ManageEditor", { kind })} />}
       />
       <State {...result} />
@@ -494,7 +498,6 @@ export function PatternsScreen({ navigation }: any) {
     <Screen refreshControl={<RefreshControl refreshing={patterns.loading && !!patterns.data} onRefresh={patterns.reload} />}>
       <Heading
         title="Learned rules"
-        subtitle="Patterns Fortuna learned from the labels and categories you've used."
         right={
           <ActionMenu
             actions={[
@@ -513,10 +516,10 @@ export function PatternsScreen({ navigation }: any) {
         }
       />
       <StatGrid>
-        <Stat icon="bulb-outline" label="Learned" value={String(all.length)} />
-        <Stat icon="flash-outline" tone="green" label="Auto-apply" value={String(groups["Auto-apply"].length)} />
-        <Stat icon="pause-outline" tone="neutral" label="Disabled" value={String(groups.Disabled.length)} />
-        <Stat icon="help-outline" tone="amber" label="Unresolved" value={String(groups.Unresolved.length)} />
+        <Stat label="Learned" value={String(all.length)} />
+        <Stat tone="green" label="Auto-apply" value={String(groups["Auto-apply"].length)} />
+        <Stat tone="neutral" label="Disabled" value={String(groups.Disabled.length)} />
+        <Stat tone="amber" label="Unresolved" value={String(groups.Unresolved.length)} />
       </StatGrid>
       <Chips values={Object.keys(groups)} value={filter} onChange={setFilter} counts={Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, v.length]))} />
       <State {...patterns} />
@@ -622,7 +625,6 @@ export function TokensScreen() {
     <Screen refreshControl={<RefreshControl refreshing={result.loading && !!result.data} onRefresh={result.reload} />}>
       <Heading
         title="Tokens & sessions"
-        subtitle="Control which integrations and devices can reach your account."
         right={<Button title="New token" compact icon="add" onPress={() => setCreating(true)} />}
       />
       {!!token && (

@@ -12,7 +12,6 @@ import {
   fmtDate,
   Group,
   Heading,
-  IconBubble,
   Input,
   ListItem,
   money,
@@ -60,7 +59,7 @@ export function MembersScreen({ route, navigation }: any) {
     <Screen refreshControl={<RefreshControl refreshing={false} onRefresh={() => { void trip.reload(); void members.reload(); }} />}>
       <Heading
         title="Members"
-        subtitle={shared ? "Each member keeps their own copy of the trip and adds their own spending." : "Share this trip with other Fortuna users."}
+        subtitle={shared ? undefined : "Not shared yet"}
       />
       {shared && role !== "owner" && (
         <Banner
@@ -78,7 +77,6 @@ export function MembersScreen({ route, navigation }: any) {
         {(members.data || []).map((m: any) => (
           <ListItem
             key={m.memberId}
-            left={<IconBubble text={m.name.slice(0, 1).toUpperCase()} size={36} tone={m.status === "invited" ? "amber" : "purple"} />}
             title={`${m.name}${m.isMe ? " (you)" : ""}`}
             subtitle={`${ROLE_LABEL[m.role]}${m.status === "invited" ? " · Invited" : ""}`}
             right={
@@ -169,7 +167,7 @@ export function SharedOverviewScreen({ route, navigation }: any) {
   const base = o?.baseCurrency || "SGD";
   return (
     <Screen refreshControl={<RefreshControl refreshing={overview.loading && !!o} onRefresh={overview.reload} />}>
-      <Heading title="Together" subtitle="Everyone's spending on this shared trip." />
+      <Heading title="Shared overview" />
       {overview.error ? (
         <Card>
           <Empty icon="people-outline" title="This trip isn't shared" message={overview.error} action="Members" onAction={() => navigation.navigate("Members", { tripId })} />
@@ -180,9 +178,9 @@ export function SharedOverviewScreen({ route, navigation }: any) {
       {o && (
         <>
           <StatGrid>
-            <Stat icon="cart-outline" label="Spent together" value={money(o.totals.combinedSpent, base)} />
-            <Stat icon="return-down-back-outline" tone="green" label="Reimbursed" value={money(o.totals.combinedReimbursed, base)} />
-            <Stat icon="airplane-outline" tone="purple" label="Net trip cost" value={money(o.totals.combinedNet, base)} />
+            <Stat label="Spent together" value={money(o.totals.combinedSpent, base)} />
+            <Stat tone="green" label="Reimbursed" value={money(o.totals.combinedReimbursed, base)} />
+            <Stat tone="purple" label="Net trip cost" value={money(o.totals.combinedNet, base)} />
           </StatGrid>
           <Section title="Settle up" hint="Whoever pays records it as a settlement in their own transactions.">
             {o.settleUp.length === 0 ? (
@@ -225,7 +223,7 @@ export function SharedOverviewScreen({ route, navigation }: any) {
               {o.entries.map((e: any) => (
                 <ListItem
                   key={e.id}
-                  left={<IconBubble text={e.member.name.slice(0, 1).toUpperCase()} color={e.category?.color || undefined} size={36} />}
+                  color={e.category?.color || "#94a3b8"}
                   title={e.title}
                   subtitle={`${fmtDate(e.date, false)} · ${e.member.name}${e.type === "reimbursement" ? " · Reimbursement" : e.category ? ` · ${e.category.name}` : ""}${e.isShare && e.owedTo ? ` · Share, owed to ${e.owedTo}` : !e.isShare && e.owedTo ? ` · Owed to ${e.owedTo}` : ""}${e.shares?.length ? `\nShares: ${e.shares.map((s: any) => `${s.name} ${money(s.baseAmount, base)}`).join(", ")}` : ""}`}
                   value={`${e.type === "reimbursement" ? "+" : ""}${money(e.baseAmount, base)}`}
