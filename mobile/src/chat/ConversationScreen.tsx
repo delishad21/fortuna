@@ -12,7 +12,7 @@ import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
-import { Button, Input, Txt, useTheme, confirm } from "../ui";
+import { Button, IconButton, Input, Txt, useTheme, confirm } from "../ui";
 import {
   useChatApi,
   Conversation,
@@ -631,26 +631,27 @@ export function ChatConversationScreen({ route, navigation }: any) {
           style={{ maxHeight: 130, minHeight: 55 }}
         />
         <View style={{ flexDirection: "row", gap: 10 }}>
-          <View style={{ flex: 1 }}>
-            <Button
-              title="Photos"
-              secondary
-              disabled={busy || files.length >= 5 || generatingRun(run)}
-              onPress={() => void attachPhotos()}
-            />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Button
-              title="Files"
-              secondary
-              disabled={busy || files.length >= 5 || generatingRun(run)}
-              onPress={() => void attachFile()}
-            />
-          </View>
+          <IconButton
+            icon="image-outline"
+            label="Photos"
+            tone="purple"
+            size={50}
+            disabled={busy || files.length >= 5 || generatingRun(run)}
+            onPress={() => void attachPhotos()}
+          />
+          <IconButton
+            icon="attach-outline"
+            label="Files"
+            tone="purple"
+            size={50}
+            disabled={busy || files.length >= 5 || generatingRun(run)}
+            onPress={() => void attachFile()}
+          />
           <View style={{ flex: 1 }}>
             {generatingRun(run) ? (
               <Button
                 title="Stop"
+                icon="stop-circle-outline"
                 secondary
                 disabled={busy}
                 onPress={() =>
@@ -666,6 +667,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
             ) : (
               <Button
                 title="Send message"
+                icon="send"
                 disabled={busy || (!text.trim() && !files.length)}
                 onPress={() => void send()}
               />

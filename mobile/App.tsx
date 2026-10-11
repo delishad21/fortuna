@@ -1,10 +1,10 @@
-import {ChatTransactionScreen} from './src/chat/TransactionScreen';
-import {ChatScreen} from './src/chat/ChatScreen';
-import {ChatConversationScreen} from './src/chat/ConversationScreen';
-import {ChatApprovalScreen} from './src/chat/ApprovalScreen';
-import {AIConnectionScreen} from './src/chat/ConnectionScreen';
+import { ChatTransactionScreen } from "./src/chat/TransactionScreen";
+import { ChatScreen } from "./src/chat/ChatScreen";
+import { ChatConversationScreen } from "./src/chat/ConversationScreen";
+import { ChatApprovalScreen } from "./src/chat/ApprovalScreen";
+import { AIConnectionScreen } from "./src/chat/ConnectionScreen";
 import React, { useState } from "react";
-import { ActivityIndicator, Image, Pressable, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, ScrollView, View } from "react-native";
 import {
   NavigationContainer,
   DarkTheme,
@@ -15,6 +15,7 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { StatusBar } from "expo-status-bar";
+import { LinearGradient } from "expo-linear-gradient";
 import { useFonts } from "expo-font";
 import { DMSans_400Regular } from "@expo-google-fonts/dm-sans/400Regular";
 import { DMSans_600SemiBold } from "@expo-google-fonts/dm-sans/600SemiBold";
@@ -22,46 +23,38 @@ import { Montserrat_700Bold } from "@expo-google-fonts/montserrat/700Bold";
 import { Montserrat_800ExtraBold } from "@expo-google-fonts/montserrat/800ExtraBold";
 import { DMMono_400Regular } from "@expo-google-fonts/dm-mono/400Regular";
 import { ApiProvider, useApi, normalizeServer } from "./src/api";
-import {
-  Button,
-  Card,
-  Form,
-  Heading,
-  Screen,
-  styles,
-  ThemeProvider,
-  Txt,
-  useTheme,
-} from "./src/ui";
+import { BRAND, Button, Form, styles, ThemeProvider, Txt, useTheme } from "./src/ui";
 import { HomeScreen, AnalyticsScreen } from "./src/home";
 import {
   TransactionsScreen,
   TransactionScreen,
   SplitScreen,
-  ReimbursementScreen,
+  LinkPickerScreen,
 } from "./src/transactions";
 import {
-  ImportManagementScreen,
-  ImportProvider,
-  ImportScreen,
-  ImportReviewScreen,
-  ImportRowScreen,
-  ImportHistoryScreen,
+  ImportsScreen,
+  DraftReviewScreen,
   ImportDetailScreen,
-  DraftsScreen,
-  DraftScreen,
-  DraftRowScreen,
 } from "./src/imports";
+import { TripsScreen, TripEditorScreen } from "./src/trips/list";
+import { TripScreen } from "./src/trips/trip";
+import { TripEntriesScreen, TripEntryScreen } from "./src/trips/entries";
 import {
-  TripsScreen,
-  TripScreen,
-  TripEditorScreen,
-  WalletScreen,
+  FundingListScreen,
   FundingScreen,
-  TripEntriesScreen,
-  TripEntryScreen,
-  BankPickerScreen,
-} from "./src/trips";
+  FundingReviewScreen,
+} from "./src/trips/funding";
+import {
+  WalletsScreen,
+  WalletScreen,
+  WalletAccountsScreen,
+  CarryOverScreen,
+} from "./src/trips/wallets";
+import { PeopleScreen, SettleScreen, ShareCostScreen } from "./src/trips/people";
+import { MembersScreen, SharedOverviewScreen } from "./src/trips/sharing";
+import { TripImportScreen } from "./src/trips/import";
+import { TripReimbursementScreen } from "./src/trips/reimburse";
+import { BankPickerScreen } from "./src/trips/bank";
 import {
   SettingsScreen,
   ProfileScreen,
@@ -69,9 +62,9 @@ import {
   PreferencesScreen,
   ManageScreen,
   ManageEditorScreen,
+  PatternsScreen,
   TokensScreen,
 } from "./src/settings";
-import { ImportAllocationScreen } from "./src/import-allocation";
 const Stack = createNativeStackNavigator();
 const Tabs = createBottomTabNavigator();
 function BrandTitle() {
@@ -79,47 +72,64 @@ function BrandTitle() {
     <View style={{ flexDirection: "row", gap: 9, alignItems: "center" }}>
       <Image
         source={require("./assets/icon.png")}
-        style={{ width: 30, height: 30, borderRadius: 15 }}
+        style={{ width: 28, height: 28, borderRadius: 14 }}
       />
-      <Txt
-        style={{ fontFamily: "Montserrat_800ExtraBold", letterSpacing: 1.2 }}
-      >
+      <Txt style={{ fontFamily: "Montserrat_800ExtraBold", letterSpacing: 1.2 }}>
         FORTUNA
       </Txt>
     </View>
   );
 }
+const TAB_ICONS: Record<string, [string, string]> = {
+  Home: ["home", "home-outline"],
+  Transactions: ["receipt", "receipt-outline"],
+  Import: ["file-tray-full", "file-tray-full-outline"],
+  Trips: ["airplane", "airplane-outline"],
+  Chat: ["chatbubble-ellipses", "chatbubble-ellipses-outline"],
+};
 function MainTabs() {
   const { colors } = useTheme();
   return (
     <Tabs.Navigator
       screenOptions={({ route, navigation }) => ({
         headerTitle: () => <BrandTitle />,
-        headerRight: () => <Pressable accessibilityRole="button" accessibilityLabel="Settings" onPress={()=>navigation.navigate("Settings")} style={{padding:14}}><Ionicons name="settings-outline" size={23} color={colors.text}/></Pressable>,
-        headerStyle: { backgroundColor: colors.card },
+        headerTitleAlign: "left",
+        headerRight: () => (
+          <View style={{ flexDirection: "row", paddingRight: 8 }}>
+            {route.name === "Home" && (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Analytics"
+                onPress={() => navigation.navigate("Analytics")}
+                style={{ padding: 10 }}
+              >
+                <Ionicons name="stats-chart-outline" size={22} color={colors.text} />
+              </Pressable>
+            )}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Settings"
+              onPress={() => navigation.navigate("Settings")}
+              style={{ padding: 10 }}
+            >
+              <Ionicons name="settings-outline" size={22} color={colors.text} />
+            </Pressable>
+          </View>
+        ),
+        headerStyle: { backgroundColor: colors.bg },
         headerShadowVisible: false,
         tabBarStyle: {
           backgroundColor: colors.card,
           borderTopColor: colors.line,
         },
         tabBarActiveTintColor: colors.purple,
-        tabBarInactiveTintColor: colors.muted,
-        tabBarLabelStyle: { fontFamily: "DMSans_600SemiBold", fontSize: 11 },
-        tabBarIcon: ({ color, size }) => (
+        tabBarInactiveTintColor: colors.faint,
+        tabBarLabelStyle: { fontFamily: "DMSans_600SemiBold", fontSize: 11, lineHeight: 14 },
+        tabBarIcon: ({ color, size, focused }) => (
           <Ionicons
-            name={
-              (
-                {
-                  Home: "grid-outline",
-                  Transactions: "receipt-outline",
-                  Import: "file-tray-full-outline",
-                  Trips: "airplane-outline",
-                  Chat: "chatbubble-ellipses-outline",
-                } as any
-              )[route.name]
-            }
+            name={TAB_ICONS[route.name][focused ? 0 : 1] as any}
             color={color}
-            size={size}
+            size={size - 1}
           />
         ),
       })}
@@ -132,7 +142,7 @@ function MainTabs() {
       />
       <Tabs.Screen
         name="Import"
-        component={ImportManagementScreen}
+        component={ImportsScreen}
         options={{ tabBarLabel: "Imports" }}
       />
       <Tabs.Screen name="Trips" component={TripsScreen} />
@@ -145,91 +155,152 @@ function Login() {
   const { colors } = useTheme();
   const [register, setRegister] = useState(false);
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
-      <Screen>
-        <View style={{ paddingTop: 42, paddingBottom: 16, gap: 24 }}>
-          <Image
-            source={require("./assets/icon.png")}
-            style={{ width: 82, height: 82, borderRadius: 24 }}
-          />
-          <Heading
-            title={
-              register ? "Your money, together." : "A little more clarity."
-            }
-            subtitle={
-              register
-                ? "Create your Fortuna account."
-                : "Welcome to Fortuna. Make room for what matters."
-            }
-          />
-        </View>
-        <Card>
-          <Form
-            key={String(register)}
-            initial={{
-              server:
-                process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000",
-              baseCurrency: "SGD",
-            }}
-            submit={register ? "Create account" : "Sign in"}
-            fields={[
-              { key: "server", label: "Fortuna server domain or URL", required: true },
-              ...(register
-                ? [
-                    { key: "name", label: "Name", required: true },
-                    {
-                      key: "baseCurrency",
-                      label: "Base currency (ISO code)",
-                      required: true,
-                    },
-                  ]
-                : []),
-              { key: "username", label: "Username", required: true },
-              {
-                key: "password",
-                label: "Password",
-                type: "password",
-                required: true,
-              },
+    <View style={{ flex: 1, backgroundColor: colors.bg }}>
+      <ScrollView keyboardShouldPersistTaps="handled">
+        <LinearGradient
+          colors={[BRAND, "#8136DA"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{ borderBottomLeftRadius: 36, borderBottomRightRadius: 36 }}
+        >
+          <SafeAreaView edges={["top"]}>
+            <View style={{ padding: 24, paddingTop: 36, paddingBottom: 56, gap: 18 }}>
+              <Image
+                source={require("./assets/icon.png")}
+                style={{ width: 72, height: 72, borderRadius: 22 }}
+              />
+              <Txt
+                style={{
+                  fontFamily: "Montserrat_800ExtraBold",
+                  fontSize: 30,
+                  lineHeight: 37,
+                  color: "#FFFFFF",
+                  letterSpacing: -0.8,
+                }}
+              >
+                {register ? "Your money, together." : "A little more clarity."}
+              </Txt>
+              <Txt style={{ color: "#E6E2FF" }}>
+                {register
+                  ? "Create your Fortuna account."
+                  : "Welcome to Fortuna. Make room for what matters."}
+              </Txt>
+            </View>
+          </SafeAreaView>
+        </LinearGradient>
+        <View style={{ padding: 16, marginTop: -32, gap: 16 }}>
+          <View
+            style={[
+              styles.card,
+              { backgroundColor: colors.card, borderColor: colors.line, padding: 20 },
             ]}
-            onSave={async (v) => {
-              if (register) {
-                const server = normalizeServer(v.server);
-                const response = await fetch(`${server}/api/auth/register`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    name: v.name,
-                    username: v.username,
-                    password: v.password,
-                    baseCurrency: v.baseCurrency,
-                  }),
-                });
-                const body = await response.json();
-                if (!response.ok)
-                  throw new Error(body.error || "Registration failed");
+          >
+            <Form
+              key={String(register)}
+              initial={{
+                server: process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000",
+                baseCurrency: "SGD",
+              }}
+              submit={register ? "Create account" : "Sign in"}
+              submitIcon={register ? "person-add-outline" : "log-in-outline"}
+              fields={[
+                { key: "server", label: "Fortuna server domain or URL", required: true },
+                ...(register
+                  ? [
+                      { key: "name", label: "Name", required: true },
+                      {
+                        key: "baseCurrency",
+                        label: "Base currency (ISO code)",
+                        type: "currency" as const,
+                        required: true,
+                      },
+                    ]
+                  : []),
+                { key: "username", label: "Username", required: true },
+                {
+                  key: "password",
+                  label: "Password",
+                  type: "password",
+                  required: true,
+                },
+              ]}
+              onSave={async (v) => {
+                if (register) {
+                  const server = normalizeServer(v.server);
+                  const response = await fetch(`${server}/api/auth/register`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      name: v.name,
+                      username: v.username,
+                      password: v.password,
+                      baseCurrency: v.baseCurrency,
+                    }),
+                  });
+                  const body = await response.json();
+                  if (!response.ok) throw new Error(body.error || "Registration failed");
+                }
+                await signIn(v.server, v.username, v.password);
+              }}
+            />
+            <Button
+              title={
+                register
+                  ? "Already have an account? Sign in"
+                  : "New here? Create an account"
               }
-              await signIn(v.server, v.username, v.password);
-            }}
-          />
-          <Button
-            title={
-              register
-                ? "Already have an account? Sign in"
-                : "New here? Create an account"
-            }
-            secondary
-            onPress={() => setRegister(!register)}
-          />
-        </Card>
-        <Txt muted size={12}>
-          Enter the domain where you host Fortuna, such as fortuna.example.com.
-          The app uses the same account and API as your web app.
-        </Txt>
-      </Screen>
-    </SafeAreaView>
+              ghost
+              onPress={() => setRegister(!register)}
+            />
+          </View>
+          <Txt muted size={12} style={{ textAlign: "center", paddingHorizontal: 12 }}>
+            Enter the domain where you host Fortuna, such as fortuna.example.com.
+            The app uses the same account and API as your web app.
+          </Txt>
+        </View>
+      </ScrollView>
+    </View>
   );
 }
+const SCREENS: Record<string, [React.ComponentType<any>, string]> = {
+  Settings: [SettingsScreen, "Settings"],
+  ChatConversation: [ChatConversationScreen, "Chat"],
+  ChatApproval: [ChatApprovalScreen, "Approval"],
+  ChatTransaction: [ChatTransactionScreen, "Transaction"],
+  AIConnection: [AIConnectionScreen, "AI connection"],
+  Analytics: [AnalyticsScreen, "Analytics"],
+  Transaction: [TransactionScreen, "Transaction"],
+  Split: [SplitScreen, "Split"],
+  LinkPicker: [LinkPickerScreen, "Reimbursement links"],
+  Draft: [DraftReviewScreen, "Review import"],
+  ImportDetail: [ImportDetailScreen, "Statement"],
+  Trip: [TripScreen, "Trip"],
+  TripEditor: [TripEditorScreen, "Trip details"],
+  TripEntries: [TripEntriesScreen, "Trip activity"],
+  TripEntry: [TripEntryScreen, "Entry"],
+  TripFundings: [FundingListScreen, "Funding"],
+  Funding: [FundingScreen, "Funding"],
+  FundingReview: [FundingReviewScreen, "Funding review"],
+  Wallets: [WalletsScreen, "Wallets"],
+  Wallet: [WalletScreen, "Wallet"],
+  WalletAccounts: [WalletAccountsScreen, "Wallet accounts"],
+  CarryOver: [CarryOverScreen, "Carry over"],
+  People: [PeopleScreen, "People"],
+  Settle: [SettleScreen, "Settle up"],
+  ShareCost: [ShareCostScreen, "Share cost"],
+  Members: [MembersScreen, "Members"],
+  SharedOverview: [SharedOverviewScreen, "Shared trip"],
+  TripImport: [TripImportScreen, "Import statement"],
+  TripReimbursement: [TripReimbursementScreen, "Reimbursement"],
+  BankPicker: [BankPickerScreen, "Bank transactions"],
+  Profile: [ProfileScreen, "Profile"],
+  Password: [PasswordScreen, "Password"],
+  Preferences: [PreferencesScreen, "Preferences"],
+  Manage: [ManageScreen, "Organize"],
+  ManageEditor: [ManageEditorScreen, "Edit"],
+  Patterns: [PatternsScreen, "Learned rules"],
+  Tokens: [TokensScreen, "Tokens & sessions"],
+};
 function Navigation() {
   const { ready, session } = useApi();
   const { colors, isDark } = useTheme();
@@ -240,75 +311,44 @@ function Navigation() {
       {!session ? (
         <Login />
       ) : (
-        <ImportProvider>
-          <NavigationContainer
-            theme={{
-              ...(isDark ? DarkTheme : DefaultTheme),
-              colors: {
-                ...(isDark ? DarkTheme : DefaultTheme).colors,
-                background: colors.bg,
-                card: colors.card,
-                text: colors.text,
-                primary: colors.purple,
-                border: colors.line,
-              },
+        <NavigationContainer
+          theme={{
+            ...(isDark ? DarkTheme : DefaultTheme),
+            colors: {
+              ...(isDark ? DarkTheme : DefaultTheme).colors,
+              background: colors.bg,
+              card: colors.bg,
+              text: colors.text,
+              primary: colors.purple,
+              border: colors.line,
+            },
+          }}
+        >
+          <Stack.Navigator
+            screenOptions={{
+              headerBackButtonDisplayMode: "minimal",
+              headerTitleStyle: { fontFamily: "DMSans_600SemiBold" },
+              headerStyle: { backgroundColor: colors.bg },
+              headerShadowVisible: false,
+              headerTintColor: colors.purple,
+              contentStyle: { backgroundColor: colors.bg },
             }}
           >
-            <Stack.Navigator
-              screenOptions={{
-                headerBackButtonDisplayMode: "minimal",
-                headerTitleStyle: { fontFamily: "DMSans_600SemiBold" },
-                contentStyle: { backgroundColor: colors.bg },
-              }}
-            >
+            <Stack.Screen
+              name="Main"
+              component={MainTabs}
+              options={{ headerShown: false }}
+            />
+            {Object.entries(SCREENS).map(([name, [component, title]]) => (
               <Stack.Screen
-                name="Main"
-                component={MainTabs}
-                options={{ headerShown: false }}
+                key={name}
+                name={name}
+                component={component}
+                options={{ title }}
               />
-              {Object.entries({
-                Settings: SettingsScreen,
-                ChatConversation: ChatConversationScreen,
-                ChatApproval: ChatApprovalScreen,
-                ChatTransaction: ChatTransactionScreen,
-                AIConnection: AIConnectionScreen,
-                Analytics: AnalyticsScreen,
-                Transaction: TransactionScreen,
-                Split: SplitScreen,
-                Reimbursement: ReimbursementScreen,
-                StatementImport: ImportScreen,
-                ImportReview: ImportReviewScreen,
-                ImportAllocation: ImportAllocationScreen,
-                ImportRow: ImportRowScreen,
-                ImportHistory: ImportHistoryScreen,
-                ImportDetail: ImportDetailScreen,
-                Drafts: DraftsScreen,
-                Draft: DraftScreen,
-                DraftRow: DraftRowScreen,
-                Trip: TripScreen,
-                TripEditor: TripEditorScreen,
-                Wallet: WalletScreen,
-                Funding: FundingScreen,
-                TripEntries: TripEntriesScreen,
-                TripEntry: TripEntryScreen,
-                BankPicker: BankPickerScreen,
-                Profile: ProfileScreen,
-                Password: PasswordScreen,
-                Preferences: PreferencesScreen,
-                Manage: ManageScreen,
-                ManageEditor: ManageEditorScreen,
-                Tokens: TokensScreen,
-              }).map(([name, component]) => (
-                <Stack.Screen
-                  key={name}
-                  name={name}
-                  component={component}
-                  options={{ title: "Fortuna" }}
-                />
-              ))}
-            </Stack.Navigator>
-          </NavigationContainer>
-        </ImportProvider>
+            ))}
+          </Stack.Navigator>
+        </NavigationContainer>
       )}
     </>
   );
@@ -322,7 +362,7 @@ export default function App() {
     DMMono_400Regular,
   });
   if (!loaded && !error)
-    return <ActivityIndicator style={{ flex: 1 }} color="#5750F1" />;
+    return <ActivityIndicator style={{ flex: 1 }} color={BRAND} />;
   return (
     <SafeAreaProvider>
       <ThemeProvider>

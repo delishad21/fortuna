@@ -52,7 +52,7 @@ async function request(server: string, path: string, init: RequestInit) {
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(),
-    path === "/parse" ? 120000 : 30000,
+    path === "/parse" || path === "/stage" ? 120000 : 30000,
   );
   try {
     const response = await fetch(`${server}/api/mobile${path}`, {
@@ -84,6 +84,8 @@ type ApiContextType = {
   signOut: () => Promise<void>;
   call: <T = any>(operation: string, ...args: any[]) => Promise<T>;
   parse: (form: FormData) => Promise<any>;
+  /** Stage one statement as a draft for review (file + parserId). */
+  stage: (form: FormData) => Promise<{ draft: any; resumed: boolean }>;
 };
 const Context = createContext<ApiContextType>(null!);
 export function ApiProvider({ children }: { children: React.ReactNode }) {
@@ -144,6 +146,8 @@ export function ApiProvider({ children }: { children: React.ReactNode }) {
         call,
         parse: async (form) =>
           (await authenticated("/parse", { method: "POST", body: form })).data,
+        stage: async (form) =>
+          (await authenticated("/stage", { method: "POST", body: form })).data,
         signIn: async (server, username, password) => {
           server = normalizeServer(server);
           const data = await request(server, "/session", {
@@ -175,6 +179,11 @@ export function useResource<T = any>(operation: string, ...args: any[]) {
   const sequence = useRef(0);
   const reload = useCallback(async () => {
     const current = ++sequence.current;
+    // An empty operation means "nothing to load yet".
+    if (!operation) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError("");
     try {
@@ -195,4 +204,84 @@ export function useResource<T = any>(operation: string, ...args: any[]) {
     }, [reload]),
   );
   return { data, loading, error, reload, setData };
+}
+/**
+ * Infinite list over an offset/limit operation. Refocusing reloads every row
+ * already shown, so returning from a detail screen keeps the scroll position.
+ */
+export function usePaged<T = any>(
+  operation: string,
+  args: (offset: number, limit: number) => any[],
+  pick: (data: any) => { items: T[]; total: number },
+  deps: any[],
+  limit = 40,
+) {
+  const { call } = useApi();
+  const key = JSON.stringify(deps);
+  const [items, setItems] = useState<T[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const sequence = useRef(0);
+  const shown = useRef(0);
+  const argsRef = useRef(args);
+  argsRef.current = args;
+  const pickRef = useRef(pick);
+  pickRef.current = pick;
+  const load = useCallback(
+    async (offset: number, count = limit) => {
+      const current = ++sequence.current;
+      if (offset) setLoadingMore(true);
+      else setLoading(true);
+      setError("");
+      try {
+        const data = await call(operation, ...argsRef.current(offset, count));
+        if (current !== sequence.current) return;
+        const page = pickRef.current(data);
+        setTotal(page.total);
+        setItems((old) => {
+          const next = offset ? [...old, ...page.items] : page.items;
+          shown.current = next.length;
+          return next;
+        });
+        setLoaded(true);
+      } catch (err: any) {
+        if (current === sequence.current) setError(err.message);
+      } finally {
+        if (current === sequence.current) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [operation, key, call, limit],
+  );
+  useEffect(() => {
+    shown.current = 0;
+  }, [key]);
+  useFocusEffect(
+    useCallback(() => {
+      void load(0, Math.max(limit, shown.current));
+      return () => {
+        sequence.current++;
+      };
+    }, [load, limit]),
+  );
+  return {
+    items,
+    total,
+    loading,
+    loadingMore,
+    error,
+    loaded,
+    setItems,
+    reload: () => load(0, Math.max(limit, shown.current)),
+    loadMore: () => {
+      if (!loading && !loadingMore && items.length < total)
+        void load(items.length);
+    },
+  };
 }
