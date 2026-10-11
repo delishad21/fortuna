@@ -1,6 +1,11 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
-import { ChatError, ComponentBlock, ResultBlock } from "../contracts";
+import {
+  ChatError,
+  ComponentBlock,
+  ResultBlock,
+  SUBMITTED_REVIEW_TITLE,
+} from "../contracts";
 import { ToolDefinition } from "../providers/provider";
 import { ReadTools, rangeFields } from "./read";
 
@@ -462,10 +467,61 @@ export function componentForModel(block: ComponentBlock, preview: boolean) {
   return { displayed: component, ...rest };
 }
 
+const REVIEW_FIELDS = [
+  "date",
+  "description",
+  "label",
+  "categoryId",
+  "accountIdentifier",
+  "amountIn",
+  "amountOut",
+  "balance",
+  "currency",
+  "linkage",
+] as const;
+/**
+ * What the model sees of a submitted review: each row's identity, amount and the fields the
+ * review changed. The stored rows carry two full payloads each (with parser metadata), which
+ * pushed a 100-row review past the conversation limit on its own.
+ */
+export function submittedReviewForModel(data: any) {
+  const rows: any[] = Array.isArray(data?.rows) ? data.rows : [];
+  return {
+    reviewId: data?.reviewId,
+    title: data?.title,
+    rows: rows.map((row) => {
+      const value = row?.value || {},
+        original = row?.original || {};
+      const changes = Object.fromEntries(
+        REVIEW_FIELDS.filter(
+          (f) =>
+            JSON.stringify(value[f] ?? null) !==
+            JSON.stringify(original[f] ?? null),
+        ).map((f) => [f, value[f] ?? null]),
+      );
+      return {
+        ...(row?.source?.rowId
+          ? { stagedRowId: row.source.rowId, draftId: row.source.draftId }
+          : { transactionId: row?.source?.transactionId ?? row?.id }),
+        date: value.date,
+        description: value.description,
+        ...(value.amountIn != null ? { amountIn: value.amountIn } : {}),
+        ...(value.amountOut != null ? { amountOut: value.amountOut } : {}),
+        currency: value.currency,
+        ...(Object.keys(changes).length ? { changes } : {}),
+      };
+    }),
+  };
+}
+
 /** Shrink stored message blocks before they are replayed as conversation history. */
 export const compactBlocks = (blocks: unknown) =>
   Array.isArray(blocks)
     ? blocks.map((b: ResultBlock) =>
-        b?.type === "component" ? componentForModel(b, false) : b,
+        b?.type === "component"
+          ? componentForModel(b, false)
+          : b?.type === "data" && b.title === SUBMITTED_REVIEW_TITLE
+            ? { ...b, data: submittedReviewForModel(b.data) }
+            : b,
       )
     : blocks;

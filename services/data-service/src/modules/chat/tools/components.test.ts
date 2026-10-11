@@ -8,6 +8,7 @@ import {
   compactBlocks,
   componentForModel,
 } from "./components";
+import { SUBMITTED_REVIEW_TITLE } from "../contracts";
 import { createToolRegistry } from "./registry";
 
 const range = {
@@ -174,3 +175,71 @@ test("read tools answer the model without displaying raw data", () =>
     assert.equal(shown.blocks[0].type, "component");
     assert.ok(registry.isReadOnly("show_component"));
   }));
+
+test("submitted reviews replay as each row's changes, not two full payloads", () => {
+  const metadata = { legs: ["06:15 PM Bus 145; $1.28"], parserId: "simplygo" };
+  const staged = {
+    date: "2026-09-02",
+    description: "SimplyGo: Opp Blk 1 - Lakeside",
+    amountIn: null,
+    amountOut: 2.07,
+    currency: "SGD",
+    metadata,
+  };
+  const saved = { ...staged, label: "Bus", categoryId: "cat-1" };
+  const [text, review] = compactBlocks([
+    { type: "text", text: "Here is my completed review" },
+    {
+      type: "data",
+      title: SUBMITTED_REVIEW_TITLE,
+      data: {
+        reviewId: "review-1",
+        title: "Sep labels",
+        rows: [
+          {
+            id: "row-1",
+            version: 2,
+            source: { draftId: "draft-1", rowId: "row-1" },
+            original: staged,
+            value: {
+              ...staged,
+              label: "MRT/Bus (Johan)",
+              metadata: { ...metadata, assistantNote: "Commute" },
+            },
+            suggestion: { reason: "Commute", confidence: 0.84 },
+          },
+          {
+            id: "tx-1",
+            version: 1,
+            source: { transactionId: "tx-1" },
+            original: saved,
+            value: saved,
+          },
+        ],
+      },
+    },
+  ]) as any[];
+  assert.equal(text.text, "Here is my completed review");
+  assert.deepEqual(review.data, {
+    reviewId: "review-1",
+    title: "Sep labels",
+    rows: [
+      {
+        stagedRowId: "row-1",
+        draftId: "draft-1",
+        date: "2026-09-02",
+        description: "SimplyGo: Opp Blk 1 - Lakeside",
+        amountOut: 2.07,
+        currency: "SGD",
+        changes: { label: "MRT/Bus (Johan)" },
+      },
+      {
+        transactionId: "tx-1",
+        date: "2026-09-02",
+        description: "SimplyGo: Opp Blk 1 - Lakeside",
+        amountOut: 2.07,
+        currency: "SGD",
+      },
+    ],
+  });
+});

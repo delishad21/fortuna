@@ -67,6 +67,8 @@ export const connectionSchema = z
   })
   .strict();
 export type MessageInput = z.infer<typeof submitMessageSchema>;
+/** Title of the user-message block that carries a submitted review's rows. */
+export const SUBMITTED_REVIEW_TITLE = "Submitted transaction review";
 export type ResultBlock =
   | { type: "review"; id: string; title: string }
   | { type: "text"; text: string }
