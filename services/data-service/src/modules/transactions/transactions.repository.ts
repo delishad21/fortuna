@@ -1,4 +1,5 @@
 import prisma from "../../lib/prisma";
+import { toTransactionDate } from "./transaction-date";
 import { Prisma } from "@prisma/client";
 import {
   ImportTransactionInput,
@@ -471,7 +472,7 @@ export class TransactionRepository {
         ...(updates.currency !== undefined
           ? ({ currency: updates.currency } as any)
           : {}),
-        ...(updates.date !== undefined && { date: updates.date }),
+        ...(updates.date !== undefined && { date: toTransactionDate(updates.date) }),
         ...(updates.accountIdentifier !== undefined && { accountIdentifier: updates.accountIdentifier }),
       },
     });
@@ -505,7 +506,7 @@ export class TransactionRepository {
         ...(updates.currency !== undefined
           ? ({ currency: updates.currency } as any)
           : {}),
-        ...(updates.date !== undefined && { date: updates.date }),
+        ...(updates.date !== undefined && { date: toTransactionDate(updates.date) }),
         ...(updates.accountIdentifier !== undefined && { accountIdentifier: updates.accountIdentifier }),
       },
     });
@@ -609,7 +610,7 @@ export class TransactionRepository {
         ...(data.currency !== undefined
           ? ({ currency: data.currency || undefined } as any)
           : {}),
-        date: data.date,
+        date: data.date === undefined || data.date === null ? undefined : toTransactionDate(data.date),
         accountIdentifier: data.accountIdentifier,
         linkage: linkageData,
       },
