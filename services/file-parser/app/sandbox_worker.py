@@ -14,6 +14,8 @@ QUEUE_DIR = Path(os.getenv("SANDBOX_QUEUE_DIR", "/sandbox"))
 SANDBOX_UID = int(os.getenv("SANDBOX_UID", "65534"))
 SANDBOX_GID = int(os.getenv("SANDBOX_GID", "65534"))
 WALL_TIMEOUT_SECONDS = int(os.getenv("SANDBOX_WALL_TIMEOUT_SECONDS", "20"))
+# Touched on every pass of the queue loop; the container healthcheck reads its age.
+HEARTBEAT_PATH = Path(os.getenv("SANDBOX_HEARTBEAT_PATH", "/tmp/sandbox-worker.heartbeat"))
 
 
 def _limit_child():
@@ -79,6 +81,7 @@ def run_worker():
     os.chmod(QUEUE_DIR, 0o700)
     print("Fortuna parser sandbox worker ready", flush=True)
     while True:
+        HEARTBEAT_PATH.touch()
         jobs = sorted(QUEUE_DIR.glob("*.job.json"), key=lambda item: item.stat().st_mtime)
         if not jobs:
             time.sleep(0.1)
