@@ -1,0 +1,11 @@
+# Builds use the per-service contexts (frontend/, services/*), each with its
+# own .dockerignore. This one covers anything built from the repo root.
+**/.env
+**/.env.*
+!**/.env.example
+**/node_modules
+**/.next
+**/__pycache__
+.git
+docs
+mobile

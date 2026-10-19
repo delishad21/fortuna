@@ -1,11 +1,19 @@
-# Preserve existing named volumes and Compose ownership after the repository rename.
-name: personal-finance-app
+# Production stack for the home server, deployed by devbot as compose project
+# "fortuna" (see deploy/README.md). Settings come from the .env next to this
+# file; deploy/fortuna.env.example lists them. Service, container and volume
+# names match the old Portainer stack so the data carries over.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
 
 services:
   postgres:
     image: postgres:16-alpine
     container_name: fortuna-postgres
-    restart: always
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -19,11 +27,31 @@ services:
       retries: 5
     networks:
       - finance-network
+    logging: *logging
+
+  # Applies pending Prisma migrations, then exits. Everything that talks to the
+  # database waits for it.
+  migrate:
+    build:
+      context: ./services/data-service
+      target: migrate
+    image: fortuna-migrate:${REVISION:-dev}
+    restart: "no"
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-personal_finance}?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - finance-network
+    logging: *logging
 
   file-parser:
-    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-file-parser:${IMAGE_TAG:-latest}
+    build:
+      context: ./services/file-parser
+    image: fortuna-file-parser:${REVISION:-dev}
     container_name: fortuna-file-parser
-    restart: always
+    restart: unless-stopped
     expose:
       - "4000"
     environment:
@@ -45,11 +73,15 @@ services:
         condition: service_started
     networks:
       - finance-network
+    logging: *logging
 
+  # Same code as file-parser; runs generated parser code with no network.
   parser-sandbox-worker:
-    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-file-parser:${IMAGE_TAG:-latest}
+    build:
+      context: ./services/file-parser
+    image: fortuna-parser-sandbox-worker:${REVISION:-dev}
     container_name: fortuna-parser-sandbox
-    restart: always
+    restart: unless-stopped
     command: python -m app.sandbox_worker
     network_mode: none
     read_only: true
@@ -67,11 +99,22 @@ services:
       - SANDBOX_WALL_TIMEOUT_SECONDS=20
     volumes:
       - parser-sandbox-queue:/sandbox
+    # The worker touches this file on every pass of its queue loop.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, sys, time; sys.exit(0 if time.time() - os.path.getmtime('/tmp/sandbox-worker.heartbeat') < 60 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging: *logging
 
   data-service:
-    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-data-service:${DATA_IMAGE_TAG:-${IMAGE_TAG:-latest}}
+    build:
+      context: ./services/data-service
+      target: runner
+    image: fortuna-data-service:${REVISION:-dev}
     container_name: fortuna-data-service
-    restart: always
+    restart: unless-stopped
     expose:
       - "4001"
     environment:
@@ -90,18 +133,23 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 3s
       retries: 5
       start_period: 15s
-    command: sh -c "npx prisma migrate deploy && npm start"
     networks:
       - finance-network
+    logging: *logging
 
   chat-worker:
-    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-chat-worker:${CHAT_IMAGE_TAG:-${IMAGE_TAG:-latest}}
+    build:
+      context: ./services/data-service
+      dockerfile: Dockerfile.chat-worker
+    image: fortuna-chat-worker:${REVISION:-dev}
     restart: unless-stopped
     init: true
     user: "1000:1000"
@@ -134,13 +182,20 @@ services:
       data-service:
         condition: service_healthy
     networks: [finance-network]
+    logging: *logging
 
   frontend:
-    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-frontend:${FRONTEND_IMAGE_TAG:-${IMAGE_TAG:-latest}}
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+      args:
+        SERVER_ACTION_ALLOWED_ORIGINS: ${SERVER_ACTION_ALLOWED_ORIGINS:-fortuna.delishad.com}
+    image: fortuna-frontend:${REVISION:-dev}
     container_name: fortuna-frontend
-    restart: always
+    restart: unless-stopped
+    # nginx (fortuna.delishad.com) proxies to this port.
     ports:
-      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-3000}:3000"
+      - "127.0.0.1:3040:3000"
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-personal_finance}?schema=public
       - NEXTAUTH_URL=${NEXTAUTH_URL}
@@ -150,8 +205,9 @@ services:
       - DATA_SERVICE_URL=http://data-service:4001
       - NODE_ENV=production
       - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+      - REVISION=${REVISION:-dev}
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -159,19 +215,25 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       file-parser:
         condition: service_healthy
       data-service:
         condition: service_healthy
     networks:
       - finance-network
+    logging: *logging
 
+  # MCP gateway for Hermes, loopback only.
   finance-mcp:
-    image: ${DOCKERHUB_NAMESPACE:-delishad21}/fortuna-finance-mcp:${MCP_IMAGE_TAG:-${IMAGE_TAG:-latest}}
+    build:
+      context: ./services/finance-mcp
+    image: fortuna-finance-mcp:${REVISION:-dev}
     container_name: fortuna-finance-mcp
-    restart: always
+    restart: unless-stopped
     ports:
-      - "${MCP_BIND:-127.0.0.1}:${MCP_PORT:-4002}:4002"
+      - "127.0.0.1:4002:4002"
     environment:
       - PORT=4002
       - HOST=0.0.0.0
@@ -183,6 +245,12 @@ services:
       - STATEMENT_INBOX=${FORTUNA_DATA_DIR:-/srv/fortuna}/inbox
     volumes:
       - ${FORTUNA_DATA_DIR:-/srv/fortuna}/inbox:${FORTUNA_DATA_DIR:-/srv/fortuna}/inbox:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     depends_on:
       data-service:
         condition: service_healthy
@@ -190,6 +258,7 @@ services:
         condition: service_healthy
     networks:
       - finance-network
+    logging: *logging
 
 networks:
   finance-network:

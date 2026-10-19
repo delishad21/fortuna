@@ -60,12 +60,10 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 
-# Copy Prisma files for migrations - need complete installation
+# Prisma client and query engine (migrations run in the data-service
+# migrate image, so the Prisma CLI stays out of this one)
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=builder /app/node_modules/.bin ./node_modules/.bin
-COPY --from=builder /app/prisma ./prisma
 
 # Set ownership
 RUN chown -R nextjs:nodejs /app
