@@ -1,0 +1,20 @@
+# How fortuna sits on the home server (devbot server plan / apply; DEPLOY.md "Server").
+# Written from the hand-made site it replaces (fortuna.conf), so adopting changes nothing in behaviour.
+host: fortuna.delishad.com
+port: 3040
+websockets: true
+max_body: 50000m
+# Next.js assets skip the exploit filter on / (image URLs carry ?url=…), as in the old site.
+locations:
+  - path: /_next/static/
+    port: 3040
+    websockets: true
+  - path: /_next/image
+    port: 3040
+    websockets: true
+health: /api/health
+exposure: public-sg
+dns: proxied
+auth: app
+teardown:
+  volumes: keep
