@@ -16,5 +16,10 @@ health: /api/health
 exposure: public-sg
 dns: proxied
 auth: app
+# Credential endpoints get the site template's stricter login rate limit.
+login_paths:
+  - /api/auth/callback/credentials
+  - /api/mobile/session
+  - /api/auth/register
 teardown:
   volumes: keep
