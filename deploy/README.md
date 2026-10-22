@@ -13,7 +13,9 @@ Hermes ─▶ 127.0.0.1:4002 finance-mcp ─▶ data-service
   from [fortuna.env.example](fortuna.env.example).
 - Data: `/srv/fortuna/postgres`, `/srv/fortuna/statements`,
   `/srv/fortuna/inbox`, plus the `fortuna_chat-credentials` and
-  `fortuna_parser-sandbox-queue` volumes.
+  `fortuna_parser-sandbox-queue` volumes. Those two aren't backed up
+  (`x-devbot.backup` in the compose file): the queue only holds transient
+  jobs, and Codex sign-ins are kept out of backups (users reconnect in the app).
 - Migrations: the one-shot `migrate` service runs `prisma migrate deploy`
   before data-service, chat-worker and the frontend start.
 - Health: `https://fortuna.delishad.com/api/health` (checks the app and the

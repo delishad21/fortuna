@@ -9,6 +9,13 @@ x-logging: &logging
     max-size: "20m"
     max-file: "3"
 
+# Backup decisions for the named volumes (devbot's repo convention). Postgres
+# and the statements and inbox folders live under /srv/fortuna.
+x-devbot:
+  backup:
+    parser-sandbox-queue: "none: transient job files between file-parser and the sandbox worker"
+    chat-credentials: "none: per-user Codex sign-in tokens, kept out of backups; users reconnect in the app"
+
 services:
   postgres:
     image: postgres:16-alpine
