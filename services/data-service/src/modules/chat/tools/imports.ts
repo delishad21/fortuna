@@ -5,6 +5,7 @@ import { withDatabase } from "../../../lib/database-context";
 import { HermesWorkflowService as workflow } from "../../imports/hermes-workflow.service";
 import { ChatError, idSchema, ChatContext } from "../contracts";
 import { paylahHint } from "../../imports/paylah-emails";
+import { draftAmountIssues } from "../../imports/draft-review";
 import {
   ActionHandler,
   PreparedAction,
@@ -149,6 +150,28 @@ export class ImportActions implements ActionHandler {
     return json({ draftResults: results });
   }
 }
+/** Rows whose amounts look wrong, so the chat raises them before anything else. */
+function amountIssueHint(draft: {
+  mode?: string;
+  rows: Array<{ rowIndex: number; currentPayload: unknown }>;
+}) {
+  const issues = draftAmountIssues(
+    draft.rows.map((row) => row.currentPayload),
+    { runningBalance: draft.mode !== "trip" },
+  );
+  const amountIssues = draft.rows.flatMap((row, index) =>
+    issues[index].errors.length || issues[index].warnings.length
+      ? [{ rowIndex: row.rowIndex, errors: issues[index].errors, warnings: issues[index].warnings }]
+      : [],
+  );
+  return amountIssues.length
+    ? {
+        amountIssues,
+        amountIssuesNote:
+          "These rows' amounts don't match the statement as parsed. Tell the user before suggesting labels; don't commit until they're fixed.",
+      }
+    : {};
+}
 export class ImportTools {
   constructor(private db: PrismaClient) {}
   async list(userId: string) {
@@ -199,8 +222,10 @@ export class ImportTools {
       },
       actor,
     );
-    if (draft.rows.length) return draft;
-    return workflow.parseDraft(context.userId, draft.id, input.parserId, actor);
+    const staged = draft.rows.length
+      ? draft
+      : await workflow.parseDraft(context.userId, draft.id, input.parserId, actor);
+    return { ...staged, ...amountIssueHint(staged) };
   }
   async assign(context: ChatContext, raw: unknown) {
     const input = z

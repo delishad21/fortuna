@@ -1,5 +1,5 @@
 import { afterCommit } from "../../lib/database-context";
-import { reviewDraftRow, summarizeDraftReview } from "./draft-review";
+import { draftAmountIssues, reviewDraftRows, summarizeDraftReview } from "./draft-review";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -447,6 +447,7 @@ export class HermesWorkflowService {
         updatedAt: true,
         _count: { select: { rows: true, proposals: true } },
         rows: {
+          orderBy: { rowIndex: "asc" },
           select: {
             reviewStatus: true,
             selected: true,
@@ -483,7 +484,7 @@ export class HermesWorkflowService {
     }
     return drafts.map(({ rows, ...draft }) => ({
       ...draft,
-      reviewSummary: summarizeDraftReview(rows),
+      reviewSummary: summarizeDraftReview(rows, { runningBalance: draft.mode === "main" }),
       linkedDraftIds: [...(linked.get(draft.id) || [])],
     }));
   }
@@ -591,10 +592,12 @@ export class HermesWorkflowService {
       draft.mode === "trip"
         ? decorated.map((row, index) => ({ ...row, currentPayload: draft.rows[index].currentPayload }))
         : decorated;
+    const reviewOptions = { runningBalance: draft.mode === "main" };
+    const reviews = reviewDraftRows(rows, reviewOptions);
     return {
       ...draft,
-      reviewSummary: summarizeDraftReview(rows),
-      rows: rows.map((row) => ({ ...row, review: reviewDraftRow(row) })),
+      reviewSummary: summarizeDraftReview(rows, reviewOptions),
+      rows: rows.map((row, index) => ({ ...row, review: reviews[index] })),
     };
   }
 
@@ -1361,6 +1364,16 @@ export class HermesWorkflowService {
         row.currentPayload as Record<string, unknown>,
       ).map((message) => ({ rowId: row.id, rowIndex: row.rowIndex, message })),
     );
+    // The running balance runs through every row, selected or not.
+    const amountIssues = draftAmountIssues(
+      draft.rows.map((row) => row.currentPayload),
+      { runningBalance: draft.mode === "main" },
+    );
+    draft.rows.forEach((row, index) => {
+      const message = amountIssues[index].runningBalance;
+      if (row.selected && message)
+        errors.push({ rowId: row.id, rowIndex: row.rowIndex, message });
+    });
     const selectedAccountIdentifiers = selectedRows.map((row) =>
       String(
         (row.currentPayload as Record<string, unknown>).accountIdentifier || "",
@@ -1436,7 +1449,7 @@ export class HermesWorkflowService {
         autoApplied: draft.proposals.filter(
           (proposal) => proposal.status === "auto_applied",
         ).length,
-        needsReview: summarizeDraftReview(draft.rows).needsReview,
+        needsReview: summarizeDraftReview(draft.rows, { runningBalance: draft.mode === "main" }).needsReview,
         accountIdentifiers: distinctAccountIdentifiers,
         missingAccountAssignments: selectedAccountIdentifiers.filter(
           (value) => !value,
