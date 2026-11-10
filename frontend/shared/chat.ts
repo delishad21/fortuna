@@ -206,6 +206,13 @@ export type Connection = {
   status: string;
   keyHint: string | null;
 };
+/** Gmail for PayLah alerts. The app password is never sent back. */
+export type MailConnection = {
+  connected: boolean;
+  provider: "gmail";
+  address: string | null;
+  checkedAt: string | null;
+};
 export type DeviceLogin = {
   loginId: string;
   verificationUrl: string;
