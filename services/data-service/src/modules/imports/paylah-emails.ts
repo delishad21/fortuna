@@ -33,7 +33,7 @@ const tools = {
     labels:
       "With the merchant in the description, call find_transactions with search set to the merchant over the past year: past labels and categories for the same merchant are the strongest evidence. Set label and categoryId in the same update_staged_rows call, or leave them out when unsure.",
     reimbursements:
-      "Use find_transactions to find the expense it repays, then propose the link with request_transaction_review (linkage type 'reimbursement'). Reimbursement links are review-only; propose them, never commit them unasked.",
+      "Use find_transactions to find the expense it repays. The receipt is a staged row, so propose the link with request_transaction_review: put the row in stagedRowIds and pre-fill a suggestion with linkage {type:'reimbursement', reimbursesAllocations:[{transactionId, amount}]}. update_staged_rows can't set links, and propose_transaction_edits only edits saved transactions. Reimbursement links are review-only; propose them, never commit them unasked.",
   },
 } as const;
 

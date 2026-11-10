@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { withChatDb } from "./test-harness";
 import { ApprovalService } from "./approvals.service";
-import { TransactionActions } from "./tools/transactions";
+import { StaleAction, TransactionActions } from "./tools/transactions";
 async function seed(db: any) {
   const user = await db.user.create({ data: { username: "approver" } });
   const conv = await db.chatConversation.create({ data: { userId: user.id } });
@@ -333,4 +333,164 @@ test("the final approval queues one durable continuation across repeated decisio
     await service.decideAction(user.id, proposal.id, "approve");
     assert.equal(await db.chatRun.count({ where: { status: "queued" } }), 1);
     assert.equal(await db.chatRun.count(), 2);
+  }));
+async function stagedExpense(db: any, userId: string) {
+  const payload = {
+    date: "2026-09-27",
+    description: "SINGLIFE",
+    amountOut: 1486.16,
+    currency: "SGD",
+  };
+  const draft = await db.importDraft.create({
+    data: {
+      userId,
+      mode: "main",
+      sourceFilename: "uob-oct.pdf",
+      sourceSha256: "sha",
+      status: "review",
+      expiresAt: new Date("2099-01-01"),
+      rows: {
+        create: { rowIndex: 0, currentPayload: payload, parsedPayload: payload },
+      },
+    },
+    include: { rows: true },
+  });
+  return { draft, row: draft.rows[0] };
+}
+/** A saved PayNow that is already a reimbursement, so linking it changes no field. */
+async function savedReimbursement(db: any, context: any, userId: string) {
+  const incoming = await db.transaction.create({
+    data: {
+      userId,
+      date: new Date("2026-09-27"),
+      description: "PAYNOW CAR INSURANCE",
+      amountIn: 1500,
+      currency: "SGD",
+    },
+  });
+  const service = new ApprovalService(db, new TransactionActions(db));
+  const setup = await service.proposeAction(context, {
+    kind: "edit_transactions",
+    edits: [{ id: incoming.id, patch: { linkage: { type: "reimbursement" } } }],
+  });
+  assert.equal(
+    (await service.decideAction(userId, setup.id, "approve")).status,
+    "applied",
+  );
+  return { incoming, service };
+}
+const linkTo = (incomingId: string, draftId: string, rowId: string) => ({
+  kind: "edit_transactions",
+  edits: [
+    {
+      id: incomingId,
+      patch: {
+        linkage: {
+          type: "reimbursement",
+          reimbursesAllocations: [
+            { stagedDraftId: draftId, stagedRowId: rowId, amount: 1486.16 },
+          ],
+        },
+      },
+    },
+  ],
+});
+test("a link to a staged row shows in the preview when no field changes", () =>
+  withChatDb(async (db) => {
+    const { context, user } = await seed(db);
+    const { incoming, service } = await savedReimbursement(db, context, user.id);
+    const { draft, row } = await stagedExpense(db, user.id);
+    const proposal = await service.proposeAction(
+      context,
+      linkTo(incoming.id, draft.id, row.id),
+    );
+    const preview = proposal.preview as any;
+    assert.deepEqual(preview.changes, []);
+    assert.equal(preview.linkChanges.length, 1);
+    const [link] = preview.linkChanges;
+    assert.equal(link.change, "added");
+    assert.equal(link.amount, "1486.16");
+    assert.equal(link.leftover, "13.84");
+    assert.equal(link.reimbursement.kind, "transaction");
+    assert.equal(link.reimbursement.id, incoming.id);
+    assert.equal(link.expense.kind, "staged");
+    assert.equal(link.expense.description, "SINGLIFE");
+    assert.equal(link.expense.draft.filename, "uob-oct.pdf");
+    assert.equal(preview.references.stagedRows[row.id].description, "SINGLIFE");
+    // Nothing was written while previewing.
+    assert.equal(await db.reimbursementLink.count(), 0);
+    assert.equal(
+      (await service.decideAction(user.id, proposal.id, "approve")).status,
+      "applied",
+    );
+    const saved = await db.reimbursementLink.findFirstOrThrow();
+    assert.equal(saved.expenseDraftRowId, row.id);
+    // The same edit again would change nothing, so it never becomes a card.
+    await assert.rejects(
+      service.proposeAction(context, linkTo(incoming.id, draft.id, row.id)),
+      /Nothing would change/,
+    );
+  }));
+test("an edit that changes nothing is refused without a proposal", () =>
+  withChatDb(async (db) => {
+    const { context, target } = await seed(db);
+    const service = new ApprovalService(db, new TransactionActions(db));
+    await assert.rejects(
+      service.proposeAction(context, {
+        kind: "edit_transactions",
+        edits: [{ id: target.id, patch: { description: "Lunch" } }],
+      }),
+      /Nothing would change/,
+    );
+    assert.equal(await db.chatActionProposal.count(), 0);
+  }));
+test("links count toward staleness even when no transaction field changes", () =>
+  withChatDb(async (db) => {
+    const { context, user, target } = await seed(db);
+    const { incoming, service } = await savedReimbursement(db, context, user.id);
+    const { draft, row } = await stagedExpense(db, user.id);
+    const actions = new TransactionActions(db);
+    const label = {
+      kind: "edit_transactions",
+      edits: [{ id: incoming.id, patch: { label: "Car insurance" } }],
+    };
+    const first = await actions.prepare(user.id, label);
+    // A link written elsewhere touches only the links table.
+    const elsewhere = await db.reimbursementLink.create({
+      data: {
+        userId: user.id,
+        amount: 5,
+        reimbursementTransactionId: incoming.id,
+        expenseTransactionId: target.id,
+      },
+    });
+    const second = await actions.prepare(user.id, label);
+    assert.notEqual(first.stateHash, second.stateHash);
+    const proposal = await service.proposeAction(
+      context,
+      linkTo(incoming.id, draft.id, row.id),
+    );
+    await db.reimbursementLink.update({
+      where: { id: elsewhere.id },
+      data: { amount: 6 },
+    });
+    await assert.rejects(
+      db.$transaction((tx) =>
+        actions.execute(
+          tx,
+          user.id,
+          proposal.arguments,
+          proposal.stateHash,
+        ),
+      ),
+      StaleAction,
+    );
+    assert.equal(
+      (await service.decideAction(user.id, proposal.id, "approve")).status,
+      "stale",
+    );
+    assert.equal(
+      await db.reimbursementLink.count({ where: { expenseDraftRowId: row.id } }),
+      0,
+    );
   }));

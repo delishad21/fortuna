@@ -119,7 +119,7 @@ export function createToolRegistry(
     {
       name: "propose_transaction_edits",
       description:
-        "Preview changes to saved transactions. Returns a proposal that ONLY the user can approve in the interface. Never assume approval.",
+        "Preview changes to saved transactions. Returns a proposal that ONLY the user can approve in the interface. Never assume approval. This includes reimbursement links: a saved money-in transaction (linkage type 'reimbursement') can pay back saved transactions (transactionId) or staged rows of any staged import (stagedDraftId + stagedRowId), and the preview shows every link it adds, removes or re-allocates. Only saved transactions can be edited here; when the reimbursement itself is a staged row, or the user must decide row by row, use request_transaction_review. If the edit would change nothing, no proposal is made and you get an error: tell the user instead.",
       inputSchema: objectSchema(
         {
           edits: {
@@ -173,7 +173,7 @@ export function createToolRegistry(
   definitions.push({
     name: "request_transaction_review",
     description:
-      "Open an editable review (spreadsheet on web, cards on phone) ONLY when the user must decide or supply values row by row. If the user's request already determines the edits (e.g. 'mark all of these internal'), call propose_transaction_edits instead; approval is the user's check. Always pre-fill every change you can infer in suggestions so the user only adjusts. The review already displays its transactions: never also show them with show_component. For staged rows, suggestions and edits are saved to the staged import itself, the same rows its staged import page shows; saved transactions only change after approval; wait for the submitted review before proposing. A new user task supersedes pending reviews.",
+      "Open an editable review (spreadsheet on web, cards on phone) ONLY when the user must decide or supply values row by row. If the user's request already determines the edits (e.g. 'mark all of these internal'), call propose_transaction_edits instead; approval is the user's check. Always pre-fill every change you can infer in suggestions so the user only adjusts. The review already displays its transactions: never also show them with show_component. For staged rows, suggestions and edits are saved to the staged import itself, the same rows its staged import page shows; saved transactions only change after approval; wait for the submitted review before proposing. It is also the only way to set reimbursement links on staged rows (a staged money-in row paying back saved or staged rows); update_staged_rows never changes links. A new user task supersedes pending reviews.",
     inputSchema: objectSchema(
       {
         title: {

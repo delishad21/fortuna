@@ -102,6 +102,21 @@ class PreviewRollback extends Error {
     super("Preview rollback");
   }
 }
+type LinkSnapshot = { reimbursement: string; expense: string; amount: string };
+type LinkEnd = {
+  kind: "transaction" | "staged";
+  id: string;
+  date: unknown;
+  description: string | null;
+  label: string | null;
+  amountIn: unknown;
+  amountOut: unknown;
+  currency: string | null;
+  accountIdentifier: string | null;
+  draft?: { id: string; filename: string; parserId: string | null } | null;
+};
+const endKey = (transactionId: string | null, draftRowId: string | null) =>
+  transactionId ? `t:${transactionId}` : `r:${draftRowId}`;
 export class TransactionActions implements ActionHandler {
   constructor(private db: PrismaClient) {}
   private async snapshot(
@@ -142,7 +157,179 @@ export class TransactionActions implements ActionHandler {
         draft: { select: { id: true, status: true, version: true } },
       },
     });
-    return { transactions, categories, accounts, stagedTargets };
+    const links = await this.links(tx, userId, input, ids);
+    return { transactions, categories, accounts, stagedTargets, links };
+  }
+  /**
+   * Reimbursement links touching the edited transactions, their saved targets and their
+   * staged targets. Links to staged rows never reach the cached `linkage`, so previews and
+   * staleness read them from the link table.
+   */
+  private async links(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    input: z.infer<typeof editSchema>,
+    stagedIds: string[],
+  ) {
+    const transactionIds = [
+      ...new Set(
+        input.edits.flatMap((e) => [
+          e.id,
+          ...(e.patch.linkage?.reimbursesAllocations?.flatMap((a) =>
+            a.transactionId ? [a.transactionId] : [],
+          ) || []),
+        ]),
+      ),
+    ];
+    const rows = await tx.reimbursementLink.findMany({
+      where: {
+        userId,
+        OR: [
+          { reimbursementTransactionId: { in: transactionIds } },
+          { expenseTransactionId: { in: transactionIds } },
+          ...(stagedIds.length
+            ? [
+                { reimbursementDraftRowId: { in: stagedIds } },
+                { expenseDraftRowId: { in: stagedIds } },
+              ]
+            : []),
+        ],
+      },
+    });
+    return rows
+      .map(
+        (link): LinkSnapshot => ({
+          reimbursement: endKey(
+            link.reimbursementTransactionId,
+            link.reimbursementDraftRowId,
+          ),
+          expense: endKey(link.expenseTransactionId, link.expenseDraftRowId),
+          amount: Number(link.amount).toFixed(2),
+        }),
+      )
+      .sort((a, b) =>
+        `${a.reimbursement}|${a.expense}`.localeCompare(
+          `${b.reimbursement}|${b.expense}`,
+        ),
+      );
+  }
+  /** Links added, removed or re-allocated by the edit, with both ends readable. */
+  private async linkChanges(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    before: Awaited<ReturnType<TransactionActions["snapshot"]>>,
+    after: Awaited<ReturnType<TransactionActions["snapshot"]>>,
+  ) {
+    const pair = (l: LinkSnapshot) => `${l.reimbursement}|${l.expense}`;
+    const old = new Map(before.links.map((l) => [pair(l), l]));
+    const next = new Map(after.links.map((l) => [pair(l), l]));
+    type Changed = {
+      change: "added" | "removed" | "changed";
+      link: LinkSnapshot;
+      previous?: LinkSnapshot;
+    };
+    const changed: Changed[] = [
+      ...after.links.flatMap((l): Changed[] => {
+        const previous = old.get(pair(l));
+        if (!previous) return [{ change: "added", link: l }];
+        return previous.amount === l.amount
+          ? []
+          : [{ change: "changed", link: l, previous }];
+      }),
+      ...before.links
+        .filter((l) => !next.has(pair(l)))
+        .map((l): Changed => ({ change: "removed", link: l })),
+    ];
+    if (!changed.length) return { linkChanges: [], ends: [] };
+    const rowIds = [
+      ...new Set(
+        changed.flatMap(({ link }) =>
+          [link.reimbursement, link.expense].flatMap((k) =>
+            k.startsWith("r:") ? [k.slice(2)] : [],
+          ),
+        ),
+      ),
+    ];
+    const rows = await tx.importDraftRow.findMany({
+      where: { id: { in: rowIds }, draft: { userId } },
+      select: {
+        id: true,
+        currentPayload: true,
+        draft: {
+          select: { id: true, sourceFilename: true, parserId: true },
+        },
+      },
+    });
+    const saved = new Map(
+      [...before.transactions, ...after.transactions].map((t) => [t.id, t]),
+    );
+    const staged = new Map(rows.map((r) => [r.id, r]));
+    const end = (key: string): LinkEnd => {
+      const id = key.slice(2);
+      if (key.startsWith("t:")) {
+        const t = saved.get(id);
+        return {
+          kind: "transaction",
+          id,
+          date: t?.date ?? null,
+          description: t?.description ?? null,
+          label: t?.label ?? null,
+          amountIn: t?.amountIn ?? null,
+          amountOut: t?.amountOut ?? null,
+          currency: t?.currency ?? null,
+          accountIdentifier: t?.accountIdentifier ?? null,
+        };
+      }
+      const r = staged.get(id),
+        p = (r?.currentPayload || {}) as any;
+      return {
+        kind: "staged",
+        id,
+        date: p.date ?? null,
+        description: p.description ?? null,
+        label: p.label ?? null,
+        amountIn: p.amountIn ?? null,
+        amountOut: p.amountOut ?? null,
+        currency: p.currency ?? null,
+        accountIdentifier: p.accountIdentifier ?? null,
+        draft: r
+          ? {
+              id: r.draft.id,
+              filename: r.draft.sourceFilename,
+              parserId: r.draft.parserId,
+            }
+          : null,
+      };
+    };
+    // Leftover is only known when every link of the reimbursement was read.
+    const scope = new Set([
+      ...after.transactions.map((t) => `t:${t.id}`),
+      ...after.stagedTargets.map((r) => `r:${r.id}`),
+    ]);
+    const leftover = (reimbursement: LinkEnd) => {
+      const key = `${reimbursement.kind === "staged" ? "r" : "t"}:${reimbursement.id}`;
+      if (!scope.has(key) || reimbursement.amountIn == null) return null;
+      const allocated = after.links
+        .filter((l) => l.reimbursement === key)
+        .reduce((sum, l) => sum + Number(l.amount), 0);
+      return (Number(reimbursement.amountIn) - allocated).toFixed(2);
+    };
+    const linkChanges = changed.map(({ change, link, previous }) => {
+      const reimbursement = end(link.reimbursement),
+        expense = end(link.expense);
+      return {
+        change,
+        amount: link.amount,
+        ...(previous ? { previousAmount: previous.amount } : {}),
+        reimbursement,
+        expense,
+        leftover: change === "removed" ? null : leftover(reimbursement),
+      };
+    });
+    return {
+      linkChanges,
+      ends: linkChanges.flatMap((c) => [c.reimbursement, c.expense]),
+    };
   }
   private async lockTargets(
     tx: Prisma.TransactionClient,
@@ -276,6 +463,7 @@ export class TransactionActions implements ActionHandler {
     changes: Array<{ before: any; after: any }>,
     snapshot: Awaited<ReturnType<TransactionActions["snapshot"]>>,
     categories: Map<string, { id: string; name: string; color: string }>,
+    ends: LinkEnd[] = [],
   ) {
     const linked = new Set<string>(),
       staged = new Set<string>(),
@@ -303,13 +491,19 @@ export class TransactionActions implements ActionHandler {
       accountIdentifier: t.accountIdentifier,
     });
     return json({
-      transactions: Object.fromEntries(
-        snapshot.transactions
+      transactions: Object.fromEntries([
+        ...snapshot.transactions
           .filter((t) => linked.has(t.id))
           .map((t) => [t.id, summary(t)]),
-      ),
-      stagedRows: Object.fromEntries(
-        snapshot.stagedTargets
+        ...ends
+          .filter((e) => e.kind === "transaction")
+          .map((e) => [e.id, summary(e)]),
+      ]),
+      stagedRows: Object.fromEntries([
+        ...ends
+          .filter((e) => e.kind === "staged")
+          .map((e) => [e.id, { ...summary(e), filename: e.draft?.filename }]),
+        ...snapshot.stagedTargets
           .filter((r) => staged.has(r.id))
           .map((r) => {
             const p = (r.currentPayload || {}) as any;
@@ -327,7 +521,7 @@ export class TransactionActions implements ActionHandler {
               }),
             ];
           }),
-      ),
+      ]),
       categories: Object.fromEntries(
         [...categoryIds].flatMap((id) =>
           categories.has(id) ? [[id, categories.get(id)!]] : [],
@@ -370,13 +564,30 @@ export class TransactionActions implements ActionHandler {
                 ? []
                 : [{ id: row.id, before: left, after: right }];
             });
-            const references = this.references(changes, after, categories);
+            const { linkChanges, ends } = await this.linkChanges(
+              tx,
+              userId,
+              before,
+              after,
+            );
+            if (!changes.length && !linkChanges.length)
+              throw new ChatError(
+                400,
+                "Nothing would change: these transactions already have these values and reimbursement links. No proposal was made; tell the user instead.",
+              );
+            const references = this.references(
+              changes,
+              after,
+              categories,
+              ends,
+            );
             throw new PreviewRollback({
               kind: input.kind,
               arguments: json(input),
               preview: json({
                 title: "Edit saved transactions",
                 changes,
+                linkChanges,
                 references,
               }),
               stateHash: stateHash(before),

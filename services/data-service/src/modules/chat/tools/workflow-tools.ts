@@ -68,7 +68,7 @@ export const workflowDefinitions: ToolDefinition[] = [
   {
     name: "update_staged_rows",
     description:
-      "Edit rows of a staged import directly: description, label, categoryId and metadata only (metadata keys are merged into the row's). Dates, amounts, accounts, balances and reimbursement links never change this way; use request_transaction_review for links. Each row needs its current version from inspect_staged_import. Nothing is committed: the user still reviews and commits the import. Use it when the source of the change is clear (for example PayLah emails matched by get_paylah_email_guide); use suggest_draft_labels for label guesses the user should confirm.",
+      "Edit rows of a staged import directly: description, label, categoryId and metadata only (metadata keys are merged into the row's). Dates, amounts, accounts, balances and reimbursement links never change this way. For links, use propose_transaction_edits when the reimbursement is a saved transaction (it may pay back staged rows), or request_transaction_review when the reimbursement is a staged row. Each row needs its current version from inspect_staged_import. Nothing is committed: the user still reviews and commits the import. Use it when the source of the change is clear (for example PayLah emails matched by get_paylah_email_guide); use suggest_draft_labels for label guesses the user should confirm.",
     inputSchema: obj(
       {
         draftId: str,
