@@ -90,9 +90,9 @@ export async function executeRun(
   run: ClaimedRun,
   provider: ChatProvider,
   parentSignal: AbortSignal,
+  tools = createToolRegistry(db),
 ) {
   const repo = new RunRepository(db),
-    tools = createToolRegistry(db),
     controller = new AbortController();
   const signal = AbortSignal.any([parentSignal, controller.signal]);
   const started = Date.now();

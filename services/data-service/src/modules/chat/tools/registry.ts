@@ -12,6 +12,8 @@ import {
   ToolResult,
 } from "../contracts";
 import { ToolDefinition } from "../providers/provider";
+import { MailConnectionService } from "../mail/gmail";
+import { executeMailTool, mailDefinitions, mailToolNames } from "./mail";
 import { ApprovalService } from "../approvals.service";
 import { TransactionActions, json } from "./transactions";
 import { ReadTools } from "./read";
@@ -72,7 +74,11 @@ function proposalResult(proposal: {
     },
   };
 }
-export function createToolRegistry(db: PrismaClient) {
+export function createToolRegistry(
+  db: PrismaClient,
+  options: { mail?: MailConnectionService } = {},
+) {
+  const mail = options.mail || new MailConnectionService(db);
   const read = new ReadTools(db);
   const components = new ComponentTools(db, read);
   const approvals = new ApprovalService(db, new ChatActions(db));
@@ -218,6 +224,7 @@ export function createToolRegistry(db: PrismaClient) {
   definitions.push(...memoryDefinitions);
   const memories = new MemoryService(db);
   definitions.push(...workflowDefinitions);
+  definitions.push(...mailDefinitions);
   async function execute(
     context: ChatContext,
     name: string,
@@ -331,6 +338,11 @@ export function createToolRegistry(db: PrismaClient) {
         });
       return { blocks, model: json(data) };
     }
+    if (mailToolNames.includes(name))
+      return {
+        blocks: [],
+        model: json(await executeMailTool(db, context, name, input, mail)),
+      };
     throw new ChatError(400, "Tool is unavailable");
   }
   return {
@@ -350,6 +362,8 @@ export function createToolRegistry(db: PrismaClient) {
         "list_staged_imports",
         "inspect_staged_import",
         "inspect_statement",
+        "get_paylah_email_guide",
+        "search_paylah_emails",
       ].includes(name),
   };
 }

@@ -83,6 +83,7 @@ model User {
   dynamicParsers         DynamicParserDefinition[]
 
   chatConnections ChatConnection[]
+  mailConnection MailConnection?
   chatConversations ChatConversation[]
   chatMemories ChatMemory[]
   reimbursementLinks ReimbursementLink[]
@@ -851,6 +852,21 @@ model ChatConnection {
   user User @relation(fields:[userId], references:[id], onDelete:Cascade)
   @@unique([userId, provider])
   @@map("chat_connections")
+}
+
+// A mailbox the chat may read (read-only). The app password is sealed with
+// CHAT_ENCRYPTION_KEY_V1 and never leaves the server.
+model MailConnection {
+  id String @id @default(dbgenerated("gen_random_uuid()::text"))
+  userId String @unique @map("user_id")
+  provider String @default("gmail")
+  address String
+  secret Json
+  checkedAt DateTime @default(now()) @map("checked_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  @@map("mail_connections")
 }
 
 model ChatConversation {

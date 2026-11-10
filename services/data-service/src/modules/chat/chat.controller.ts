@@ -11,6 +11,7 @@ import { CHAT_LIMITS } from "./contracts";
 import { createToolRegistry } from "./tools/registry";
 import { decisionSchema } from "./contracts";
 import { ConnectionService } from "./connections.service";
+import { MailConnectionService } from "./mail/gmail";
 import { RunRepository } from "./run.repository";
 import { providerSchema } from "./contracts";
 import { Router, Request, Response, NextFunction } from "express";
@@ -19,11 +20,15 @@ import { timingSafeEqual } from "node:crypto";
 import { z, ZodError } from "zod";
 import { ChatService } from "./chat.service";
 import { ChatError, idSchema } from "./contracts";
-export function createChatRouter(db: PrismaClient) {
+export function createChatRouter(
+  db: PrismaClient,
+  options: { mail?: MailConnectionService } = {},
+) {
   const router = Router();
   const service = new ChatService(db);
   const reviews = new ReviewService(db);
   const connections = new ConnectionService(db);
+  const mail = options.mail || new MailConnectionService(db);
   const runs = new RunRepository(db);
   router.use(async (req, res, next) => {
     const expected = process.env.INTERNAL_SERVICE_TOKEN || "";
@@ -299,6 +304,23 @@ export function createChatRouter(db: PrismaClient) {
     "/settings",
     route(async (req, res) =>
       res.json(await connections.update(res.locals.userId, req.body)),
+    ),
+  );
+  // Gmail for PayLah alerts. The app password goes in once and never comes back out.
+  router.get(
+    "/mail",
+    route(async (_req, res) => res.json(await mail.settings(res.locals.userId))),
+  );
+  router.put(
+    "/mail",
+    route(async (req, res) =>
+      res.json(await mail.connect(res.locals.userId, req.body)),
+    ),
+  );
+  router.delete(
+    "/mail",
+    route(async (_req, res) =>
+      res.json(await mail.disconnect(res.locals.userId)),
     ),
   );
   router.post(

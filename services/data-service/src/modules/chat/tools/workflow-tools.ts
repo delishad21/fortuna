@@ -66,6 +66,38 @@ export const workflowDefinitions: ToolDefinition[] = [
     ),
   },
   {
+    name: "update_staged_rows",
+    description:
+      "Edit rows of a staged import directly: description, label, categoryId and metadata only (metadata keys are merged into the row's). Dates, amounts, accounts, balances and reimbursement links never change this way; use request_transaction_review for links. Each row needs its current version from inspect_staged_import. Nothing is committed: the user still reviews and commits the import. Use it when the source of the change is clear (for example PayLah emails matched by get_paylah_email_guide); use suggest_draft_labels for label guesses the user should confirm.",
+    inputSchema: obj(
+      {
+        draftId: str,
+        rows: {
+          type: "array",
+          minItems: 1,
+          maxItems: 100,
+          items: obj(
+            {
+              rowId: str,
+              version: { type: "integer" },
+              description: str,
+              label: { type: ["string", "null"] },
+              categoryId: { type: ["string", "null"] },
+              metadata: {
+                type: "object",
+                additionalProperties: {
+                  type: ["string", "number", "boolean", "null"],
+                },
+              },
+            },
+            ["rowId", "version"],
+          ),
+        },
+      },
+      ["draftId", "rows"],
+    ),
+  },
+  {
     name: "suggest_draft_labels",
     description:
       "Propose labels and categories with confidence and a reason. Fixed rules remain authoritative. Never approve high-impact proposals yourself.",
@@ -174,6 +206,7 @@ export async function executeWorkflowTool(
   if (name === "stage_statement") return imports.stage(context, raw);
   if (name === "assign_draft_account") return imports.assign(context, raw);
   if (name === "suggest_draft_labels") return imports.labels(context, raw);
+  if (name === "update_staged_rows") return imports.editRows(context, raw);
   if (name === "inspect_statement") {
     const { attachmentId } = z
       .object({ attachmentId: idSchema })

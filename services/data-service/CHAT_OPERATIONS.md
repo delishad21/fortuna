@@ -16,6 +16,12 @@ Open Settings → AI Connection on web, or the Settings header button → AI con
 
 Credentials never enter message history. OpenRouter keys are AES-256-GCM encrypted with per-user authenticated context and a key version; only the last four characters are returned to the UI. Codex credentials are stored in per-user hashed directories in the private volume, with no host home/source mounts. Do not export that volume into unencrypted backups or logs. Provider traffic necessarily includes the conversation and statement content requested by that user.
 
+## Gmail for PayLah emails
+
+Settings → AI → Gmail for PayLah emails (mobile: AI connection) takes a Gmail address and a Google app password, signs in once over IMAP (`imap.gmail.com:993`, TLS) to check them, and stores the password sealed with `CHAT_ENCRYPTION_KEY_V1` under its own purpose (`gmail-imap`), so it can't be opened as an OpenRouter key. It is never returned to a client or logged (imapflow logging is off). Disconnect deletes the row.
+
+The chat's `search_paylah_emails` opens `[Gmail]/All Mail` with EXAMINE (read-only), searches only `FROM paylah.alert@dbs.com` with subject `Transaction Alerts`, drops lookalike senders, and returns parsed fields only (ref, kind, SGT date/time, amount, counterparty, message id), at most 300 per call. It never sets flags, moves, deletes or sends mail. The matching rules are `get_paylah_email_guide` (`src/modules/imports/paylah-emails.ts`), shared with finance-mcp through `GET /api/agent/paylah-email-guide`; rows are edited with `update_staged_rows`, which can only change description, label, category and metadata, and nothing is committed. The chat worker and data-service both need outbound access to `imap.gmail.com:993`.
+
 ## Recovery, rotation, and rollback
 
 Jobs use renewable leases and durable tool outcomes. A crashed worker's expired lease can be reclaimed up to three times. A completed write is not blindly replayed. An unresolved interrupted tool write asks the user to inspect saved drafts/actions. Human approvals lock owned proposals and relevant records, compare the preview state, and apply at most once. Stale proposals can be refreshed and require another confirmation. Final decisions queue a continuation, reconciled idempotently when a decision request is retried.

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { withDatabase } from "../../../lib/database-context";
 import { HermesWorkflowService as workflow } from "../../imports/hermes-workflow.service";
 import { ChatError, idSchema, ChatContext } from "../contracts";
+import { paylahHint } from "../../imports/paylah-emails";
 import {
   ActionHandler,
   PreparedAction,
@@ -155,7 +156,8 @@ export class ImportTools {
   }
   async inspect(userId: string, raw: unknown) {
     const { draftId } = z.object({ draftId: idSchema }).strict().parse(raw);
-    return workflow.getDraft(userId, draftId);
+    const draft = await workflow.getDraft(userId, draftId);
+    return { ...draft, ...paylahHint(draft.rows, "chat") };
   }
   async stage(context: ChatContext, raw: unknown) {
     const input = z
@@ -216,6 +218,109 @@ export class ImportTools {
       input,
       actor,
     );
+  }
+  /**
+   * Edit staged rows through the same path as the staged import page, writing each row's
+   * full current payload with only description, label, category and metadata changed.
+   * Amounts, dates, accounts and links stay as the bank row has them. Nothing is committed.
+   */
+  async editRows(context: ChatContext, raw: unknown) {
+    const metadataValue = z.union([
+      z.string().max(500),
+      z.number(),
+      z.boolean(),
+      z.null(),
+    ]);
+    const input = z
+      .object({
+        draftId: idSchema,
+        rows: z
+          .array(
+            z
+              .object({
+                rowId: idSchema,
+                version: z.number().int().positive(),
+                description: z.string().trim().min(1).max(500).optional(),
+                label: z.string().max(500).nullable().optional(),
+                categoryId: idSchema.nullable().optional(),
+                metadata: z
+                  .record(z.string().min(1).max(64), metadataValue)
+                  .refine((m) => Object.keys(m).length <= 20, "At most 20 metadata keys")
+                  .optional(),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(100)
+          .refine(
+            (rows) => new Set(rows.map((r) => r.rowId)).size === rows.length,
+            "Rows must be unique",
+          ),
+      })
+      .strict()
+      .parse(raw);
+    const categoryIds = [
+      ...new Set(input.rows.map((r) => r.categoryId).filter(Boolean) as string[]),
+    ];
+    if (
+      categoryIds.length &&
+      (await this.db.category.count({
+        where: { id: { in: categoryIds }, userId: context.userId },
+      })) !== categoryIds.length
+    )
+      throw new ChatError(404, "Category not found; use IDs from get_context");
+    const rows = await this.db.importDraftRow.findMany({
+      where: {
+        id: { in: input.rows.map((r) => r.rowId) },
+        draftId: input.draftId,
+        draft: { userId: context.userId },
+      },
+      select: { id: true, currentPayload: true },
+    });
+    const current = new Map(rows.map((r) => [r.id, r.currentPayload]));
+    const updated: Array<{ rowId: string; version: number }> = [];
+    const failed: Array<{ rowId: string; error: string }> = [];
+    for (const edit of input.rows) {
+      const payload = current.get(edit.rowId) as Record<string, unknown> | undefined;
+      if (!payload || typeof payload !== "object") {
+        failed.push({ rowId: edit.rowId, error: "Row not found in this draft" });
+        continue;
+      }
+      const next: Record<string, unknown> = { ...payload };
+      if (edit.description !== undefined) next.description = edit.description;
+      if (edit.label !== undefined) next.label = edit.label;
+      if (edit.categoryId !== undefined) next.categoryId = edit.categoryId;
+      if (edit.metadata)
+        next.metadata = {
+          ...((payload.metadata as Record<string, unknown> | null) || {}),
+          ...edit.metadata,
+        };
+      try {
+        const row = await workflow.updateRow(
+          context.userId,
+          input.draftId,
+          edit.rowId,
+          {
+            expectedVersion: edit.version,
+            currentPayload: next,
+            reviewStatus: "edited",
+          },
+          actor,
+        );
+        updated.push({ rowId: edit.rowId, version: row.version });
+      } catch (error) {
+        const status = (error as { status?: number }).status;
+        if (!status || status >= 500) throw error;
+        failed.push({
+          rowId: edit.rowId,
+          error:
+            status === 409
+              ? `${(error as Error).message}. Inspect the draft again for the current version.`
+              : (error as Error).message,
+        });
+      }
+    }
+    return { draftId: input.draftId, updated, failed, committed: false };
   }
   async labels(context: ChatContext, raw: unknown) {
     const input = z

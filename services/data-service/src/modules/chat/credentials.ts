@@ -13,16 +13,19 @@ function encryptionKey(version: string) {
     throw new Error("Chat credential encryption is not configured");
   return key;
 }
-const aad = (userId: string, version: string) =>
-  Buffer.from(JSON.stringify(["fortuna", "openrouter", userId, version]));
+/** What a sealed secret is for; a secret sealed for one purpose cannot be opened as another. */
+export type CredentialPurpose = "openrouter" | "gmail-imap";
+const aad = (userId: string, version: string, purpose: CredentialPurpose) =>
+  Buffer.from(JSON.stringify(["fortuna", purpose, userId, version]));
 export function sealCredential(
   userId: string,
   plaintext: string,
+  purpose: CredentialPurpose = "openrouter",
 ): EncryptedSecret {
   const keyVersion = "V1",
     iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", encryptionKey(keyVersion), iv);
-  cipher.setAAD(aad(userId, keyVersion));
+  cipher.setAAD(aad(userId, keyVersion, purpose));
   const ciphertext = Buffer.concat([
     cipher.update(plaintext, "utf8"),
     cipher.final(),
@@ -34,13 +37,17 @@ export function sealCredential(
     tag: cipher.getAuthTag().toString("base64"),
   };
 }
-export function openCredential(userId: string, secret: EncryptedSecret) {
+export function openCredential(
+  userId: string,
+  secret: EncryptedSecret,
+  purpose: CredentialPurpose = "openrouter",
+) {
   const decipher = createDecipheriv(
     "aes-256-gcm",
     encryptionKey(secret.keyVersion),
     Buffer.from(secret.iv, "base64"),
   );
-  decipher.setAAD(aad(userId, secret.keyVersion));
+  decipher.setAAD(aad(userId, secret.keyVersion, purpose));
   decipher.setAuthTag(Buffer.from(secret.tag, "base64"));
   return Buffer.concat([
     decipher.update(Buffer.from(secret.ciphertext, "base64")),
