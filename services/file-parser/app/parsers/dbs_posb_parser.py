@@ -59,12 +59,7 @@ def parse(content: bytes) -> list[dict]:
         # Prefer column-based parsing when headers exist (more reliable for deposit/withdrawal)
         header_positions = _find_column_positions(pdf)
         if header_positions:
-            print(
-                "Column positions - Withdrawal: "
-                f"{header_positions['withdrawal_x']}, "
-                f"Deposit: {header_positions['deposit_x']}, "
-                f"Balance: {header_positions['balance_x']}"
-            )
+            print(f"Column positions: {header_positions}")
             return _parse_with_columns(pdf, account_metadata, header_positions, account_number)
 
         for i, line in enumerate(lines):
@@ -270,80 +265,162 @@ def _finalize_transaction(
     return transaction, balance if balance is not None else previous_balance
 
 
-def _find_column_positions(pdf) -> Optional[dict]:
-    """Find withdrawal/deposit/balance column x positions from header row."""
-    for page in pdf.pages:
-        # Ignore rotated/margin artefacts that often appear as random characters.
-        words = [w for w in page.extract_words() if w.get("upright", True)]
-        lines = {}
-        for word in words:
-            top_key = round(word["top"], 1)
-            lines.setdefault(top_key, []).append(word)
+_AMOUNT_RE = re.compile(r"^[\d,]+\.\d{2}$")
+_COLUMNS = ("withdrawal", "deposit", "balance")
 
-        for top in sorted(lines.keys()):
-            line_words = sorted(lines[top], key=lambda w: w["x0"])
-            line_text = " ".join(w["text"] for w in line_words).lower()
-            if "withdrawal" in line_text and "deposit" in line_text and "balance" in line_text:
-                withdrawal_x = None
-                deposit_x = None
-                balance_x = None
-                for word in line_words:
-                    text_lower = word["text"].lower()
-                    if text_lower == "withdrawal":
-                        withdrawal_x = word["x0"]
-                    elif text_lower == "deposit":
-                        deposit_x = word["x0"]
-                    elif text_lower == "balance":
-                        balance_x = word["x0"]
-                if withdrawal_x is not None and deposit_x is not None and balance_x is not None:
-                    return {
-                        "withdrawal_x": withdrawal_x,
-                        "deposit_x": deposit_x,
-                        "balance_x": balance_x,
-                    }
+
+def _cents(value: float) -> int:
+    return int(round(value * 100))
+
+
+def _header_columns(line_words: list[dict]) -> Optional[dict]:
+    """Column edges from a 'Withdrawal (-) Deposit (+) Balance' header line.
+
+    Each column spans its label plus any marker after it ('(-)', '(+)'), so
+    `right` is where the column's right-aligned amounts end.
+    """
+    starts = {}
+    for index, word in enumerate(line_words):
+        text = word["text"].lower()
+        if text in _COLUMNS and text not in starts:
+            starts[text] = index
+    if len(starts) < len(_COLUMNS):
+        return None
+    order = sorted(starts.values())
+    columns = {}
+    for name, start in starts.items():
+        later = [index for index in order if index > start]
+        end = later[0] if later else len(line_words)
+        columns[name] = {
+            "left": line_words[start]["x0"],
+            "right": max(w["x1"] for w in line_words[start:end]),
+        }
+    if not (columns["withdrawal"]["left"] < columns["deposit"]["left"] < columns["balance"]["left"]):
+        return None
+    return columns
+
+
+def _page_lines(page) -> list[list[dict]]:
+    # Ignore rotated/margin artefacts that often appear as random characters.
+    words = [w for w in page.extract_words() if w.get("upright", True)]
+    lines = {}
+    for word in words:
+        lines.setdefault(round(word["top"], 1), []).append(word)
+    return [sorted(lines[top], key=lambda w: w["x0"]) for top in sorted(lines)]
+
+
+def _find_column_positions(pdf) -> Optional[dict]:
+    """Find withdrawal/deposit/balance column edges from the first header row."""
+    for page in pdf.pages:
+        for line_words in _page_lines(page):
+            columns = _header_columns(line_words)
+            if columns:
+                return columns
     return None
 
 
+def _amount_column(word: dict, columns: dict) -> Optional[str]:
+    """DBS right-aligns amounts, so match a number to the column whose right
+    edge is nearest its own. Numbers ending left of the withdrawal column are
+    part of the description."""
+    if word["x1"] <= columns["withdrawal"]["left"]:
+        return None
+    return min(_COLUMNS, key=lambda name: abs(word["x1"] - columns[name]["right"]))
+
+
+def _format_amount(value: float) -> str:
+    return f"{value:,.2f}"
+
+
+def _reconcile(pending: dict, previous_balance: Optional[float]) -> tuple[Optional[float], Optional[float], Optional[str]]:
+    """Check a row against the running balance and return (amountOut, amountIn, warning).
+
+    previous balance - withdrawal + deposit must give the row's balance to the
+    cent. When the amount was read into the wrong column, the other column is
+    tried; a row that still doesn't reconcile keeps its amounts and a warning.
+    A row never comes back with both a withdrawal and a deposit.
+    """
+    amount_out = pending.get("amountOut")
+    amount_in = pending.get("amountIn")
+    balance = pending.get("balance")
+    both = amount_out is not None and amount_in is not None
+
+    if balance is None or previous_balance is None:
+        if both:
+            return amount_out, None, (
+                f"Read both a withdrawal ({_format_amount(amount_out)}) and a deposit "
+                f"({_format_amount(amount_in)}) with no balance to check against; kept the withdrawal."
+            )
+        return amount_out, amount_in, None
+
+    candidates = [] if both else [(amount_out, amount_in)]
+    for amount in (amount_out, amount_in):
+        if amount is not None:
+            candidates += [(amount, None), (None, amount)]
+    for out, inn in candidates:
+        if _cents(previous_balance) - _cents(out or 0) + _cents(inn or 0) == _cents(balance):
+            return out, inn, None
+
+    if both:
+        delta = balance - previous_balance
+        amount = min((amount_out, amount_in), key=lambda value: abs(abs(delta) - value))
+        amount_out, amount_in = (amount, None) if delta < 0 else (None, amount)
+    expected = previous_balance - (amount_out or 0) + (amount_in or 0)
+    read = (
+        f"withdrawal {_format_amount(amount_out)}" if amount_out is not None
+        else f"deposit {_format_amount(amount_in)}" if amount_in is not None
+        else "no amount"
+    )
+    return amount_out, amount_in, (
+        f"Running balance doesn't reconcile: previous balance {_format_amount(previous_balance)} "
+        f"with {read} gives {_format_amount(expected)}, but the statement shows "
+        f"{_format_amount(balance)}. Check this row's amount against the statement."
+    )
+
+
 def _parse_with_columns(
-    pdf, account_metadata: dict, header_positions: dict, account_number: Optional[str] = None
+    pdf, account_metadata: dict, header_positions: Optional[dict] = None, account_number: Optional[str] = None
 ) -> list[dict]:
     """Parse POSB statement using word positions to map amounts to columns."""
     transactions = []
     statement_metadata = dict(account_metadata)
     statement_metadata.pop("accountNumber", None)
     statement_metadata.pop("accountIdentifier", None)
-    withdrawal_x = header_positions["withdrawal_x"]
-    deposit_x = header_positions["deposit_x"]
-    balance_x = header_positions["balance_x"]
+    columns = header_positions
 
     in_section = False
     previous_balance = None
     pending_tx = None
     current_account_number = account_number
 
-    def _has_meaningful_pending(tx: Optional[dict]) -> bool:
-        if not tx:
-            return False
-        if tx.get("amountOut") is not None:
-            return True
-        if tx.get("amountIn") is not None:
-            return True
-        return False
+    def _flush() -> None:
+        nonlocal previous_balance
+        if not pending_tx or (pending_tx.get("amountOut") is None and pending_tx.get("amountIn") is None):
+            return
+        amount_out, amount_in, warning = _reconcile(pending_tx, previous_balance)
+        pending_tx["amountOut"] = amount_out
+        pending_tx["amountIn"] = amount_in
+        tx = _build_transaction(pending_tx, statement_metadata, current_account_number)
+        if warning:
+            tx["metadata"]["parseWarning"] = warning
+            print(f"Warning: {pending_tx['date']} {pending_tx['description']}: {warning}")
+        transactions.append(tx)
+        if pending_tx.get("balance") is not None:
+            previous_balance = pending_tx["balance"]
+        elif previous_balance is not None:
+            previous_balance = previous_balance - (amount_out or 0) + (amount_in or 0)
 
     for page in pdf.pages:
-        # Ignore rotated/margin artefacts that often appear as random characters.
-        words = [w for w in page.extract_words() if w.get("upright", True)]
-        # Group words by line using top coordinate
-        lines = {}
-        for word in words:
-            top_key = round(word["top"], 1)
-            lines.setdefault(top_key, []).append(word)
-
-        for top in sorted(lines.keys()):
-            line_words = sorted(lines[top], key=lambda w: w["x0"])
+        for line_words in _page_lines(page):
             line_text = " ".join(w["text"] for w in line_words).strip()
 
             if not line_text:
+                continue
+
+            # The header repeats on every page; take each page's own positions.
+            page_columns = _header_columns(line_words)
+            if page_columns:
+                columns = page_columns
                 continue
 
             # An account header can appear at the top of a page or midway
@@ -376,29 +453,18 @@ def _parse_with_columns(
                 or line_text.startswith("Messages For")
                 or line_text.startswith("Transaction Details as of")
             ):
-                if _has_meaningful_pending(pending_tx):
-                    tx = _build_transaction(
-                        pending_tx, statement_metadata, current_account_number
-                    )
-                    transactions.append(tx)
-                    previous_balance = pending_tx.get("balance")
+                _flush()
                 in_section = False
                 pending_tx = None
                 continue
 
-            if not in_section:
+            if not in_section or not columns:
                 continue
 
             # Detect new transaction line by date token at start
             date_match = re.match(r"^(\d{2}/\d{2}/\d{4})\b", line_text)
             if date_match:
-                if _has_meaningful_pending(pending_tx):
-                    tx = _build_transaction(
-                        pending_tx, statement_metadata, current_account_number
-                    )
-                    transactions.append(tx)
-                    previous_balance = pending_tx.get("balance")
-
+                _flush()
                 pending_tx = {
                     "date": date_match.group(1),
                     "description": "",
@@ -407,46 +473,35 @@ def _parse_with_columns(
                     "balance": None,
                 }
 
-                # Build description from words left of withdrawal column
-                desc_words = []
-                for w in line_words:
-                    if w["text"] == date_match.group(1):
-                        continue
-                    if w["x0"] < withdrawal_x - 5 and not re.match(r"^[\d,]+\.\d{2}$", w["text"]):
-                        desc_words.append(w["text"])
-                pending_tx["description"] = " ".join(desc_words).strip()
-
-                # Map numeric words to columns
-                for w in line_words:
-                    if not re.match(r"^[\d,]+\.\d{2}$", w["text"]):
-                        continue
-                    amount = float(w["text"].replace(",", ""))
-                    if withdrawal_x - 5 <= w["x0"] < deposit_x - 5:
-                        pending_tx["amountOut"] = amount
-                    elif deposit_x - 5 <= w["x0"] < balance_x - 5:
-                        pending_tx["amountIn"] = amount
-                    elif w["x0"] >= balance_x - 5:
-                        pending_tx["balance"] = amount
+            if not pending_tx:
                 continue
 
-            # Description continuation lines (no date, no amounts)
-            if pending_tx:
-                has_amount = any(re.match(r"^[\d,]+\.\d{2}$", w["text"]) for w in line_words)
-                if not has_amount:
-                    extra_desc = [
-                        w["text"] for w in line_words if w["x0"] < withdrawal_x - 5
-                    ]
-                    if extra_desc:
-                        pending_tx["description"] = (
-                            (pending_tx["description"] + " " + " ".join(extra_desc)).strip()
-                        )
+            desc_words = []
+            for index, w in enumerate(line_words):
+                if date_match and index == 0:
+                    continue
+                column = _amount_column(w, columns) if _AMOUNT_RE.match(w["text"]) else None
+                if column is None:
+                    if w["x0"] < columns["withdrawal"]["left"] - 5:
+                        desc_words.append(w["text"])
+                    continue
+                # Amounts sit on the row's first line; later lines only add description.
+                if not date_match:
+                    continue
+                amount = float(w["text"].replace(",", ""))
+                if column == "withdrawal":
+                    pending_tx["amountOut"] = amount
+                elif column == "deposit":
+                    pending_tx["amountIn"] = amount
+                else:
+                    pending_tx["balance"] = amount
+            if desc_words:
+                pending_tx["description"] = (
+                    pending_tx["description"] + " " + " ".join(desc_words)
+                ).strip()
 
-        if in_section and _has_meaningful_pending(pending_tx):
-            tx = _build_transaction(
-                pending_tx, statement_metadata, current_account_number
-            )
-            transactions.append(tx)
-            previous_balance = pending_tx.get("balance")
+        if in_section:
+            _flush()
             pending_tx = None
 
     return transactions
