@@ -3,6 +3,7 @@ import multer from "multer";
 import { z } from "zod";
 import { authenticatedUserId, requireAccountAuth } from "../auth/auth.middleware";
 import { HermesWorkflowService } from "./hermes-workflow.service";
+import { paylahEmailGuide, paylahHint } from "./paylah-emails";
 
 export const hermesWorkflowRouter = Router();
 
@@ -134,9 +135,14 @@ hermesWorkflowRouter.post("/drafts/validate-selection", requireAccountAuth(["dra
   }
 });
 
+hermesWorkflowRouter.get("/paylah-email-guide", requireAccountAuth(["drafts:read"]), (_request, response) =>
+  response.json(paylahEmailGuide("mcp")),
+);
+
 hermesWorkflowRouter.get("/drafts/:draftId", requireAccountAuth(["drafts:read"]), async (request, response) => {
   try {
-    return response.json({ draft: await HermesWorkflowService.getDraft(authenticatedUserId(request), request.params.draftId) });
+    const draft = await HermesWorkflowService.getDraft(authenticatedUserId(request), request.params.draftId);
+    return response.json({ draft, ...paylahHint(draft.rows) });
   } catch (error) {
     return sendError(response, error);
   }

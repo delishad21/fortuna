@@ -12,7 +12,6 @@ import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { recommendModelRoute } from "./model-routing.js";
 import { parserAuthoringGuide } from "./parser-authoring.js";
-import { paylahEmailGuide, withPaylahHint } from "./paylah-emails.js";
 import { sanitizeForMcp } from "./sanitize.js";
 
 function result(value: unknown) {
@@ -147,7 +146,8 @@ export function createFinanceMcpServer(identity: AccountIdentity) {
       description: "Return persisted rows, versions, proposals, and jobs for one account-owned draft.",
       inputSchema: z.object({ draftId: z.string().min(1) }),
     },
-    async ({ draftId }) => result(withPaylahHint(await dataServiceRequest(`/api/agent/drafts/${encodeURIComponent(draftId)}`))),
+    // data-service adds a paylahHint while the draft has PayLah rows left to name.
+    async ({ draftId }) => result(await dataServiceRequest(`/api/agent/drafts/${encodeURIComponent(draftId)}`)),
   );
 
   server.registerTool(
@@ -413,7 +413,8 @@ export function createFinanceMcpServer(identity: AccountIdentity) {
       description: "Return how to name PayLah top-up and max-out rows on a staged DBS/POSB draft from the user's PayLah alert emails: which emails, how to match them, what to edit, and what never to change. Call this before editing those rows.",
       inputSchema: z.object({}),
     },
-    async () => result(paylahEmailGuide()),
+    // The guide lives in data-service, shared with Fortuna's own chat.
+    async () => result(await dataServiceRequest("/api/agent/paylah-email-guide")),
   );
 
   server.registerTool(
