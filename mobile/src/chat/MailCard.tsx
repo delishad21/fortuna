@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Linking } from "react-native";
 import { Button, Card, Input, Txt } from "../ui";
 import { useChatApi, MailConnection } from "./api";
 
@@ -61,6 +62,15 @@ export function MailCard() {
         autoCorrect={false}
         accessibilityLabel="Google app password"
         placeholder="16-letter app password"
+      />
+      <Txt muted>
+        Google doesn’t list app passwords in its menus; open the page directly
+        (2-Step Verification must be on).
+      </Txt>
+      <Button
+        title="Create an app password"
+        secondary
+        onPress={() => void Linking.openURL("https://myaccount.google.com/apppasswords")}
       />
       <Button
         title={busy ? "Checking…" : "Save and test"}

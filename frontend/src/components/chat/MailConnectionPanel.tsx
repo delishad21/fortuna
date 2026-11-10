@@ -86,6 +86,18 @@ export function MailConnectionPanel() {
           className="mt-2 w-full rounded-lg border border-stroke bg-transparent p-3 dark:border-stroke-dark"
         />
       </label>
+      <p className="text-sm text-dark-5 dark:text-dark-6">
+        Google doesn&rsquo;t list app passwords in its menus.{" "}
+        <a
+          className="text-primary underline"
+          href="https://myaccount.google.com/apppasswords"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Create one here
+        </a>{" "}
+        (2-Step Verification must be on).
+      </p>
       <div className="flex flex-wrap gap-2">
         <Button
           disabled={busy || !address.trim() || !password.trim()}
