@@ -27,10 +27,6 @@ const dmMono = DM_Mono({
 export const metadata: Metadata = {
   title: "Fortuna",
   description: "Manage your finances in one place",
-  icons: {
-    icon: "/icon.png",
-    apple: "/apple-icon.png",
-  },
 };
 
 export default function RootLayout({
