@@ -265,8 +265,15 @@ def _finalize_transaction(
     return transaction, balance if balance is not None else previous_balance
 
 
-_AMOUNT_RE = re.compile(r"^[\d,]+\.\d{2}$")
+# DBS prints an overdrawn balance with a trailing minus: "0.80-".
+_AMOUNT_RE = re.compile(r"^[\d,]+\.\d{2}-?$")
 _COLUMNS = ("withdrawal", "deposit", "balance")
+_LINE_TOLERANCE = 3.0
+
+
+def _to_amount(text: str) -> float:
+    value = float(text.rstrip("-").replace(",", ""))
+    return -value if text.endswith("-") else value
 
 
 def _cents(value: float) -> int:
@@ -303,10 +310,16 @@ def _header_columns(line_words: list[dict]) -> Optional[dict]:
 def _page_lines(page) -> list[list[dict]]:
     # Ignore rotated/margin artefacts that often appear as random characters.
     words = [w for w in page.extract_words() if w.get("upright", True)]
-    lines = {}
-    for word in words:
-        lines.setdefault(round(word["top"], 1), []).append(word)
-    return [sorted(lines[top], key=lambda w: w["x0"]) for top in sorted(lines)]
+    # Words a couple of points apart share a line: some headers set "(SGD)"
+    # slightly below "Balance". Statement rows are about 10 pt apart.
+    lines: list[list[dict]] = []
+    line_top = None
+    for word in sorted(words, key=lambda w: w["top"]):
+        if line_top is None or word["top"] - line_top > _LINE_TOLERANCE:
+            lines.append([])
+            line_top = word["top"]
+        lines[-1].append(word)
+    return [sorted(line, key=lambda w: w["x0"]) for line in lines]
 
 
 def _find_column_positions(pdf) -> Optional[dict]:
@@ -436,12 +449,12 @@ def _parse_with_columns(
                 in_section = True
                 pending_tx = None
                 bf_match = re.search(
-                    r"Balance Brought Forward(?:\s+SGD)?\s+([\d,]+\.\d{2})",
+                    r"Balance Brought Forward(?:\s+SGD)?\s+([\d,]+\.\d{2}-?)",
                     line_text,
                     re.I,
                 )
                 if bf_match:
-                    previous_balance = float(bf_match.group(1).replace(",", ""))
+                    previous_balance = _to_amount(bf_match.group(1))
                 continue
 
             # Section ends
@@ -488,7 +501,7 @@ def _parse_with_columns(
                 # Amounts sit on the row's first line; later lines only add description.
                 if not date_match:
                     continue
-                amount = float(w["text"].replace(",", ""))
+                amount = _to_amount(w["text"])
                 if column == "withdrawal":
                     pending_tx["amountOut"] = amount
                 elif column == "deposit":

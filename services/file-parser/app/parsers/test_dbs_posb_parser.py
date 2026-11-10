@@ -210,3 +210,103 @@ def test_reconcile_never_returns_both_amounts():
 def test_reconcile_checks_to_the_cent():
     assert parser._reconcile({"amountOut": 0.1, "amountIn": None, "balance": 0.2}, 0.3)[2] is None
     assert parser._reconcile({"amountOut": 0.1, "amountIn": None, "balance": 0.21}, 0.3)[2]
+
+
+def _kids_header(top):
+    """The ePOSBkids header: 'Balance (SGD)', further left, with '(SGD)' set
+    two points lower than the other labels."""
+    return [
+        (top, [
+            (45.4, "Date"),
+            (113.1, "Description"),
+            {"x0": 337.9, "x1": 385.9, "text": "Withdrawal"},
+            {"x0": 388.4, "x1": 397.4, "text": "(-)"},
+            {"x0": 429.7, "x1": 462.8, "text": "Deposit"},
+            {"x0": 465.3, "x1": 476.5, "text": "(+)"},
+            {"x0": 493.1, "x1": 527.6, "text": "Balance"},
+        ]),
+        (top + 2, [{"x0": 530.1, "x1": 549.9, "text": "(SGD)"}]),
+    ]
+
+
+def test_each_table_uses_its_own_header():
+    # A kids account with 'Balance (SGD)' first, then the Multiplier account
+    # with plain 'Balance' further down the same page. Its five-digit balances
+    # start left of the kids 'Balance' label too.
+    kids_balance, balance = 550.3, 547.8
+    page = _LayoutPage(
+        [
+            (150, [(45.4, "Kids"), (90, "Account"), (446.2, "Account"), (484.7, "No."), (501.7, "111-22222-3")]),
+            *_kids_header(170),
+            (200, [(113.1, "Balance"), (150.1, "Brought"), (187.6, "Forward"), _right(kids_balance, "5,000.00")]),
+            (220, [(45.4, "01/07/2026"), (113.1, "Bus"), _right(394.9, "4.18"), _right(kids_balance, "4,995.82")]),
+            (240, [(45.4, "02/07/2026"), (113.1, "Transfer"), (160, "out"), _right(394.9, "4,995.82"), _right(552.8, "0.00")]),
+            (260, [(45.4, "31/07/2026"), (113.1, "Card"), (140, "fee"), _right(394.9, "0.80"), _right(552.8, "0.80-")]),
+            (280, [(113.1, "Total"), (137.1, "Balance"), (174.1, "Carried"), (208.1, "Forward"), _right(552.8, "0.80-")]),
+            (320, [(45.4, "Sample"), (90, "Savings"), (441.2, "Account"), (479.7, "No."), (496.7, "123-456789-0")]),
+            (340, _layout_header()),
+            (370, [(113.1, "Balance"), (150.1, "Brought"), (187.6, "Forward"), (485.7, "SGD"), _right(balance, "0.00")]),
+            (390, [(45.4, "22/07/2026"), (113.1, "Incoming"), (160, "PayNow"), _right(474.0, "16,330.00"), _right(balance, "16,330.00")]),
+            (400, [(113.1, "FROM"), (142.1, "SAMPLE")]),
+            (420, [(45.4, "31/07/2026"), (113.1, "Interest"), (155.0, "Earned"), _right(474.0, "0.93"), _right(balance, "16,330.93")]),
+            (440, [(113.1, "Balance"), (150.1, "Carried"), (184.1, "Forward"), (485.7, "SGD"), _right(balance, "16,330.93")]),
+        ]
+    )
+    pdf = type("Pdf", (), {"pages": [page]})()
+
+    rows = parser._parse_with_columns(pdf, {}, parser._find_column_positions(pdf))
+
+    assert [(row["accountIdentifier"], *amounts) for row, amounts in zip(rows, _amounts(rows))] == [
+        ("111222223", 4.18, None, 4995.82),
+        ("111222223", 4995.82, None, 0.00),
+        ("111222223", 0.80, None, -0.80),
+        ("1234567890", None, 16330.00, 16330.00),
+        ("1234567890", None, 0.93, 16330.93),
+    ]
+    assert rows[3]["description"] == "Incoming PayNow FROM SAMPLE"
+    assert all("parseWarning" not in row["metadata"] for row in rows)
+
+
+def test_kids_header_includes_sgd_in_the_balance_column():
+    pdf = type("Pdf", (), {"pages": [_LayoutPage(_kids_header(170))]})()
+    columns = parser._find_column_positions(pdf)
+    assert columns["balance"] == {"left": 493.1, "right": 549.9}
+    assert columns["deposit"]["right"] == 476.5
+
+
+def test_statement_with_only_the_multiplier_account():
+    # October: the kids account is closed, so the first and only header is
+    # the Multiplier's plain 'Balance'.
+    pdf = _layout_statement()
+    columns = parser._find_column_positions(pdf)
+    assert columns["balance"] == {"left": 515.4, "right": 549.9}
+
+    rows = parser._parse_with_columns(pdf, {}, columns)
+
+    assert all(row["amountIn"] is None or row["amountOut"] is None for row in rows)
+    assert sum(row["amountOut"] or 0 for row in rows) == 9.82
+    assert round(sum(row["amountIn"] or 0 for row in rows), 2) == 8.48
+    assert rows[-1]["balance"] == 12345.03
+
+
+def test_header_is_read_again_for_a_second_table_on_the_same_page():
+    s = -40  # a second table laid out further left than the first
+    page = _LayoutPage(
+        [
+            *_kids_header(170),
+            (200, [(113.1, "Balance"), (150.1, "Brought"), (187.6, "Forward"), _right(550.3, "100.00")]),
+            (220, [(45.4, "01/07/2026"), (113.1, "Bus"), _right(394.9, "4.18"), _right(550.3, "95.82")]),
+            (240, [(113.1, "Balance"), (150.1, "Carried"), (184.1, "Forward"), _right(550.3, "95.82")]),
+            (320, [(45.4, "Sample"), (90, "Savings"), (441.2, "Account"), (479.7, "No."), (496.7, "123-456789-0")]),
+            (340, _layout_header(s)),
+            (370, [(113.1 + s, "Balance"), (150.1 + s, "Brought"), (187.6 + s, "Forward"), _right(547.8 + s, "10,000.00")]),
+            (390, [(45.4 + s, "02/07/2026"), (113.1 + s, "Interest"), _right(474.0 + s, "0.93"), _right(547.8 + s, "10,000.93")]),
+            (410, [(113.1 + s, "Balance"), (150.1 + s, "Carried"), (184.1 + s, "Forward"), _right(547.8 + s, "10,000.93")]),
+        ]
+    )
+    pdf = type("Pdf", (), {"pages": [page]})()
+
+    rows = parser._parse_with_columns(pdf, {}, parser._find_column_positions(pdf))
+
+    assert _amounts(rows) == [(4.18, None, 95.82), (None, 0.93, 10000.93)]
+    assert all("parseWarning" not in row["metadata"] for row in rows)
