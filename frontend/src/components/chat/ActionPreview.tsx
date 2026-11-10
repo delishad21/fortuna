@@ -1,6 +1,11 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { Proposal, displayValue, fieldLabel } from "@/lib/chat/client";
+import {
+  Proposal,
+  displayValue,
+  fieldLabel,
+  previewHasChanges,
+} from "@/lib/chat/client";
 import { ProposalView } from "./ProposalView";
 import { Button } from "@/components/ui/Button";
 export function DataDetails({ value }: { value: unknown }) {
@@ -155,6 +160,7 @@ export function ActionPreview({
             busy ||
             !pending ||
             preview.valid === false ||
+            !previewHasChanges(proposal) ||
             (duplicates && !override)
           }
           isLoading={busy}

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Switch, View } from "react-native";
 import { Button, Card, Screen, Txt } from "../ui";
-import { useChatApi, Conversation, Proposal } from "./api";
+import { useChatApi, Conversation, Proposal, previewHasChanges } from "./api";
 import { ProposalView } from "./ProposalView";
 export function ChatApprovalScreen({ route, navigation }: any) {
   const { id, conversationId } = route.params,
@@ -113,6 +113,7 @@ export function ChatApprovalScreen({ route, navigation }: any) {
           busy ||
           !pending ||
           preview.valid === false ||
+          (!!proposal && !previewHasChanges(proposal)) ||
           (duplicates && !override)
         }
         onPress={() => void decide("approve")}

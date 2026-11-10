@@ -1584,3 +1584,115 @@ test("accounts can be named and show as name with identifier", async ({ page, re
   await expect(card.getByText("UOB One card · 4265-****-****-4591")).toBeVisible();
   await page.screenshot({ path: "/tmp/fortuna-account-labels.png" });
 });
+
+test("link-only edit previews show the staged row and empty previews can't be confirmed", async ({
+  page,
+  request,
+}) => {
+  const username = `chat_links_${Date.now()}`,
+    password = "chat-test-temporary-password";
+  const registered = await request.post("/api/auth/register", {
+    data: { username, password, name: "Chat QA", baseCurrency: "SGD" },
+  });
+  expect(registered.ok(), await registered.text()).toBeTruthy();
+  await page.goto("/login");
+  await page.getByLabel("Username").fill(username);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign In", exact: true }).click();
+  await expect(page).toHaveURL(/dashboard/, { timeout: 30000 });
+  const link = {
+    id: "p1",
+    kind: "edit_transactions",
+    status: "pending",
+    expiresAt: "2099-01-01T00:00:00Z",
+    preview: {
+      title: "Edit saved transactions",
+      changes: [],
+      linkChanges: [
+        {
+          change: "added",
+          amount: "1486.16",
+          leftover: "13.84",
+          reimbursement: {
+            kind: "transaction",
+            id: "t1",
+            date: "2026-09-27T00:00:00.000Z",
+            description: "PAYNOW CAR INSURANCE",
+            amountIn: "1500",
+            currency: "SGD",
+          },
+          expense: {
+            kind: "staged",
+            id: "r1",
+            date: "2026-09-27",
+            description: "SINGLIFE",
+            amountOut: 1486.16,
+            currency: "SGD",
+            draft: { id: "d1", filename: "uob-oct.pdf" },
+          },
+        },
+      ],
+      references: {},
+    },
+  };
+  const empty = {
+    ...link,
+    id: "p2",
+    preview: { title: "Edit saved transactions", changes: [], linkChanges: [] },
+  };
+  await page.route("**/api/chat/**", async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(
+      "/api/chat",
+      "",
+    );
+    let body: any = {};
+    if (path === "/conversations")
+      body = [{ id: "c1", title: "Insurance", updatedAt: "2026-10-02" }];
+    else if (path === "/conversations/c1")
+      body = {
+        id: "c1",
+        title: "Insurance",
+        attachments: [],
+        runs: [
+          {
+            id: "r1",
+            status: "awaiting_confirmation",
+            proposals: [link, empty],
+          },
+        ],
+        messages: [
+          {
+            id: "a1",
+            role: "assistant",
+            blocks: [
+              { type: "text", text: "Prepared the link." },
+              { type: "link", kind: "proposal", id: "p1", label: "Review link" },
+              { type: "link", kind: "proposal", id: "p2", label: "Review empty" },
+            ],
+          },
+        ],
+      };
+    await route.fulfill({ json: body });
+  });
+  await page.goto("/chat?conversation=c1");
+  await expect(page.getByText("1 reimbursement link").first()).toBeVisible();
+  await expect(page.getByText("0 transactions")).toHaveCount(0);
+  await page.getByRole("button", { name: "Review link" }).click();
+  const dialog = page.getByRole("dialog");
+  const links = dialog.getByRole("region", { name: "Reimbursement links" });
+  await expect(links.getByText("New reimbursement link")).toBeVisible();
+  await expect(links.getByText("PAYNOW CAR INSURANCE")).toBeVisible();
+  await expect(links.getByText("SINGLIFE")).toBeVisible();
+  await expect(links.getByText(/staged in uob-oct\.pdf/)).toBeVisible();
+  await expect(links.getByText(/13\.84 left over/)).toBeVisible();
+  await expect(dialog.getByText("Nothing would change.")).toHaveCount(0);
+  await expect(
+    dialog.getByRole("button", { name: "Confirm changes" }),
+  ).toBeEnabled();
+  await dialog.getByRole("button", { name: "Close" }).first().click();
+  await page.getByRole("button", { name: "Review empty" }).click();
+  await expect(dialog.getByText("Nothing would change.")).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "Confirm changes" }),
+  ).toBeDisabled();
+});

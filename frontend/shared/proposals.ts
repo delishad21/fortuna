@@ -293,6 +293,74 @@ export function reviewSuggestionSummary(
   };
 }
 
+/** One end of a reimbursement link in an edit preview: a saved transaction or a staged row. */
+export type LinkEnd = LinkedSummary & {
+  kind: "transaction" | "staged";
+  draft?: { id: string; filename?: string | null; parserId?: string | null } | null;
+};
+export type LinkChange = {
+  change: "added" | "removed" | "changed";
+  amount: string | number;
+  previousAmount?: string | number;
+  reimbursement: LinkEnd;
+  expense: LinkEnd;
+  leftover?: string | number | null;
+};
+const endAmount = (end: LinkEnd) =>
+  Math.abs(Number(end.amountIn ?? end.amountOut ?? 0) || 0);
+/** "SINGLIFE · Sep 27, 2026" plus where it lives, e.g. "staged in uob-oct.pdf". */
+export function linkEndView(end: LinkEnd, money: (n: number, c: string) => string) {
+  return {
+    title: transactionTitle(end),
+    detail: [
+      shortDate(end.date),
+      money(endAmount(end), end.currency || "SGD"),
+      end.kind === "staged"
+        ? `staged${end.draft?.filename ? ` in ${end.draft.filename}` : ""}, not imported yet`
+        : "saved",
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  };
+}
+/** Words for one link change: "SGD 1,486.16 of PAYNOW → pays back SINGLIFE; SGD 13.84 left over". */
+export function linkChangeView(
+  change: LinkChange,
+  money: (n: number, c: string) => string,
+) {
+  const currency =
+    change.reimbursement.currency || change.expense.currency || "SGD";
+  const amount = money(Number(change.amount), currency);
+  const leftover =
+    change.leftover != null && Number(change.leftover) > 0
+      ? `${money(Number(change.leftover), currency)} left over`
+      : null;
+  return {
+    heading:
+      change.change === "added"
+        ? "New reimbursement link"
+        : change.change === "removed"
+          ? "Reimbursement link removed"
+          : "Reimbursement amount changed",
+    amount:
+      change.change === "changed" && change.previousAmount != null
+        ? `${money(Number(change.previousAmount), currency)} → ${amount}`
+        : amount,
+    verb: change.change === "removed" ? "no longer pays back" : "pays back",
+    from: linkEndView(change.reimbursement, money),
+    to: linkEndView(change.expense, money),
+    leftover,
+  };
+}
+/** Whether an edit preview would apply anything; an empty one must not be confirmable. */
+export function previewHasChanges(proposal: { kind: string; preview: any }) {
+  const preview = proposal.preview || {};
+  if (proposal.kind !== "edit_transactions" && !preview.changes) return true;
+  return (
+    (preview.changes || []).length > 0 || (preview.linkChanges || []).length > 0
+  );
+}
+
 /** One-line description of what a proposal would do, for compact cards. */
 export function proposalSummary(proposal: {
   kind: string;
@@ -330,9 +398,20 @@ export function proposalSummary(proposal: {
             : `${FIELD_LABELS[d.key] || d.key} edited`,
       )
       .join(" · ");
+    const links = preview.linkChanges || [];
+    const counts = [
+      ...(changes.length
+        ? [`${changes.length} ${changes.length === 1 ? "transaction" : "transactions"}`]
+        : []),
+      ...(links.length
+        ? [`${links.length} reimbursement ${links.length === 1 ? "link" : "links"}`]
+        : []),
+    ];
     return {
       title,
-      detail: `${changes.length} ${changes.length === 1 ? "transaction" : "transactions"}${effect ? ` · ${effect}` : ""}`,
+      detail: counts.length
+        ? `${counts.join(" · ")}${effect ? ` · ${effect}` : ""}`
+        : "Nothing to change",
       state,
     };
   }

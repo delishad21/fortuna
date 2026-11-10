@@ -18,6 +18,8 @@ import {
   summaryValue,
   transactionTitle,
   FIELD_LABELS,
+  LinkChange,
+  linkChangeView,
   previewAccountName,
   accountDisplay,
 } from "./api";
@@ -151,13 +153,94 @@ function Value({
   );
 }
 
+/** Reimbursement links the edit adds, removes or re-allocates, with both ends. */
+function LinkChanges({ changes }: { changes: LinkChange[] }) {
+  const { colors } = useTheme();
+  if (!changes.length) return null;
+  return (
+    <Card>
+      <Txt bold>
+        {changes.length === 1
+          ? "1 reimbursement link"
+          : `${changes.length} reimbursement links`}
+      </Txt>
+      {changes.map((change, index) => {
+        const view = linkChangeView(change, formatMoney);
+        const end = (e: typeof view.from) => (
+          <View>
+            <Txt size={13} numberOfLines={1}>
+              {e.title}
+            </Txt>
+            <Txt muted size={11} numberOfLines={2}>
+              {e.detail}
+            </Txt>
+          </View>
+        );
+        return (
+          <View
+            key={index}
+            style={{
+              gap: 6,
+              borderTopWidth: 1,
+              borderColor: colors.line,
+              paddingTop: 10,
+            }}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+                gap: 8,
+              }}
+            >
+              <Label>{view.heading}</Label>
+              <Txt
+                bold
+                size={13}
+                style={{
+                  color: change.change === "removed" ? colors.muted : colors.purple,
+                  textDecorationLine:
+                    change.change === "removed" ? "line-through" : "none",
+                }}
+              >
+                {view.amount}
+              </Txt>
+            </View>
+            {end(view.from)}
+            <Txt muted size={12}>
+              ↓ {view.verb}
+            </Txt>
+            <View
+              style={{
+                backgroundColor: colors.tint,
+                borderRadius: 8,
+                padding: 8,
+              }}
+            >
+              {end(view.to)}
+            </View>
+            {view.leftover && (
+              <Txt muted size={12}>
+                {view.leftover}
+              </Txt>
+            )}
+          </View>
+        );
+      })}
+    </Card>
+  );
+}
+
 function TransactionEdits({ preview }: { preview: any }) {
   const { colors } = useTheme();
   const references: PreviewReferences = preview.references || {};
   const groups = groupTransactionChanges(preview.changes || []);
-  if (!groups.length) return <Txt muted>Nothing would change.</Txt>;
+  const links: LinkChange[] = preview.linkChanges || [];
+  if (!groups.length && !links.length)
+    return <Txt muted>Nothing would change.</Txt>;
   return (
     <>
+      <LinkChanges changes={links} />
       {groups.map((group, index) => {
         const currency = group.transactions[0]?.currency || "SGD";
         return (

@@ -26,6 +26,8 @@ import {
   summaryValue,
   transactionTitle,
   FIELD_LABELS,
+  LinkChange,
+  linkChangeView,
   previewAccountName,
   accountDisplay,
 } from "@/lib/chat/client";
@@ -223,13 +225,81 @@ function asCard(t: TransactionSide, references: PreviewReferences) {
   };
 }
 
+function LinkEndLine({
+  end,
+}: {
+  end: ReturnType<typeof linkChangeView>["from"];
+}) {
+  return (
+    <span className="block min-w-0">
+      <span className="block truncate font-medium">{end.title}</span>
+      <span className="block truncate text-xs text-dark-5 dark:text-dark-6">
+        {end.detail}
+      </span>
+    </span>
+  );
+}
+
+/** Reimbursement links the edit adds, removes or re-allocates, with both ends. */
+function LinkChanges({ changes }: { changes: LinkChange[] }) {
+  if (!changes.length) return null;
+  return (
+    <section
+      aria-label="Reimbursement links"
+      className="overflow-hidden rounded-lg border border-stroke dark:border-stroke-dark"
+    >
+      <header className="flex items-baseline justify-between gap-3 bg-gray-1 px-4 py-2.5 dark:bg-dark-2">
+        <h3 className="text-sm font-semibold">
+          {changes.length === 1
+            ? "1 reimbursement link"
+            : `${changes.length} reimbursement links`}
+        </h3>
+      </header>
+      <ul className="divide-y divide-stroke dark:divide-stroke-dark">
+        {changes.map((change, index) => {
+          const view = linkChangeView(change, formatMoney);
+          return (
+            <li key={index} className="space-y-2 px-4 py-3 text-sm">
+              <p className="flex items-baseline justify-between gap-3">
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-dark-5 dark:text-dark-6">
+                  <Receipt className="h-3.5 w-3.5" aria-hidden />
+                  {view.heading}
+                </span>
+                <span
+                  className={`shrink-0 font-semibold tabular-nums ${change.change === "removed" ? "text-dark-5 line-through" : "text-primary"}`}
+                >
+                  {view.amount}
+                </span>
+              </p>
+              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-[1fr_auto_1fr] sm:items-center sm:gap-3">
+                <LinkEndLine end={view.from} />
+                <span className="text-xs text-dark-5 dark:text-dark-6">
+                  {view.verb}
+                </span>
+                <LinkEndLine end={view.to} />
+              </div>
+              {view.leftover && (
+                <p className="text-xs text-dark-5 dark:text-dark-6">
+                  {view.leftover}
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 function TransactionEdits({ preview }: { preview: any }) {
   const references: PreviewReferences = preview.references || {};
   const groups = groupTransactionChanges(preview.changes || []);
-  if (!groups.length)
+  const links: LinkChange[] = preview.linkChanges || [];
+  if (!groups.length && !links.length)
     return <p className="text-sm text-dark-5">Nothing would change.</p>;
   return (
     <div className="space-y-4">
+      <LinkChanges changes={links} />
       {groups.map((group, index) => {
         const currency = group.transactions[0]?.currency || "SGD";
         return (
