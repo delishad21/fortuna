@@ -1,7 +1,7 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
-import { withDatabase } from "../../../lib/database-context";
 import { ParserFactoryService as factory } from "../../imports/parser-factory.service";
+import { requireStatementFiles } from "../../imports/statement-files";
 import { ChatError, idSchema } from "../contracts";
 import {
   ActionHandler,
@@ -46,25 +46,16 @@ export class ParserActions implements ActionHandler {
     userId: string,
     input: z.infer<typeof parserActionSchema>,
   ) {
-    if (input.kind === "retain_fixture") {
-      const files = await tx.statementFile.findMany({
-        where: { id: { in: input.statementFileIds }, userId, deletedAt: null },
-        orderBy: { id: "asc" },
-        select: {
-          id: true,
-          filename: true,
-          sha256: true,
-          expiresAt: true,
-          retained: true,
-        },
-      });
-      if (
-        files.length !== new Set(input.statementFileIds).size ||
-        files.some((f) => !f.retained && f.expiresAt <= new Date())
-      )
-        throw new ChatError(404, "Statement is unavailable or expired");
-      return files;
-    }
+    if (input.kind === "retain_fixture")
+      return (
+        await requireStatementFiles(tx, userId, input.statementFileIds)
+      ).map((f) => ({
+        id: f.id,
+        filename: f.filename,
+        sha256: f.sha256,
+        expiresAt: f.expiresAt,
+        retained: f.retained,
+      }));
     if (input.kind === "approve_parser") {
       const candidate = await tx.parserCandidate.findFirst({
         where: {

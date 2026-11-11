@@ -7,6 +7,14 @@ import { ToolDefinition } from "../providers/provider";
 import { ImportTools } from "./imports";
 import { rowItemSchema } from "./documents";
 import { json } from "./transactions";
+import {
+  requireConversationAttachment,
+  toStatementFileIds,
+} from "../../imports/statement-files";
+import {
+  PARSER_CANDIDATE_FIELDS,
+  parserCandidateJsonSchema,
+} from "../../imports/parser-factory.service";
 const str = { type: "string" },
   obj = (properties: Record<string, unknown>, required: string[] = []) => ({
     type: "object",
@@ -30,8 +38,17 @@ export const workflowDefinitions: ToolDefinition[] = [
   {
     name: "inspect_statement",
     description:
-      "Read uploaded statement text without retaining it as a parser fixture.",
-    inputSchema: obj({ attachmentId: str }, ["attachmentId"]),
+      "Read uploaded statement text without retaining it as a parser fixture. Returns the statementFileId (upload_…) that parser tools and retain_fixture use.",
+    inputSchema: obj(
+      {
+        attachmentId: {
+          type: "string",
+          description:
+            "The attachment ID from this conversation (its statementFileId also works)",
+        },
+      },
+      ["attachmentId"],
+    ),
   },
   {
     name: "list_parsers",
@@ -44,7 +61,11 @@ export const workflowDefinitions: ToolDefinition[] = [
       "Parse an uploaded statement using an existing parser, apply fixed rules, and create a persisted draft. Existing drafts are reused.",
     inputSchema: obj(
       {
-        attachmentId: str,
+        attachmentId: {
+          type: "string",
+          description:
+            "The attachment ID from this conversation (its statementFileId also works)",
+        },
         parserId: str,
         mode: { enum: ["main", "trip"] },
         targetTripId: str,
@@ -154,7 +175,9 @@ export const workflowDefinitions: ToolDefinition[] = [
   {
     name: "parser_step",
     description:
-      "Develop a parser in an approved fixture workspace. Operations: guide and definitions need nothing else; inspect needs workspaceId and fileId; save needs workspaceId and candidate; test and submit need workspaceId and candidateId. A workspace only exists after the user approves a retain_fixture proposal for the statement (propose_action); until then, stop and ask the user to approve it. Source entrypoint parse(content: bytes, specification: dict) returns a transaction list. Approval and activation require propose_action.",
+      "Develop a parser in an approved fixture workspace. Check list_parsers first: a built-in parser for the statement makes this unnecessary, and built-in IDs can't be replaced. Operations: guide and definitions need nothing else; inspect needs workspaceId and fileId (a statement file ID, upload_…, from the workspace); save needs workspaceId and candidate; test and submit need workspaceId and candidateId (the id that save returns). A workspace only exists after the user approves a retain_fixture proposal for the statement (propose_action); until then, stop and ask the user to approve it. test runs the candidate on every statement in the workspace, so put only statements of one layout in a workspace. " +
+      PARSER_CANDIDATE_FIELDS +
+      " Approval and activation require propose_action.",
     inputSchema: obj(
       {
         operation: {
@@ -162,8 +185,11 @@ export const workflowDefinitions: ToolDefinition[] = [
         },
         workspaceId: str,
         candidateId: str,
-        fileId: str,
-        candidate: { type: "object" },
+        fileId: {
+          type: "string",
+          description: "Statement file ID (upload_…) of a workspace statement",
+        },
+        candidate: parserCandidateJsonSchema,
       },
       ["operation"],
     ),
@@ -173,7 +199,7 @@ export const workflowDefinitions: ToolDefinition[] = [
     description:
       "Create a human approval preview. This never approves or executes the change. Fields per kind (no others are accepted): " +
       "commit_drafts: draftIds (string[], staged import IDs). " +
-      "retain_fixture: statementFileIds (string[]). " +
+      "retain_fixture: statementFileIds (string[]: statement file IDs, upload_…, as inspect_statement returns them; this conversation's attachment IDs are accepted too). " +
       "approve_parser: workspaceId, candidateId. " +
       "activate_parser | rollback_parser: definitionId, versionId. " +
       "create_account: accountIdentifier (string, what statements show), label (optional friendly name, e.g. 'UOB One credit card'), color (optional '#RRGGBB'). " +
@@ -233,15 +259,7 @@ export async function executeWorkflowTool(
       .object({ attachmentId: idSchema })
       .strict()
       .parse(raw);
-    const file = await db.chatAttachment.findFirst({
-      where: {
-        id: attachmentId,
-        userId: context.userId,
-        conversationId: context.conversationId,
-      },
-      include: { statementFile: { select: { contentType: true } } },
-    });
-    if (!file) throw new ChatError(404, "Attachment not found");
+    const file = await requireConversationAttachment(db, context, attachmentId);
     if (isImageType(file.statementFile.contentType))
       throw new ChatError(400, IMAGE_NOT_STATEMENT);
     return {
@@ -288,6 +306,7 @@ export async function executeWorkflowTool(
     if (input.operation === "guide")
       return {
         entrypoint: "parse(content: bytes, specification: dict) -> list[dict]",
+        candidate: PARSER_CANDIDATE_FIELDS,
         required: [
           "date (YYYY-MM-DD)",
           "description",
@@ -306,6 +325,7 @@ export async function executeWorkflowTool(
         ],
         rules: [
           "Inspect consented fixture first",
+          "A workspace's statements must share one layout: test runs the candidate on each",
           "Use one stable parserId",
           "No network/filesystem outside sandbox",
           "Validate counts, credits, debits and account identifiers",
@@ -324,12 +344,12 @@ export async function executeWorkflowTool(
       );
     };
     const workspaceId = need(input.workspaceId, "workspaceId");
-    if (input.operation === "inspect")
-      return factory.inspect(
-        context.userId,
-        workspaceId,
+    if (input.operation === "inspect") {
+      const [fileId] = await toStatementFileIds(db, context, [
         need(input.fileId, "fileId"),
-      );
+      ]);
+      return factory.inspect(context.userId, workspaceId, fileId);
+    }
     if (input.operation === "save") {
       if (input.candidate === undefined) need(undefined, "candidate");
       return factory.save(context.userId, workspaceId, input.candidate);

@@ -1,3 +1,5 @@
+import { requireConversationAttachment } from "../../imports/statement-files";
+import { currentParserVersions, staleParserNote } from "../../imports/parser-versions";
 import { IMAGE_NOT_STATEMENT, isImageType } from "../media";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
@@ -173,6 +175,22 @@ function amountIssueHint(draft: {
       }
     : {};
 }
+/** Says so when a draft's rows came from an older parser version than the current one. */
+async function parserVersionHint(
+  userId: string,
+  draft: { parserId: string | null; parserVersion: string | null; status: string },
+) {
+  if (["committed", "discarded"].includes(draft.status)) return {};
+  try {
+    const current = (await currentParserVersions(userId)).get(
+      draft.parserId || "",
+    );
+    const note = staleParserNote(draft.parserId, draft.parserVersion, current);
+    return note ? { parserVersionNote: note } : {};
+  } catch {
+    return {};
+  }
+}
 export class ImportTools {
   constructor(private db: PrismaClient) {}
   async list(userId: string) {
@@ -181,7 +199,11 @@ export class ImportTools {
   async inspect(userId: string, raw: unknown) {
     const { draftId } = z.object({ draftId: idSchema }).strict().parse(raw);
     const draft = await workflow.getDraft(userId, draftId);
-    return { ...draft, ...paylahHint(draft.rows, "chat") };
+    return {
+      ...draft,
+      ...(await parserVersionHint(userId, draft)),
+      ...paylahHint(draft.rows, "chat"),
+    };
   }
   async stage(context: ChatContext, raw: unknown) {
     const input = z
@@ -193,24 +215,11 @@ export class ImportTools {
       })
       .strict()
       .parse(raw);
-    const attachment = await this.db.chatAttachment.findFirst({
-      where: {
-        id: input.attachmentId,
-        userId: context.userId,
-        conversationId: context.conversationId,
-      },
-      include: { statementFile: true },
-    });
-    if (
-      !attachment ||
-      attachment.statementFile.deletedAt ||
-      (!attachment.statementFile.retained &&
-        attachment.statementFile.expiresAt <= new Date())
-    )
-      throw new ChatError(
-        404,
-        "Statement expired or missing. Upload it again.",
-      );
+    const attachment = await requireConversationAttachment(
+      this.db,
+      context,
+      input.attachmentId,
+    );
     if (isImageType(attachment.statementFile.contentType))
       throw new ChatError(400, IMAGE_NOT_STATEMENT);
     const draft = await workflow.createDraft(
@@ -226,7 +235,13 @@ export class ImportTools {
     const staged = draft.rows.length
       ? draft
       : await workflow.parseDraft(context.userId, draft.id, input.parserId, actor);
-    return { ...staged, ...amountIssueHint(staged) };
+    return {
+      ...staged,
+      ...(staged === draft
+        ? await parserVersionHint(context.userId, staged)
+        : {}),
+      ...amountIssueHint(staged),
+    };
   }
   async assign(context: ChatContext, raw: unknown) {
     const input = z

@@ -4,7 +4,7 @@ import { loadModelImages } from "./media";
 import { MemoryService } from "./memories.service";
 import { ProviderMessage } from "./providers/provider";
 import { safeChatError } from "./errors";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { withDatabase } from "../../lib/database-context";
 import { ChatProvider } from "./providers/provider";
 import { ClaimedRun, RunRepository } from "./run.repository";
@@ -23,6 +23,10 @@ export function invalidArguments(error: ZodError) {
     0,
     1500,
   );
+}
+/** What the model is told when a tool fails for a reason that can't be shown. */
+export function toolFailure(name: string) {
+  return `${name} failed with an internal error, so nothing it would have done was done. Try it once more; if it fails again, tell the user it failed and carry on without it.`;
 }
 const READ_CALLS =
   CHAT_LIMITS.toolCalls - CHAT_LIMITS.toolCallsReservedForWrites;
@@ -83,7 +87,7 @@ export function dropRepeatedLists<T extends { type: string }>(
 /** The reply as the user sees it: steps taken, text, and what the tools displayed. */
 async function replyBlocks(db: PrismaClient, runId: string, output: string) {
   const outcomes = await db.chatToolInvocation.findMany({
-    where: { runId, status: { in: ["completed", "refused"] } },
+    where: { runId, status: { in: ["completed", "refused", "failed"] } },
     orderBy: { createdAt: "asc" },
   });
   const shown = outcomes.flatMap((v) =>
@@ -240,7 +244,7 @@ export async function executeRun(
           ...(previous.result as unknown as ToolResult),
           budget: toolBudgetNote(toolCalls),
         };
-      if (previous && !tools.isReadOnly(name))
+      if (previous && previous.status !== "failed" && !tools.isReadOnly(name))
         throw new ChatError(
           409,
           "An interrupted action needs review. Check your staged imports and pending approvals before retrying.",
@@ -256,7 +260,13 @@ export async function executeRun(
             status: "running",
           },
         }));
+      if (previous?.status === "failed")
+        await db.chatToolInvocation.update({
+          where: { id: invocation.id },
+          data: { status: "running", result: Prisma.DbNull },
+        });
       let result: ToolResult;
+      let status = "completed";
       try {
         result = await withDatabase(db, () =>
           tools.execute(context, name, args),
@@ -273,13 +283,18 @@ export async function executeRun(
               },
             ],
           };
-        else throw error;
+        else {
+          // Never leave the call recorded as running: say it failed, without internals.
+          console.error(`Chat tool ${name} failed`, error);
+          status = "failed";
+          result = { blocks: [{ type: "text", text: toolFailure(name) }] };
+        }
       }
-      signal.throwIfAborted();
       await db.chatToolInvocation.update({
         where: { id: invocation.id },
-        data: { status: "completed", result: json(result) },
+        data: { status, result: json(result) },
       });
+      signal.throwIfAborted();
       progress();
       await repo.appendEvent(run, {
         type: "tool_result",

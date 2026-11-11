@@ -15,6 +15,7 @@ import { ToolDefinition } from "../providers/provider";
 import { MailConnectionService } from "../mail/gmail";
 import { executeMailTool, mailDefinitions, mailToolNames } from "./mail";
 import { ApprovalService } from "../approvals.service";
+import { toStatementFileIds } from "../../imports/statement-files";
 import { TransactionActions, json } from "./transactions";
 import { ReadTools } from "./read";
 import { documentDefinitions, executeDocumentTool } from "./documents";
@@ -24,6 +25,24 @@ import {
   componentForModel,
   showComponentDefinition,
 } from "./components";
+/** retain_fixture also takes this conversation's attachment IDs; the proposal stores statement file IDs. */
+async function withStatementFileIds(
+  db: PrismaClient,
+  context: ChatContext,
+  action: unknown,
+) {
+  const a = action as { kind?: unknown; statementFileIds?: unknown };
+  if (
+    a?.kind !== "retain_fixture" ||
+    !Array.isArray(a.statementFileIds) ||
+    !a.statementFileIds.every((id) => typeof id === "string")
+  )
+    return action;
+  return {
+    ...a,
+    statementFileIds: await toStatementFileIds(db, context, a.statementFileIds),
+  };
+}
 export const objectSchema = (
   properties: Record<string, unknown>,
   required: string[] = [],
@@ -272,7 +291,10 @@ export function createToolRegistry(
         .object({ action: z.unknown() })
         .strict()
         .parse(input);
-      const proposal = await approvals.proposeAction(context, action);
+      const proposal = await approvals.proposeAction(
+        context,
+        await withStatementFileIds(db, context, action),
+      );
       return proposalResult(proposal);
     }
     if (name === "remember") {

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import prisma from "../../lib/prisma";
+import { requireStatementFiles } from "./statement-files";
 const fail = (status: number, message: string): never => {
   throw Object.assign(new Error(message), { status });
 };
@@ -12,8 +13,11 @@ const builtin = new Set([
   "dbs_paylah_statement_new",
   "dbs_posb_consolidated",
   "dbs_posb_consolidated_legacy",
+  "mari_credit_card_pdf",
   "ocbc_frank_statement",
   "revolut_statement",
+  "simplygo_transit_statement",
+  "uob_one_credit_card_pdf",
   "youtrip_statement",
 ]);
 export const parserSourceHash = (
@@ -32,6 +36,52 @@ export const parserCandidateSchema = z
     sourceCode: z.string().max(100000).optional(),
   })
   .strict();
+/** The parser service's own error message, safe to show the model: one line, no paths, at most 500 characters. */
+export function parserServiceError(body: unknown) {
+  const raw =
+    body && typeof body === "object" && typeof (body as any).error === "string"
+      ? (body as any).error
+      : typeof body === "string"
+        ? body
+        : "";
+  return raw
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/(?:\/[\w.@-]+){2,}\/?/g, "<path>")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
+}
+/** The candidate's fields as the chat tool declares them; keep in step with parserCandidateSchema. */
+export const parserCandidateJsonSchema = {
+  type: "object",
+  properties: {
+    parserId: {
+      type: "string",
+      pattern: "^[a-z][a-z0-9_]{2,63}$",
+      description:
+        "Stable lowercase ID, e.g. 'citi_rewards_card_pdf'; the same ID on every save",
+    },
+    parserType: {
+      enum: ["python", "config"],
+      description: "'python' for PDFs; 'config' for CSV column mappings",
+    },
+    sourceCode: {
+      type: "string",
+      maxLength: 100000,
+      description:
+        "Python only: the whole module, defining parse(content: bytes, specification: dict) -> list[dict]",
+    },
+    specification: {
+      type: "object",
+      description:
+        "Settings passed to parse() and used on approval, not code: name, description, documentType ('pdf'|'csv'), mode ('bank'|'trip'), and validation { expectedCount, expectedTotalIn, expectedTotalOut, amountTolerance, expectedAccountIdentifiers } checked by the test",
+    },
+  },
+  required: ["parserId", "parserType", "specification"],
+  additionalProperties: false,
+};
+export const PARSER_CANDIDATE_FIELDS =
+  "A candidate has exactly these fields: parserId (string, e.g. 'citi_rewards_card_pdf'), parserType ('python' or 'config'), sourceCode (string, the Python module with parse(content, specification); required for python), specification (object of settings: name, description, documentType, mode, validation). Code never goes in specification.";
 async function parserRequest(userId: string, endpoint: string, form: FormData) {
   const token = process.env.INTERNAL_SERVICE_TOKEN;
   if (!token) return fail(503, "Parser sandbox is not configured");
@@ -50,17 +100,26 @@ async function parserRequest(userId: string, endpoint: string, form: FormData) {
       signal: AbortSignal.timeout(180000),
     },
   );
-  const body = (await response.json()) as any;
-  if (!response.ok)
-    return fail(502, "Parser sandbox could not complete this request");
-  return body;
+  const text = await response.text();
+  let body: any = text;
+  try {
+    body = JSON.parse(text);
+  } catch {}
+  if (response.ok && body && typeof body === "object") return body;
+  const reason = parserServiceError(body);
+  // 4xx means the parser service rejected what it was given (the candidate, its source or the file).
+  if (response.status >= 400 && response.status < 500)
+    return fail(
+      422,
+      `The parser service rejected ${endpoint} (HTTP ${response.status})${reason ? `: ${reason}` : ""}`,
+    );
+  return fail(
+    502,
+    `Parser sandbox could not complete this request (HTTP ${response.status})`,
+  );
 }
 async function fileForm(userId: string, fileId: string) {
-  const file = await prisma.statementFile.findFirst({
-    where: { id: fileId, userId, deletedAt: null },
-  });
-  if (!file || (!file.retained && file.expiresAt <= new Date()))
-    return fail(404, "Statement is unavailable or expired. Upload it again.");
+  const [file] = await requireStatementFiles(prisma, userId, [fileId]);
   const bytes = await readFile(file.storagePath);
   const form = new FormData();
   form.append(
@@ -70,23 +129,22 @@ async function fileForm(userId: string, fileId: string) {
   );
   return form;
 }
+const fileName = (form: FormData) =>
+  (form.get("file") as File | null)?.name || "statement";
+/** The candidate's own exception, without the HTTP wrapping, with a hint for the usual cause. */
+function candidateError(message: string) {
+  const reason = message.replace(
+    /^The parser service rejected \S+ \(HTTP \d+\): ?/,
+    "",
+  );
+  return `The candidate raised an error on this fixture: ${reason || "no message"}. Every statement in the workspace is tested; if this one has another layout, start a workspace with only the statements this parser is for.`;
+}
 export class ParserFactoryService {
   static async createWorkspace(userId: string, fileIds: string[]) {
     return prisma.$transaction(async (tx) => {
-      const files = await tx.statementFile.findMany({
-        where: {
-          id: { in: fileIds },
-          userId,
-          deletedAt: null,
-          OR: [{ retained: true }, { expiresAt: { gt: new Date() } }],
-        },
-      });
-      if (
-        !fileIds.length ||
-        fileIds.length > 10 ||
-        files.length !== new Set(fileIds).size
-      )
-        return fail(404, "One or more statements are unavailable or expired");
+      if (!fileIds.length || fileIds.length > 10)
+        return fail(400, "A workspace takes 1 to 10 statement files");
+      await requireStatementFiles(tx, userId, fileIds);
       await tx.statementFile.updateMany({
         where: { id: { in: fileIds }, userId },
         data: { retained: true },
@@ -117,8 +175,12 @@ export class ParserFactoryService {
   }
   static async inspect(userId: string, workspaceId: string, fileId: string) {
     const workspace = await this.workspace(userId, workspaceId);
-    if (!(workspace.statementFileIds as string[]).includes(fileId))
-      return fail(404, "Fixture not found");
+    const fileIds = workspace.statementFileIds as string[];
+    if (!fileIds.includes(fileId))
+      return fail(
+        404,
+        `not found: ${fileId} is not a statement of this workspace; its statement file IDs are ${fileIds.join(", ")}`,
+      );
     const body = await parserRequest(
       userId,
       "/candidate/inspect",
@@ -136,9 +198,21 @@ export class ParserFactoryService {
   }
   static async save(userId: string, workspaceId: string, raw: unknown) {
     await this.workspace(userId, workspaceId);
-    const input = parserCandidateSchema.parse(raw);
+    const parsed = parserCandidateSchema.safeParse(raw);
+    if (!parsed.success)
+      return fail(
+        400,
+        `candidate is invalid: ${parsed.error.issues
+          .slice(0, 6)
+          .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+          .join("; ")}. ${PARSER_CANDIDATE_FIELDS}`,
+      );
+    const input = parsed.data;
     if (input.parserType === "python" && !input.sourceCode)
-      return fail(400, "Python source is required");
+      return fail(
+        400,
+        `candidate.sourceCode is required for a python parser. ${PARSER_CANDIDATE_FIELDS}`,
+      );
     const previous = await prisma.parserCandidate.findUnique({
       where: {
         workspaceId_parserId: { workspaceId, parserId: input.parserId },
@@ -189,14 +263,29 @@ export class ParserFactoryService {
       form.append("specification", JSON.stringify(candidate.specification));
       if (candidate.parserType === "python")
         form.append("sourceCode", candidate.sourceCode || "");
-      const body = await parserRequest(
-        userId,
-        candidate.parserType === "python"
-          ? "/candidate/python/test"
-          : "/candidate/test",
-        form,
-      );
-      fixtures.push({ fileRef: fileId, ...(body.report || { passed: false }) });
+      try {
+        const body = await parserRequest(
+          userId,
+          candidate.parserType === "python"
+            ? "/candidate/python/test"
+            : "/candidate/test",
+          form,
+        );
+        fixtures.push({
+          fileRef: fileId,
+          filename: fileName(form),
+          ...(body.report || { passed: false }),
+        });
+      } catch (error) {
+        // A candidate that raises on one fixture fails that fixture, not the whole test.
+        if ((error as { status?: number }).status !== 422) throw error;
+        fixtures.push({
+          fileRef: fileId,
+          filename: fileName(form),
+          passed: false,
+          errors: [candidateError((error as Error).message)],
+        });
+      }
     }
     const report = {
       passed: fixtures.length > 0 && fixtures.every((f) => f.passed === true),

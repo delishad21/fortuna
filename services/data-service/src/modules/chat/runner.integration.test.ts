@@ -5,6 +5,7 @@ import { RunRepository } from "./run.repository";
 import { executeRun } from "./runner";
 import { ChatProvider, ProviderInput } from "./providers/provider";
 import { CHAT_LIMITS, toolResultForModel } from "./contracts";
+import { createToolRegistry } from "./tools/registry";
 test("worker persists text and tool results independently of any client connection", () =>
   withChatDb(async (db) => {
     const user = await db.user.create({ data: { username: "worker-owner" } });
@@ -193,4 +194,84 @@ test("a run that keeps calling tools after its budget is used up is stopped", ()
       await db.chatToolInvocation.count({ where: { runId: run.id } }),
       reads + CHAT_LIMITS.refusedToolCalls + 1,
     );
+  }));
+test("a tool that throws unexpectedly is recorded as failed and the run carries on", () =>
+  withChatDb(async (db) => {
+    const user = await db.user.create({ data: { username: "failing-tool" } });
+    const conversation = await db.chatConversation.create({
+      data: { userId: user.id },
+    });
+    await db.chatConnection.create({
+      data: {
+        userId: user.id,
+        provider: "openrouter",
+        selected: true,
+        status: "connected",
+      },
+    });
+    await db.chatMessage.create({
+      data: {
+        userId: user.id,
+        conversationId: conversation.id,
+        role: "user",
+        blocks: [{ type: "text", text: "Test my parser" }],
+      },
+    });
+    await db.chatRun.create({
+      data: {
+        userId: user.id,
+        conversationId: conversation.id,
+        idempotencyKey: "failing",
+        provider: "openrouter",
+        model: "test",
+      },
+    });
+    const run = (await new RunRepository(db).claimRun())!;
+    const real = createToolRegistry(db);
+    const tools = {
+      ...real,
+      execute: async (context: any, name: string, args: unknown) => {
+        if (name === "parser_step")
+          throw new Error("connect ECONNREFUSED 172.23.0.5:4000");
+        return real.execute(context, name, args);
+      },
+    };
+    const seen: string[] = [];
+    const provider: ChatProvider = {
+      testConnection: async () => ({
+        connected: true,
+        modelAvailable: true,
+        needsReconnect: false,
+      }),
+      async *run(input: ProviderInput) {
+        seen.push(
+          toolResultForModel(
+            await input.executeTool(
+              "parser_step",
+              { operation: "test", workspaceId: "w", candidateId: "c" },
+              "call-1",
+            ),
+          ),
+        );
+        yield { type: "text_delta", text: "The test failed." };
+        yield { type: "completed" };
+      },
+    };
+    await executeRun(db, run, provider, new AbortController().signal, tools);
+    assert.match(seen[0], /parser_step failed with an internal error/);
+    assert.doesNotMatch(seen[0], /ECONNREFUSED/);
+    const invocation = await db.chatToolInvocation.findFirstOrThrow({
+      where: { runId: run.id },
+    });
+    assert.equal(invocation.status, "failed");
+    assert.match(JSON.stringify(invocation.result), /internal error/);
+    assert.equal(
+      (await db.chatRun.findUniqueOrThrow({ where: { id: run.id } })).status,
+      "completed",
+    );
+    const reply = await db.chatMessage.findFirstOrThrow({
+      where: { conversationId: conversation.id, role: "assistant" },
+    });
+    const activity = (reply.blocks as any[]).find((b) => b.type === "activity");
+    assert.deepEqual(activity.steps, [{ name: "parser_step", ok: false }]);
   }));
