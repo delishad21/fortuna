@@ -112,3 +112,37 @@ test("transaction lists that repeat a review or proposal are not shown again", a
   assert.equal(dropRepeatedLists([list(["t1"], 40)], covered).length, 1);
   assert.equal(dropRepeatedLists([list(["t1"])], new Set()).length, 1);
 });
+
+test("the tool budget keeps its last calls for writes and tells the model what is left", async () => {
+  const { toolCallRefusal, toolBudgetNote } = await import("./runner");
+  const { CHAT_LIMITS, toolResultForModel } = await import("./contracts");
+  const { toolCalls, toolCallsReservedForWrites } = CHAT_LIMITS;
+  const reads = toolCalls - toolCallsReservedForWrites;
+  assert.equal(toolCallRefusal(reads - 1, true), null);
+  assert.match(
+    toolCallRefusal(reads, true)!,
+    /^Tool budget used up for read-only tools/,
+  );
+  assert.equal(toolCallRefusal(reads, false), null);
+  assert.equal(toolCallRefusal(toolCalls - 1, false), null);
+  assert.match(toolCallRefusal(toolCalls, false)!, /^Tool budget used up: /);
+  assert.match(
+    toolBudgetNote(1),
+    new RegExp(
+      `${toolCalls - 1} of ${toolCalls} calls left in this run, ${reads - 1} of them for read-only`,
+    ),
+  );
+  assert.match(
+    toolBudgetNote(toolCalls - 1),
+    /1 of 40 calls left in this run, 0 of them/,
+  );
+  assert.equal(
+    toolResultForModel({
+      blocks: [],
+      model: { ok: 1 },
+      budget: "Tool budget: 3",
+    }),
+    '{"ok":1}\nTool budget: 3',
+  );
+  assert.equal(toolResultForModel({ blocks: [] }), '{"blocks":[]}');
+});

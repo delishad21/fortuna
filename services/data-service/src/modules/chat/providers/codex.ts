@@ -7,7 +7,7 @@ import {
   imageLabel,
 } from "./provider";
 import { CodexRuntime } from "./codex-runtime";
-import { CHAT_LIMITS, toolResultForModel } from "../contracts";
+import { toolResultForModel } from "../contracts";
 export function selectCodexModel(
   models: Array<{
     model: string;
@@ -90,7 +90,6 @@ export class CodexProvider implements ChatProvider {
     let failure: Error | undefined;
     let threadId = "";
     let turnId = "";
-    let calls = 0;
     const push = (event: ProviderEvent) => {
       queue.push(event);
       wake();
@@ -127,8 +126,7 @@ export class CodexProvider implements ChatProvider {
       if (
         signal.aborted ||
         params.threadId !== threadId ||
-        !input.tools.some((t) => t.name === params.tool) ||
-        ++calls > CHAT_LIMITS.toolCalls
+        !input.tools.some((t) => t.name === params.tool)
       )
         throw new Error("Tool is unavailable");
       push({ type: "tool_call", name: params.tool, callId: params.callId });

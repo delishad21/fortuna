@@ -4,6 +4,7 @@ import { withChatDb } from "./test-harness";
 import { RunRepository } from "./run.repository";
 import { executeRun } from "./runner";
 import { ChatProvider, ProviderInput } from "./providers/provider";
+import { CHAT_LIMITS, toolResultForModel } from "./contracts";
 test("worker persists text and tool results independently of any client connection", () =>
   withChatDb(async (db) => {
     const user = await db.user.create({ data: { username: "worker-owner" } });
@@ -63,5 +64,133 @@ test("worker persists text and tool results independently of any client connecti
       JSON.stringify(await db.chatMessage.findMany()).includes(
         "Here are your accounts.",
       ),
+    );
+  }));
+test("calls past the tool budget are refused, recorded and counted in the reply", () =>
+  withChatDb(async (db) => {
+    const user = await db.user.create({ data: { username: "budget-owner" } });
+    const conversation = await db.chatConversation.create({
+      data: { userId: user.id },
+    });
+    await db.chatConnection.create({
+      data: {
+        userId: user.id,
+        provider: "openrouter",
+        selected: true,
+        status: "connected",
+      },
+    });
+    await db.chatMessage.create({
+      data: {
+        userId: user.id,
+        conversationId: conversation.id,
+        role: "user",
+        blocks: [{ type: "text", text: "Look at everything" }],
+      },
+    });
+    await db.chatRun.create({
+      data: {
+        userId: user.id,
+        conversationId: conversation.id,
+        idempotencyKey: "budget",
+        provider: "openrouter",
+        model: "test",
+      },
+    });
+    const run = (await new RunRepository(db).claimRun())!;
+    const reads =
+      CHAT_LIMITS.toolCalls - CHAT_LIMITS.toolCallsReservedForWrites;
+    const seen: string[] = [];
+    const provider: ChatProvider = {
+      testConnection: async () => ({
+        connected: true,
+        modelAvailable: true,
+        needsReconnect: false,
+      }),
+      async *run(input: ProviderInput) {
+        for (let i = 0; i <= reads; i++)
+          seen.push(
+            toolResultForModel(
+              await input.executeTool("get_context", {}, `read-${i}`),
+            ),
+          );
+        seen.push(
+          toolResultForModel(
+            await input.executeTool(
+              "remember",
+              { content: "Budget test note" },
+              "write-1",
+            ),
+          ),
+        );
+        yield { type: "text_delta", text: "Done." };
+        yield { type: "completed" };
+      },
+    };
+    await executeRun(db, run, provider, new AbortController().signal);
+    assert.match(seen[0], /Tool budget: 39 of 40 calls left/);
+    assert.match(seen[reads], /Tool budget used up for read-only tools/);
+    // The refused read did not use the budget, so the write still runs.
+    assert.match(seen[reads + 1], /Tool budget: 3 of 40 calls left/);
+    const refused = await db.chatToolInvocation.findMany({
+      where: { runId: run.id, status: "refused" },
+    });
+    assert.deepEqual(
+      refused.map((r) => r.callId),
+      [`read-${reads}`],
+    );
+    const reply = await db.chatMessage.findFirstOrThrow({
+      where: { conversationId: conversation.id, role: "assistant" },
+    });
+    const activity = (reply.blocks as any[]).find((b) => b.type === "activity");
+    assert.equal(activity.steps.length, reads + 2);
+    assert.equal(activity.steps.filter((s: any) => !s.ok).length, 1);
+  }));
+test("a run that keeps calling tools after its budget is used up is stopped", () =>
+  withChatDb(async (db) => {
+    const user = await db.user.create({ data: { username: "budget-loop" } });
+    const conversation = await db.chatConversation.create({
+      data: { userId: user.id },
+    });
+    await db.chatConnection.create({
+      data: {
+        userId: user.id,
+        provider: "codex",
+        selected: true,
+        status: "connected",
+      },
+    });
+    await db.chatRun.create({
+      data: {
+        userId: user.id,
+        conversationId: conversation.id,
+        idempotencyKey: "loop",
+        provider: "codex",
+        model: "test",
+      },
+    });
+    const run = (await new RunRepository(db).claimRun())!;
+    const provider: ChatProvider = {
+      testConnection: async () => ({
+        connected: true,
+        modelAvailable: true,
+        needsReconnect: false,
+      }),
+      async *run(input: ProviderInput) {
+        // Like Codex, swallow tool errors and keep calling.
+        for (let i = 0; i < 100; i++)
+          await input.executeTool("get_context", {}, `c${i}`).catch(() => {});
+        yield { type: "completed" };
+      },
+    };
+    await executeRun(db, run, provider, new AbortController().signal);
+    const saved = await db.chatRun.findUniqueOrThrow({ where: { id: run.id } });
+    assert.equal(saved.status, "failed");
+    assert.match(saved.error || "", /kept calling tools/);
+    const reads =
+      CHAT_LIMITS.toolCalls - CHAT_LIMITS.toolCallsReservedForWrites;
+    assert.equal(
+      await db.chatToolInvocation.count({ where: { runId: run.id } }),
+      reads + CHAT_LIMITS.refusedToolCalls + 1,
     );
   }));

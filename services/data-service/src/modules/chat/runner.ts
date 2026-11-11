@@ -24,6 +24,22 @@ export function invalidArguments(error: ZodError) {
     1500,
   );
 }
+const READ_CALLS =
+  CHAT_LIMITS.toolCalls - CHAT_LIMITS.toolCallsReservedForWrites;
+/** Why the run's next tool call is refused, given the calls it already made; null when it may run. */
+export function toolCallRefusal(used: number, readOnly: boolean) {
+  const { toolCalls, toolCallsReservedForWrites } = CHAT_LIMITS;
+  if (used >= toolCalls)
+    return `Tool budget used up: this run has made all ${toolCalls} of its tool calls. Do not call more tools. Reply with what you have and tell the user what is left, so they can continue with another message.`;
+  if (readOnly && used >= READ_CALLS)
+    return `Tool budget used up for read-only tools: the last ${toolCallsReservedForWrites} of this run's ${toolCalls} tool calls are kept for write tools (staging, reviews, proposals, notes), and ${toolCalls - used} are left. Use them to save what you found, or reply with what you have.`;
+  return null;
+}
+/** The remaining budget, told to the model with every tool result. */
+export function toolBudgetNote(used: number) {
+  const { toolCalls, toolCallsReservedForWrites } = CHAT_LIMITS;
+  return `Tool budget: ${Math.max(0, toolCalls - used)} of ${toolCalls} calls left in this run, ${Math.max(0, READ_CALLS - used)} of them for read-only tools (the last ${toolCallsReservedForWrites} are kept for write tools).`;
+}
 /** Transactions this run already shows inside a review or an approval preview. */
 async function coveredTransactionIds(db: PrismaClient, runId: string) {
   const [reviews, proposals] = await Promise.all([
@@ -67,7 +83,7 @@ export function dropRepeatedLists<T extends { type: string }>(
 /** The reply as the user sees it: steps taken, text, and what the tools displayed. */
 async function replyBlocks(db: PrismaClient, runId: string, output: string) {
   const outcomes = await db.chatToolInvocation.findMany({
-    where: { runId, status: "completed" },
+    where: { runId, status: { in: ["completed", "refused"] } },
     orderBy: { createdAt: "asc" },
   });
   const shown = outcomes.flatMap((v) =>
@@ -97,7 +113,7 @@ export async function executeRun(
   const signal = AbortSignal.any([parentSignal, controller.signal]);
   const started = Date.now();
   let lastProgress = started;
-  let stopReason: "idle" | "limit" | "lease" | null = null;
+  let stopReason: "idle" | "limit" | "lease" | "tools" | null = null;
   const progress = () => {
     lastProgress = Date.now();
   };
@@ -127,6 +143,8 @@ export async function executeRun(
   };
   let output = "";
   let completed = false;
+  let toolCalls = 0,
+    refusedCalls = 0;
   try {
     const conversation = await db.chatConversation.findFirst({
       where: { id: run.conversationId, userId: run.userId, deletedAt: null },
@@ -173,6 +191,34 @@ export async function executeRun(
     ): Promise<ToolResult> => {
       signal.throwIfAborted();
       progress();
+      const refusal = toolCallRefusal(toolCalls, tools.isReadOnly(name));
+      if (refusal) {
+        // Recorded like any other call, so the activity and run reports count it.
+        const result: ToolResult = {
+          blocks: [{ type: "text", text: refusal }],
+        };
+        await db.chatToolInvocation.upsert({
+          where: { runId_callId: { runId: run.id, callId } },
+          create: {
+            ...context,
+            callId,
+            name,
+            arguments: json(args),
+            status: "refused",
+            result: json(result),
+          },
+          update: {},
+        });
+        await repo.appendEvent(run, {
+          type: "tool_result",
+          name,
+          result: json(result),
+        });
+        if (++refusedCalls > CHAT_LIMITS.refusedToolCalls) stop("tools");
+        signal.throwIfAborted();
+        return result;
+      }
+      toolCalls++;
       const connection = await db.chatConnection.findFirst({
         where: {
           userId: run.userId,
@@ -190,7 +236,10 @@ export async function executeRun(
         where: { runId_callId: { runId: run.id, callId: stableId } },
       });
       if (previous?.status === "completed")
-        return previous.result as unknown as ToolResult;
+        return {
+          ...(previous.result as unknown as ToolResult),
+          budget: toolBudgetNote(toolCalls),
+        };
       if (previous && !tools.isReadOnly(name))
         throw new ChatError(
           409,
@@ -237,7 +286,7 @@ export async function executeRun(
         name,
         result: json(result),
       });
-      return result;
+      return { ...result, budget: toolBudgetNote(toolCalls) };
     };
     for await (const event of provider.run(
       { userId: run.userId, messages, tools: tools.definitions, executeTool },
@@ -273,14 +322,16 @@ export async function executeRun(
     );
   } catch (error) {
     const message =
-      stopReason === "limit"
-        ? "Stopped after 45 minutes. Everything prepared so far is kept below; send a message to continue."
-        : stopReason === "idle"
-          ? "Stopped after 10 minutes without progress. Everything prepared so far is kept below; send a message to continue."
-          : signal.aborted
-            ? "Conversation stopped. Everything prepared so far is kept below."
-            : safeChatError(error) ||
-              "The assistant could not finish. Check the provider connection and try again; everything prepared so far is kept below.";
+      stopReason === "tools"
+        ? `Stopped after the assistant kept calling tools once its ${CHAT_LIMITS.toolCalls}-call budget was used up. Everything prepared so far is kept below; send a message to continue.`
+        : stopReason === "limit"
+          ? "Stopped after 45 minutes. Everything prepared so far is kept below; send a message to continue."
+          : stopReason === "idle"
+            ? "Stopped after 10 minutes without progress. Everything prepared so far is kept below; send a message to continue."
+            : signal.aborted
+              ? "Conversation stopped. Everything prepared so far is kept below."
+              : safeChatError(error) ||
+                "The assistant could not finish. Check the provider connection and try again; everything prepared so far is kept below.";
     // Keep what the run already produced (reviews, proposals, components) reachable.
     const salvaged = await replyBlocks(db, run.id, output).catch(() => []);
     await repo

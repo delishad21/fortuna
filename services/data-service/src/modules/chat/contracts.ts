@@ -16,6 +16,10 @@ export const CHAT_LIMITS = {
   activeRunsPerUser: 1,
   modelTurns: 12,
   toolCalls: 40,
+  /** The last calls of the budget only go to write tools, so a run can still save what it found. */
+  toolCallsReservedForWrites: 4,
+  /** Refused calls a run may make before it is stopped. */
+  refusedToolCalls: 10,
   /** Hard cap on one run; long multi-step tasks at high reasoning effort need room. */
   runMilliseconds: 45 * 60 * 1000,
   /** A run that makes no progress (no model output or tool activity) for this long is stopped. */
@@ -171,10 +175,19 @@ export type ComponentBlock =
         points: Array<{ period: string; expense: string; income: string }>;
       }>;
     };
-/** `blocks` are shown to the user; `model`, when set, replaces them as the model's view of the result. */
-export type ToolResult = { blocks: ResultBlock[]; model?: unknown };
-export const toolResultForModel = (result: ToolResult) =>
-  JSON.stringify(result.model ?? result);
+/**
+ * `blocks` are shown to the user; `model`, when set, replaces them as the model's view of the result.
+ * `budget` is a note on the run's remaining tool calls, given to the model after the result.
+ */
+export type ToolResult = {
+  blocks: ResultBlock[];
+  model?: unknown;
+  budget?: string;
+};
+export const toolResultForModel = ({ budget, ...result }: ToolResult) => {
+  const text = JSON.stringify(result.model ?? result);
+  return budget ? `${text}\n${budget}` : text;
+};
 export class ChatError extends Error {
   constructor(
     public status: number,

@@ -114,7 +114,6 @@ export class OpenRouterProvider implements ChatProvider {
     const imageCharacters = input.messages
       .flatMap((m) => m.images || [])
       .reduce((n, image) => n + image.dataUrl.length, 0);
-    let toolCount = 0;
     for (let turn = 0; turn < CHAT_LIMITS.modelTurns; turn++) {
       signal.throwIfAborted();
       if (JSON.stringify(messages).length - imageCharacters > 192000)
@@ -208,8 +207,6 @@ export class OpenRouterProvider implements ChatProvider {
         tool_calls: toolCalls,
       });
       for (const call of toolCalls) {
-        if (++toolCount > CHAT_LIMITS.toolCalls)
-          throw new Error("Conversation tool limit reached");
         if (!call.id || !input.tools.some((t) => t.name === call.function.name))
           throw new Error("Requested tool is unavailable");
         let args: unknown;
