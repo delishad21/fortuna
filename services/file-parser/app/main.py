@@ -140,6 +140,13 @@ def get_parsers():
             "mode": "bank",
         },
         {
+            "id": "mari_credit_card_pdf",
+            "name": "Mari Credit Card Statement",
+            "fileType": "pdf",
+            "description": "Parser for MariBank credit card statements, including repayments and cashback credits",
+            "mode": "bank",
+        },
+        {
             "id": "ocbc_frank_statement",
             "name": "OCBC FRANK Account Statement",
             "fileType": "pdf",
@@ -166,7 +173,11 @@ def get_parsers():
         parser_items = [item for item in parser_items if item["mode"] == mode]
 
     try:
-        parser_items.extend(list_dynamic_parsers(mode, request.headers))
+        # A built-in parser replaces a user parser with the same ID (it runs first in /parse).
+        parser_items.extend(
+            item for item in list_dynamic_parsers(mode, request.headers)
+            if item.get("id") not in PARSER_MAP
+        )
     except RuntimeError as error:
         app.logger.warning("Dynamic parser registry unavailable: %s", error)
 
