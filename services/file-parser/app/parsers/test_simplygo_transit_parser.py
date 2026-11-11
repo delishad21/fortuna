@@ -60,15 +60,22 @@ PAGE_1 = HEADER + "\n" + "\n".join([
     "(Wed)",
     "06:01 AM -",
     "06:15 AM Train Simei - Changi Airport $ 1.19",
-    "Page 1 of 2",
+    "PAGE 1 OF 2",
 ])
-PAGE_2 = HEADER + "\n" + "\n".join([
+PAGE_2 = "STATEMENT GENERATED ON\n10 Nov 2026\n" + "\n".join([
     # The journey's own route wraps onto the weekday line.
     "27 Oct 2026 Bedok Int - Changi Business Park Ave 1 Opp $ 1.09",
     "(Tue) Changi City Pt",
     "08:40 AM - 09:05 AM Bus 20 Bedok Int - Changi Business Park $ 1.09",
     "Ave 1 Opp Changi City Pt",
-    "Total Charges $ 6.49",
+    # As on the October 2026 statement: the leg's route starts, with its fare,
+    # on the line above its time line, which keeps the mode and the route's end.
+    "26 Oct 2026 Simei - Bef Sample Ave 10 $ 1.61",
+    "(Mon)",
+    "07:16 AM - 07:44 AM Train Simei - Serangoon CCL $ 1.48",
+    "Opp Sample Stn Exit F - Bef Sample Ave $ 0.13",
+    "07:47 AM - 07:57 AM Bus 58 10",
+    "Total Charges $ 8.10",
     "Page 2 of 2",
 ])
 
@@ -87,6 +94,7 @@ def test_reads_wrapped_legs(monkeypatch):
         ("2026-10-29", "SimplyGo: Tampines - Bedok Reservoir Rd Blk 101", 1.40),
         ("2026-10-28", "SimplyGo: Simei - Changi Airport", 1.19),
         ("2026-10-27", "SimplyGo: Bedok Int - Changi Business Park Ave 1 Opp Changi City Pt", 1.09),
+        ("2026-10-26", "SimplyGo: Simei - Bef Sample Ave 10", 1.61),
     ]
     assert [r["metadata"]["legs"] for r in rows] == [
         ["07:55 PM - 08:13 PM Train Paya Lebar CCL - Simei; $1.82"],
@@ -97,8 +105,12 @@ def test_reads_wrapped_legs(monkeypatch):
         ],
         ["06:01 AM - 06:15 AM Train Simei - Changi Airport; $1.19"],
         ["08:40 AM - 09:05 AM Bus 20 Bedok Int - Changi Business Park Ave 1 Opp Changi City Pt; $1.09"],
+        [
+            "07:16 AM - 07:44 AM Train Simei - Serangoon CCL; $1.48",
+            "07:47 AM - 07:57 AM Bus 58 Opp Sample Stn Exit F - Bef Sample Ave 10; $0.13",
+        ],
     ]
-    assert [r["metadata"]["sourcePage"] for r in rows] == [1, 1, 1, 1, 2]
+    assert [r["metadata"]["sourcePage"] for r in rows] == [1, 1, 1, 1, 2, 2]
     assert {r["accountIdentifier"] for r in rows} == {"SimplyGo"}
     assert not any("parseWarning" in r["metadata"] for r in rows)
 
@@ -112,7 +124,7 @@ def test_flags_legs_that_do_not_add_up(monkeypatch):
 
 
 def test_flags_journeys_that_do_not_reach_the_total(monkeypatch):
-    rows = _parse_pages(monkeypatch, [PAGE_1, PAGE_2.replace("$ 6.49", "$ 7.49")])
+    rows = _parse_pages(monkeypatch, [PAGE_1, PAGE_2.replace("$ 8.10", "$ 9.10")])
 
     assert all("A journey may be missing" in r["metadata"]["parseWarning"] for r in rows)
 

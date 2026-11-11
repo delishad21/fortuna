@@ -7,14 +7,18 @@ under the date, then one line per leg with its times, mode, route and fare:
     (Sat)
     07:55 PM - 08:13 PM Train Paya Lebar CCL - Simei $ 1.82
 
-A long leg wraps over two or three lines, and the fare can land on any of
-them (or the weekday can share a line with the wrapped text), e.g.
+A long leg wraps. On the October 2026 statement the PDF puts the start of
+the leg's route, with its fare, on the line above its time line, and the time
+line keeps the mode and the end of the route ("Ave 10"):
 
-    08:02 PM - 08:31 PM Bus 9 Opp Blk 233 -
-    (Sat) Bedok Int $ 0.99
+    07:16 AM - 07:44 AM Train Simei - Serangoon CCL $ 1.48
+    Opp S'goon Stn Exit F - Bef Ang Mo Kio Ave $ 0.13
+    07:47 AM - 07:57 AM Bus 58 10
 
-so a leg is everything from its start time to the next leg or journey, and its
-fare is the "$" amount found in it.
+So a line with a fare that follows a leg which already has one starts the next
+leg, and is put back between that leg's mode and the rest of its route. A leg
+whose fare comes on a later line, or whose route or times run on below it,
+takes those lines too.
 
 Each journey becomes one row. Its legs' fares must add up to the journey's
 charge, and the journeys to the statement's total where it prints one; a
@@ -34,6 +38,9 @@ JOURNEY = re.compile(r"^(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})\s+(.+?)\s+" + MONEY + r"
 LEG_START = re.compile(r"^\d{1,2}:\d{2}\s*[AP]M\b", re.I)
 WEEKDAY = re.compile(r"^\((Mon|Tue|Wed|Thu|Fri|Sat|Sun)\)\s*", re.I)
 FARE = re.compile(MONEY)
+TIME_AND_MODE = re.compile(
+    r"^(\d{1,2}:\d{2}\s*[AP]M(?:\s*-\s*\d{1,2}:\d{2}\s*[AP]M)?)\s+(Train|LRT|Bus\s+\S+)\s*(.*)$", re.I
+)
 COLUMN_HEADINGS = re.compile(r"^Date\s+Journey\s+Charges$", re.I)
 TOTAL = re.compile(r"^Total(?:\s+[A-Za-z]+)*\s+" + MONEY + r"$", re.I)
 # Page furniture that can sit between a page's last leg and the next journey.
@@ -50,25 +57,38 @@ def _money(text):
     return Decimal(text.replace(",", ""))
 
 
-def _leg(parts):
-    text = " ".join(parts)
+def _leg(text):
     fares = FARE.findall(text)
     detail = " ".join(FARE.sub(" ", text).split())
     fare = _money(fares[-1]) if fares else None
     return {"detail": detail, "fare": fare}
 
 
+def _with_route_start(time_line, route_start):
+    """Puts the route's first part, printed above the time line, back after the mode."""
+    match = TIME_AND_MODE.match(time_line)
+    if not match:
+        return f"{time_line} {route_start}"
+    times, mode, rest = match.groups()
+    return " ".join(part for part in (times, mode, route_start, rest) if part)
+
+
 def parse(content):
     journeys = []
     totals = []
     current = None
-    leg_parts = None
+    leg = None  # the open leg's lines
+    route_start = []  # lines above a time line that belong to its leg
 
     def end_leg():
-        nonlocal leg_parts
-        if current is not None and leg_parts:
-            current["legs"].append(_leg(leg_parts))
-        leg_parts = None
+        nonlocal leg, route_start
+        if current is not None:
+            if leg:
+                current["legs"].append(_leg(" ".join(leg)))
+            if route_start:
+                current["legs"].append(_leg(" ".join(route_start)))
+        leg = None
+        route_start = []
 
     with pdfplumber.open(io.BytesIO(content)) as pdf:
         for page_number, page in enumerate(pdf.pages, start=1):
@@ -108,15 +128,32 @@ def parse(content):
                 line = WEEKDAY.sub("", line)
                 if not line:
                     continue
+                open_has_fare = bool(leg) and bool(FARE.search(" ".join(leg)))
                 if LEG_START.match(line):
-                    # "07:55 PM -" wrapped before its end time is still the same leg.
-                    if leg_parts and not FARE.search(" ".join(leg_parts)) and leg_parts[-1].endswith("-"):
-                        leg_parts.append(line)
+                    if leg and not open_has_fare and leg[-1].endswith("-"):
+                        # "07:55 PM -" wrapped before its end time is still the same leg.
+                        leg.append(line)
+                    elif route_start and not FARE.search(line):
+                        start = " ".join(route_start)
+                        route_start = []
+                        end_leg()
+                        leg = [_with_route_start(line, start)]
                     else:
                         end_leg()
-                        leg_parts = [line]
-                elif leg_parts is not None:
-                    leg_parts.append(line)
+                        leg = [line]
+                elif FARE.search(line):
+                    if leg and not open_has_fare and not route_start:
+                        leg.append(line)
+                    else:
+                        # The fare belongs to the next leg, whose time line follows.
+                        if leg:
+                            current["legs"].append(_leg(" ".join(leg)))
+                            leg = None
+                        route_start.append(line)
+                elif route_start:
+                    route_start.append(line)
+                elif leg:
+                    leg.append(line)
                 elif not current["legs"]:
                     # The journey's route wrapped onto the weekday line.
                     current["route"] = f"{current['route']} {line}"

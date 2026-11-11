@@ -51,14 +51,14 @@ def _card_page(rows, previous="500.00", total="420.50"):
 # The layout of the November 2026 statement (an AXS payment, purchases, a
 # foreign purchase and three UOB credits), with made-up rows.
 NOVEMBER_ROWS = [
-    "08 OCT 07 OCT PAYMENT - AXS 500.00 CR",
+    "08 OCT 07 OCT PAYMENT AT AXS (12345678) 500.00CR",
     "Ref No. : 74541836281004567890123",
     "10 OCT 08 OCT SHOPEE SINGAPORE MP SINGAPORE 123.40",
     "Ref No. : 74541836281004567890124",
     "15 OCT 13 OCT NETFLIX.COM LOS GATOS 15.00",
     "USD 10.80",
     "20 OCT 18 OCT GRAB* A-8ABCDEF SINGAPORE 330.10",
-    "05 NOV 05 NOV UOB ONE CASH REBATE 30.00 CR",
+    "05 NOV 05 NOV ONE CARD ENHANCED REBATE 30.00CR",
     "05 NOV 05 NOV UOB ONE ADDITIONAL REBATE 15.00 CR",
     "06 NOV 06 NOV UNI$ REDEMPTION - STATEMENT CREDIT 3.00 CR",
 ]
@@ -73,11 +73,11 @@ def test_keeps_payments_and_credits_as_money_in(monkeypatch):
     rows = _parse_pages(monkeypatch, [SUMMARY_PAGE, _card_page(NOVEMBER_ROWS)])
 
     assert [(r["description"], r["amountIn"], r["amountOut"]) for r in rows] == [
-        ("PAYMENT - AXS", 500.0, None),
+        ("PAYMENT AT AXS (12345678)", 500.0, None),
         ("SHOPEE SINGAPORE MP SINGAPORE", None, 123.4),
         ("NETFLIX.COM LOS GATOS", None, 15.0),
         ("GRAB* A-8ABCDEF SINGAPORE", None, 330.1),
-        ("UOB ONE CASH REBATE", 30.0, None),
+        ("ONE CARD ENHANCED REBATE", 30.0, None),
         ("UOB ONE ADDITIONAL REBATE", 15.0, None),
         ("UNI$ REDEMPTION - STATEMENT CREDIT", 3.0, None),
     ]

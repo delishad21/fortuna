@@ -6,15 +6,16 @@ the transaction date, the description and the amount in SGD:
     PREVIOUS BALANCE 1,234.56
     08 OCT 07 OCT SHOPEE SINGAPORE MP SINGAPORE 23.40
     Ref No. : 74541836281004567890123
-    12 OCT 12 OCT PAYMENT - AXS 1,234.56 CR
-    05 NOV 05 NOV UOB ONE CASH REBATE 30.00 CR
+    09 OCT 08 OCT PAYMENT AT AXS (12345678) 1,234.56CR
+    06 NOV 05 NOV ONE CARD ENHANCED REBATE 30.00CR
     SUB TOTAL 3,333.33
     TOTAL BALANCE FOR UOB ONE CARD 3,333.33
 
-A "CR" after the amount is a credit to the card (payments, rebates, refunds,
+A "CR" after the amount (with or without a space) is a credit to the card (payments, rebates, refunds,
 redemptions): money in. Everything else is a charge: money out. A foreign
-currency purchase repeats its original amount on its own line ("USD 10.80"),
-which is not a transaction.
+currency purchase can repeat its original amount ("USD 10.80"), which is not
+a transaction. A card's rows run over several pages, each restarting with the
+card heading "(continued)".
 
 The rows are checked against the statement's own balances: the previous
 balance plus charges less credits must equal the total balance. A mismatch, or
