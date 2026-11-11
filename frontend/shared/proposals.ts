@@ -466,6 +466,8 @@ export function proposalSummary(proposal: {
       state,
     };
   }
+  if (proposal.kind === "restage_draft" || proposal.kind === "discard_draft")
+    return { title, detail: preview.detail || "Staged import", state };
   const details = preview.details || {};
   return {
     title,

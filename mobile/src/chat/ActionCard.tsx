@@ -11,6 +11,8 @@ const ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
   update_import_rule: "color-wand-outline",
   retain_fixture: "archive-outline",
   commit_drafts: "cloud-upload-outline",
+  restage_draft: "refresh-outline",
+  discard_draft: "trash-outline",
   draft: "document-text-outline",
   transaction: "receipt-outline",
 };

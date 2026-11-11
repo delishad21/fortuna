@@ -8,7 +8,9 @@ import {
   Landmark,
   ListChecks,
   Receipt,
+  RefreshCw,
   Tag,
+  Trash2,
   Upload,
   Wand2,
   type LucideIcon,
@@ -22,6 +24,8 @@ const ICONS: Record<string, LucideIcon> = {
   update_import_rule: Wand2,
   retain_fixture: Archive,
   commit_drafts: Upload,
+  restage_draft: RefreshCw,
+  discard_draft: Trash2,
 };
 const STATE_STYLE: Record<string, string> = {
   "Needs approval": "bg-primary/10 text-primary",

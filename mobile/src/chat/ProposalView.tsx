@@ -444,6 +444,30 @@ function RuleCard({ rule, label }: { rule: any; label?: string }) {
   );
 }
 
+/** Re-staging or discarding staged imports: a few figures and the rows affected. */
+function DraftChange({ preview }: { preview: any }) {
+  return (
+    <Card>
+      <Summary value={preview.facts || {}} />
+      {(preview.lists || []).map((list: { heading: string; items: string[] }) => (
+        <View key={list.heading} style={{ gap: 4 }}>
+          <Label>{list.heading}</Label>
+          {list.items.map((item, i) => (
+            <Txt key={i} size={13}>
+              {item}
+            </Txt>
+          ))}
+        </View>
+      ))}
+      {preview.note ? (
+        <Txt muted size={12}>
+          {preview.note}
+        </Txt>
+      ) : null}
+    </Card>
+  );
+}
+
 /** Readable body for any approval proposal; never raw JSON. */
 export function ProposalView({ proposal }: { proposal: Proposal }) {
   const preview = proposal.preview || {};
@@ -451,6 +475,8 @@ export function ProposalView({ proposal }: { proposal: Proposal }) {
     return <TransactionEdits preview={preview} />;
   if (proposal.kind === "commit_drafts")
     return <CommitDrafts preview={preview} />;
+  if (proposal.kind === "restage_draft" || proposal.kind === "discard_draft")
+    return <DraftChange preview={preview} />;
   if (proposal.kind === "create_account" || proposal.kind === "create_category")
     return (
       <Card>

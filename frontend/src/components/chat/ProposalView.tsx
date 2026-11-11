@@ -602,6 +602,30 @@ function ParserChange({ kind, preview }: { kind: string; preview: any }) {
   );
 }
 
+/** Re-staging or discarding staged imports: a few figures and the rows affected. */
+function DraftChange({ preview }: { preview: any }) {
+  return (
+    <div className="space-y-4">
+      <SummaryList value={preview.facts || {}} />
+      {(preview.lists || []).map((list: { heading: string; items: string[] }) => (
+        <section key={list.heading}>
+          <p className="mb-2 text-xs uppercase tracking-wide text-dark-5">
+            {list.heading}
+          </p>
+          <ul className="space-y-1 text-sm">
+            {list.items.map((item, i) => (
+              <li key={i}>{item}</li>
+            ))}
+          </ul>
+        </section>
+      ))}
+      {preview.note && (
+        <p className="text-xs text-dark-5 dark:text-dark-6">{preview.note}</p>
+      )}
+    </div>
+  );
+}
+
 /** Readable body for any approval proposal; never raw JSON. */
 export function ProposalView({ proposal }: { proposal: Proposal }) {
   const preview = proposal.preview || {};
@@ -609,6 +633,8 @@ export function ProposalView({ proposal }: { proposal: Proposal }) {
     return <TransactionEdits preview={preview} />;
   if (proposal.kind === "commit_drafts")
     return <CommitDrafts preview={preview} />;
+  if (proposal.kind === "restage_draft" || proposal.kind === "discard_draft")
+    return <DraftChange preview={preview} />;
   if (
     ["create_account", "create_category", "update_import_rule"].includes(
       proposal.kind,
