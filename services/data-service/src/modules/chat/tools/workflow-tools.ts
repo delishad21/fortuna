@@ -5,6 +5,7 @@ import { ChatContext, ChatError, idSchema } from "../contracts";
 import { ParserFactoryService as factory } from "../../imports/parser-factory.service";
 import { ToolDefinition } from "../providers/provider";
 import { ImportTools } from "./imports";
+import { rowItemSchema } from "./documents";
 import { json } from "./transactions";
 const str = { type: "string" },
   obj = (properties: Record<string, unknown>, required: string[] = []) => ({
@@ -95,6 +96,25 @@ export const workflowDefinitions: ToolDefinition[] = [
         },
       },
       ["draftId", "rows"],
+    ),
+  },
+  {
+    name: "add_staged_rows",
+    description:
+      "Add transactions to an existing staged import when its source shows them but the parser left them out (for example a cashback credit or a card repayment). Check the import first with inspect_staged_import and add only rows that are really missing; expectedVersion is the import's current version. Rows without an accountIdentifier get the account the import's rows share. The added rows are marked as added, with your reason, and the user reviews and commits them with the rest of the import; nothing is committed. Use stage_rows instead for a source that has no staged import.",
+    inputSchema: obj(
+      {
+        draftId: str,
+        expectedVersion: { type: "integer" },
+        reason: {
+          type: "string",
+          maxLength: 300,
+          description:
+            "Why these rows are missing, e.g. 'Statement lists a 21 Sep cashback credit the parser skipped'",
+        },
+        rows: { type: "array", minItems: 1, maxItems: 50, items: rowItemSchema },
+      },
+      ["draftId", "expectedVersion", "reason", "rows"],
     ),
   },
   {
@@ -207,6 +227,7 @@ export async function executeWorkflowTool(
   if (name === "assign_draft_account") return imports.assign(context, raw);
   if (name === "suggest_draft_labels") return imports.labels(context, raw);
   if (name === "update_staged_rows") return imports.editRows(context, raw);
+  if (name === "add_staged_rows") return imports.addRows(context, raw);
   if (name === "inspect_statement") {
     const { attachmentId } = z
       .object({ attachmentId: idSchema })

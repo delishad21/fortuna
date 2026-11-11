@@ -6,6 +6,7 @@ import { HermesWorkflowService as workflow } from "../../imports/hermes-workflow
 import { ChatError, idSchema, ChatContext } from "../contracts";
 import { paylahHint } from "../../imports/paylah-emails";
 import { draftAmountIssues } from "../../imports/draft-review";
+import { rowSchema } from "./documents";
 import {
   ActionHandler,
   PreparedAction,
@@ -346,6 +347,66 @@ export class ImportTools {
       }
     }
     return { draftId: input.draftId, updated, failed, committed: false };
+  }
+  /** Add rows a parser missed to an open staged import; they are reviewed and committed with it. */
+  async addRows(context: ChatContext, raw: unknown) {
+    const input = z
+      .object({
+        draftId: idSchema,
+        expectedVersion: z.number().int().positive(),
+        reason: z.string().trim().min(1).max(300),
+        rows: z.array(rowSchema).min(1).max(50),
+      })
+      .strict()
+      .parse(raw);
+    const categoryIds = [
+      ...new Set(input.rows.map((r) => r.categoryId).filter(Boolean) as string[]),
+    ];
+    if (
+      categoryIds.length &&
+      (await this.db.category.count({
+        where: { id: { in: categoryIds }, userId: context.userId },
+      })) !== categoryIds.length
+    )
+      throw new ChatError(404, "Category not found; use IDs from get_context");
+    const settings = await this.db.userSettings.findUnique({
+      where: { userId: context.userId },
+      select: { currency: true },
+    });
+    try {
+      const { draft, rows } = await withDatabase(this.db, () =>
+        workflow.addDraftRows(
+          context.userId,
+          input.draftId,
+          {
+            expectedVersion: input.expectedVersion,
+            reason: input.reason,
+            rows: input.rows.map((row) => ({
+              ...row,
+              date: new Date(row.date).toISOString(),
+              currency: row.currency || settings?.currency || "SGD",
+              metadata: row.metadata || {},
+            })),
+          },
+          actor,
+        ),
+      );
+      return {
+        id: draft.id,
+        version: draft.version,
+        added: rows.map((r) => ({
+          id: r.id,
+          rowIndex: r.rowIndex,
+          version: r.version,
+          payload: r.currentPayload,
+        })),
+        committed: false,
+      };
+    } catch (error) {
+      if ((error as Error).message === "Import draft is stale")
+        throw new ChatError(409, "Import draft is stale. Inspect it again for the current version.");
+      throw error;
+    }
   }
   async labels(context: ChatContext, raw: unknown) {
     const input = z

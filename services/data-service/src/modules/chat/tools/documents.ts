@@ -10,6 +10,23 @@ import { ToolDefinition } from "../providers/provider";
 const actor = { actorType: "system" as const, actorId: "fortuna-chat" };
 const str = { type: "string" };
 
+export const rowItemSchema = {
+  type: "object",
+  properties: {
+    date: { ...str, description: "YYYY-MM-DD or ISO timestamp" },
+    description: str,
+    label: str,
+    amountIn: { type: "number" },
+    amountOut: { type: "number" },
+    currency: { ...str, description: "ISO code, e.g. SGD" },
+    accountIdentifier: str,
+    categoryId: { ...str, description: "From get_context" },
+    metadata: { type: "object" },
+  },
+  required: ["date", "description"],
+  additionalProperties: false,
+};
+
 export const documentDefinitions: ToolDefinition[] = [
   {
     name: "read_attachment",
@@ -49,22 +66,7 @@ export const documentDefinitions: ToolDefinition[] = [
           type: "array",
           minItems: 1,
           maxItems: 500,
-          items: {
-            type: "object",
-            properties: {
-              date: { ...str, description: "YYYY-MM-DD or ISO timestamp" },
-              description: str,
-              label: str,
-              amountIn: { type: "number" },
-              amountOut: { type: "number" },
-              currency: { ...str, description: "ISO code, e.g. SGD" },
-              accountIdentifier: str,
-              categoryId: { ...str, description: "From get_context" },
-              metadata: { type: "object" },
-            },
-            required: ["date", "description"],
-            additionalProperties: false,
-          },
+          items: rowItemSchema,
         },
       },
       required: ["rows"],
@@ -74,7 +76,8 @@ export const documentDefinitions: ToolDefinition[] = [
 ];
 
 const positive = z.number().finite().positive().max(9999999999.99);
-const rowSchema = z
+/** One extracted transaction, as stage_rows and add_staged_rows accept it. */
+export const rowSchema = z
   .object({
     date: z
       .string()

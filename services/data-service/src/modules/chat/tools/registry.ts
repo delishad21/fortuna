@@ -325,7 +325,7 @@ export function createToolRegistry(
       // Workflow results inform the model; the user only sees links and components.
       const blocks: ToolResult["blocks"] = [];
       if (
-        name === "stage_statement" &&
+        (name === "stage_statement" || name === "add_staged_rows") &&
         data &&
         typeof data === "object" &&
         "id" in data

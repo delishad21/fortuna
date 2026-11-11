@@ -54,6 +54,9 @@ export function TransactionRowExpanded({
     linkage?.type !== "reimbursement";
   const suggestionReason = String(transaction.metadata?.suggestionReason || "");
   const reviewStatus = String(transaction.metadata?.reviewStatus || "");
+  // Rows the assistant added to a staged import because the parser missed them.
+  const addedRow = transaction.metadata?.addedRow as { reason?: unknown } | undefined;
+  const addedReason = addedRow ? String(addedRow.reason || "") : "";
 
   const handleMarkInternal = () => {
     if (!onLinkageChange) return;
@@ -222,13 +225,18 @@ export function TransactionRowExpanded({
 
           {renderExpandedActions && <div className="mb-4">{renderExpandedActions()}</div>}
 
-          {(transaction.suggestionSource || suggestionReason || reviewStatus) && (
+          {(transaction.suggestionSource || suggestionReason || reviewStatus || addedRow) && (
             <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
               <div className="mb-1 font-medium text-dark dark:text-white">
                 Review details
               </div>
               {reviewStatus && (
                 <p className="text-dark-5 dark:text-dark-6">Status: {reviewStatus}</p>
+              )}
+              {addedRow && (
+                <p className="text-dark-5 dark:text-dark-6">
+                  Added to this import by the assistant{addedReason ? `: ${addedReason}` : ""}
+                </p>
               )}
               {transaction.suggestionSource && (
                 <p className="text-dark-5 dark:text-dark-6">

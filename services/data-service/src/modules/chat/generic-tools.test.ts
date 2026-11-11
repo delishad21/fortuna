@@ -184,6 +184,110 @@ test("stage_rows stages extracted rows with rules, keeps identical journeys and 
     );
   }));
 
+test("add_staged_rows adds a missed credit to an open staged import for review", () =>
+  withChatDb(async (db) => {
+    const { user, context } = await setup(db, "add-rows");
+    const other = await db.user.create({ data: { username: "add-rows-other" } });
+    const card = "532392****2124";
+    const charge = {
+      date: "2026-09-16",
+      description: "Trip.com",
+      amountOut: 1715.2,
+      currency: "SGD",
+      accountIdentifier: card,
+    };
+    const draft = await db.importDraft.create({
+      data: {
+        userId: user.id,
+        mode: "main",
+        parserId: "mari_credit_card_pdf",
+        sourceFilename: "Oct2026_Mari_Credit_Card_E-Statement.pdf",
+        sourceSha256: "mari-oct",
+        status: "review",
+        version: 3,
+        expiresAt: new Date("2099-01-01"),
+        rows: {
+          create: {
+            rowIndex: 0,
+            parsedPayload: charge,
+            currentPayload: charge,
+          },
+        },
+      },
+    });
+    const tools = createToolRegistry(db);
+    const cashback = {
+      date: "2026-09-21",
+      description: "Cashback",
+      amountIn: 27.46,
+    };
+    const input = {
+      draftId: draft.id,
+      expectedVersion: 3,
+      reason: "Statement lists a 21 Sep cashback credit the parser skipped",
+      rows: [cashback],
+    };
+    const added = await tools.execute(context, "add_staged_rows", input);
+    assert.deepEqual(
+      added.blocks.map((b: any) => [b.type, b.kind, b.id]),
+      [["link", "draft", draft.id]],
+    );
+    assert.equal((added.model as any).version, 4);
+    assert.equal((added.model as any).committed, false);
+    const rows = await db.importDraftRow.findMany({
+      where: { draftId: draft.id },
+      orderBy: { rowIndex: "asc" },
+    });
+    assert.equal(rows.length, 2);
+    assert.equal(rows[1].rowIndex, 1);
+    assert.equal(rows[1].reviewStatus, "unresolved");
+    const payload = rows[1].currentPayload as any;
+    // The new row takes the card the import's rows share and the user's currency.
+    assert.equal(payload.accountIdentifier, card);
+    assert.equal(payload.currency, "SGD");
+    assert.equal(payload.amountIn, 27.46);
+    assert.equal(payload.metadata.addedRow.reason, input.reason);
+    assert.equal((rows[1].provenance as any).source, "added_row");
+    assert.equal(
+      await db.agentAuditEvent.count({
+        where: { toolName: "add_import_draft_rows", targetId: draft.id },
+      }),
+      1,
+    );
+    assert.equal(tools.isReadOnly("add_staged_rows"), false);
+
+    // The version read before the add is now stale.
+    await assert.rejects(
+      tools.execute(context, "add_staged_rows", input),
+      /stale\. Inspect it again/,
+    );
+    await assert.rejects(
+      tools.execute(context, "add_staged_rows", {
+        ...input,
+        expectedVersion: 4,
+        rows: [{ ...cashback, amountOut: 1 }],
+      }),
+      /exactly one of amountIn or amountOut/,
+    );
+    await assert.rejects(
+      tools.execute(
+        { ...context, userId: other.id },
+        "add_staged_rows",
+        { ...input, expectedVersion: 4 },
+      ),
+      /Import draft not found/,
+    );
+    await db.importDraft.update({
+      where: { id: draft.id },
+      data: { status: "committed" },
+    });
+    await assert.rejects(
+      tools.execute(context, "add_staged_rows", { ...input, expectedVersion: 4 }),
+      /Cannot add rows to a committed draft/,
+    );
+    assert.equal(await db.importDraftRow.count({ where: { draftId: draft.id } }), 2);
+  }));
+
 test("read_attachment pages through documents and refuses images", () =>
   withChatDb(async (db) => {
     const { user, conversation, context } = await setup(db, "read-doc");

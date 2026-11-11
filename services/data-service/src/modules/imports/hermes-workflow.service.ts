@@ -352,6 +352,115 @@ export class HermesWorkflowService {
     });
   }
 
+  /**
+   * Append rows to an open staged import, for transactions its source shows but the parser
+   * missed. The rows get the import's rules and go through its review like parsed rows;
+   * provenance and metadata.addedRow record who added them and why. Re-parsing the import
+   * replaces them along with the parsed rows.
+   */
+  static async addDraftRows(
+    userId: string,
+    draftId: string,
+    input: {
+      expectedVersion: number;
+      reason: string;
+      rows: Array<Record<string, unknown>>;
+    },
+    actor: Actor,
+  ) {
+    const draft = await prisma.importDraft.findFirst({
+      where: { id: draftId, userId },
+      include: { rows: { orderBy: { rowIndex: "asc" } } },
+    });
+    if (!draft)
+      throw Object.assign(new Error("Import draft not found"), { status: 404 });
+    if (draft.mode !== "main")
+      throw Object.assign(new Error("Rows can only be added to main-ledger imports"), {
+        status: 400,
+      });
+    // Missing payloads get the account the import's rows already share.
+    const accounts = [
+      ...new Set(
+        draft.rows
+          .map((row) => (row.currentPayload as Record<string, unknown>).accountIdentifier)
+          .filter((value): value is string => typeof value === "string" && value !== ""),
+      ),
+    ];
+    const rows = input.rows.map((row) => ({
+      ...row,
+      accountIdentifier:
+        row.accountIdentifier || (accounts.length === 1 ? accounts[0] : undefined),
+      metadata: {
+        ...((row.metadata as Record<string, unknown> | undefined) || {}),
+        addedRow: { by: actor.actorId || actor.actorType, reason: input.reason },
+      },
+    }));
+    const ruled = await enrichImportRows(
+      userId,
+      { filename: draft.sourceFilename, parserId: draft.parserId || undefined },
+      rows,
+    );
+    return runInTransaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM import_drafts WHERE id = ${draftId} AND user_id = ${userId} FOR UPDATE`;
+      const parent = await tx.importDraft.findUniqueOrThrow({ where: { id: draftId } });
+      if (["committed", "discarded", "expired", "failed", "inspecting"].includes(parent.status))
+        throw Object.assign(new Error(`Cannot add rows to a ${parent.status} draft`), {
+          status: 409,
+        });
+      if (parent.version !== input.expectedVersion)
+        throw Object.assign(new Error("Import draft is stale"), { status: 409 });
+      const last = await tx.importDraftRow.findFirst({
+        where: { draftId },
+        orderBy: { rowIndex: "desc" },
+        select: { rowIndex: true },
+      });
+      const firstIndex = (last?.rowIndex ?? -1) + 1;
+      await tx.importDraftRow.createMany({
+        data: ruled.map((transaction, offset) => {
+          const fixedRuleId = String(
+            ((transaction as any).metadata as Record<string, unknown> | undefined)
+              ?.fixedRuleId || "",
+          );
+          return {
+            draftId,
+            rowIndex: firstIndex + offset,
+            parsedPayload: rows[offset] as Prisma.InputJsonValue,
+            currentPayload: transaction as unknown as Prisma.InputJsonValue,
+            reviewStatus: fixedRuleId ? "auto_applied" : "unresolved",
+            provenance: {
+              source: "added_row",
+              addedBy: actor.actorId || actor.actorType,
+              reason: input.reason,
+              ...(fixedRuleId ? { fixedRuleId } : {}),
+            } as Prisma.InputJsonValue,
+          };
+        }),
+      });
+      const next = await tx.importDraft.update({
+        where: { id: draftId },
+        data: {
+          status: "review",
+          version: { increment: 1 },
+          validationHash: null,
+          commitTokenHash: null,
+          commitTokenExpiresAt: null,
+        },
+      });
+      const added = await tx.importDraftRow.findMany({
+        where: { draftId, rowIndex: { gte: firstIndex } },
+        orderBy: { rowIndex: "asc" },
+      });
+      await audit(tx, userId, actor, {
+        toolName: "add_import_draft_rows",
+        targetType: "import_draft",
+        targetId: draftId,
+        afterValue: added.map((row) => row.currentPayload) as Prisma.InputJsonValue,
+        metadata: { rowCount: added.length, reason: input.reason, draftVersion: next.version },
+      });
+      return { draft: next, rows: added };
+    });
+  }
+
   static async createDraft(
     userId: string,
     input: {
