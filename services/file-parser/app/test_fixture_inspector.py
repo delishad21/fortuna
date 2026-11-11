@@ -57,6 +57,18 @@ class FixtureInspectorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             inspect_fixture(pdf, "long.pdf", MAX_PAGES + 10)
 
+    def test_pdf_end_page_limits_the_range(self):
+        pdf = make_pdf(MAX_PAGES + 3)
+        middle = inspect_fixture(pdf, "long.pdf", 3, 4)
+        self.assertEqual([p["page"] for p in middle["pages"]], [3, 4])
+        self.assertIsNone(middle["nextPage"])
+        self.assertFalse(middle["truncated"])
+        wide = inspect_fixture(pdf, "long.pdf", 2, MAX_PAGES + 3)
+        self.assertEqual(len(wide["pages"]), MAX_PAGES)
+        self.assertEqual(wide["nextPage"], MAX_PAGES + 2)
+        with self.assertRaises(ValueError):
+            inspect_fixture(pdf, "long.pdf", 4, 3)
+
 
 if __name__ == "__main__":
     unittest.main()

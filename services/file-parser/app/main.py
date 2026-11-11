@@ -228,10 +228,11 @@ def inspect_candidate_fixture():
     try:
         fixture = request.files["file"]
         start_page = int(request.form.get("startPage") or 1)
+        end_page = int(request.form.get("endPage") or 0) or None
         return jsonify(
             {
                 "fixture": inspect_fixture(
-                    fixture.read(), fixture.filename or "statement", start_page
+                    fixture.read(), fixture.filename or "statement", start_page, end_page
                 )
             }
         )

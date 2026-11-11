@@ -8,8 +8,8 @@ MAX_PREVIEW_CHARS = 60_000
 MAX_PAGES = 12
 
 
-def inspect_fixture(content, filename="statement", start_page=1):
-    """Extract text for reading. PDFs return up to MAX_PAGES pages from start_page, with nextPage when more remain."""
+def inspect_fixture(content, filename="statement", start_page=1, end_page=None):
+    """Extract text for reading. PDFs return up to MAX_PAGES pages from start_page (through end_page when given), with nextPage when more remain."""
     if not isinstance(content, bytes) or not content:
         raise ValueError("Fixture content is required")
 
@@ -26,10 +26,13 @@ def inspect_fixture(content, filename="statement", start_page=1):
         with pdfplumber.open(io.BytesIO(content)) as pdf:
             if start > max(len(pdf.pages), 1):
                 raise ValueError(f"Document has {len(pdf.pages)} pages")
+            stop = start - 1 + MAX_PAGES
+            if end_page:
+                if int(end_page) < start:
+                    raise ValueError("endPage must not be before startPage")
+                stop = min(stop, int(end_page))
             next_page = None
-            for page_number, page in enumerate(
-                pdf.pages[start - 1 : start - 1 + MAX_PAGES], start=start
-            ):
+            for page_number, page in enumerate(pdf.pages[start - 1 : stop], start=start):
                 text = page.extract_text() or ""
                 remaining = MAX_PREVIEW_CHARS - total_chars
                 if remaining <= 0:
@@ -44,6 +47,9 @@ def inspect_fixture(content, filename="statement", start_page=1):
             last = pages[-1]["page"] if pages else start - 1
             if next_page is None and last < len(pdf.pages):
                 next_page = last + 1
+            # Pages after an explicit endPage were not asked for: not a truncation.
+            if next_page is not None and end_page and next_page > int(end_page):
+                next_page = None
             if next_page is not None:
                 base["truncated"] = True
             base.update(
