@@ -81,10 +81,14 @@ test("the chat names matched PayLah top-ups in a staged DBS draft from Gmail and
         assert.ok(input.tools.some((t) => t.name === "search_paylah_emails"));
         const guide = (await input.executeTool("get_paylah_email_guide", {}, "c1")).model as any;
         assert.equal(guide.payments.tool, "update_staged_rows");
-        const draft = (await input.executeTool("inspect_staged_import", { draftId }, "c2")).model as any;
-        assert.match(draft.paylahHint, /3 PayLah payment row\(s\)/);
+        const summary = (await input.executeTool("inspect_staged_import", { draftId }, "c2")).model as any;
+        assert.match(summary.paylahHint, /3 PayLah payment row\(s\)/);
+        assert.match(summary.paylahHint, /Gmail is connected: call get_paylah_email_guide, then search_paylah_emails/);
         const found = (await input.executeTool("search_paylah_emails", { from: "2026-09-01", to: "2026-09-30" }, "c3")).model as any;
-        const free = draft.rows.filter((r: any) => /TOP-UP TO PAYLAH!/.test(r.currentPayload.description));
+        const page = (
+          await input.executeTool("inspect_staged_import", { draftId, search: "TOP-UP TO PAYLAH!", fields: ["date", "description", "amounts"] }, "c3b")
+        ).model as any;
+        const free = page.rows.map((r: any) => ({ ...r, currentPayload: r }));
         const edits = [];
         for (const email of found.emails) {
           const row = free.find(

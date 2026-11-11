@@ -189,9 +189,15 @@ export class ParserFactoryService {
     if (!body.fixture) return fail(502, "Fixture inspection failed");
     return { fixture: body.fixture };
   }
-  static async inspectStatement(userId: string, fileId: string, startPage = 1) {
+  static async inspectStatement(
+    userId: string,
+    fileId: string,
+    startPage = 1,
+    endPage?: number,
+  ) {
     const form = await fileForm(userId, fileId);
     form.append("startPage", String(startPage));
+    if (endPage) form.append("endPage", String(endPage));
     const body = await parserRequest(userId, "/candidate/inspect", form);
     if (!body.fixture) return fail(502, "Statement inspection failed");
     return { fixture: body.fixture };

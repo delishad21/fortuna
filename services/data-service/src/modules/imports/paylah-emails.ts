@@ -31,9 +31,9 @@ const tools = {
     editPayload:
       "Send each row's id and current version with only description, label, categoryId and metadata. The server writes the row's full current payload with just those fields changed; date, amountIn, amountOut, accountIdentifier, balance and linkage are never changed this way.",
     labels:
-      "With the merchant in the description, call find_transactions with search set to the merchant over the past year: past labels and categories for the same merchant are the strongest evidence. Set label and categoryId in the same update_staged_rows call, or leave them out when unsure.",
+      "With the merchants in the descriptions, call find_similar_transactions once with all of them (descriptions takes up to 25): past labels and categories for the same merchant are the strongest evidence. Set label and categoryId in the same update_staged_rows call, or leave them out when unsure.",
     reimbursements:
-      "Use find_transactions to find the expense it repays. The receipt is a staged row, so propose the link with request_transaction_review: put the row in stagedRowIds and pre-fill a suggestion with linkage {type:'reimbursement', reimbursesAllocations:[{transactionId, amount}]}. update_staged_rows can't set links, and propose_transaction_edits only edits saved transactions. Reimbursement links are review-only; propose them, never commit them unasked.",
+      "Use get_reimbursement_candidates with the receipt's row id (draftRowId) to find the expense it repays, saved or staged. The receipt is a staged row, so propose the link with request_transaction_review: put the row in stagedRowIds and pre-fill a suggestion with linkage {type:'reimbursement', reimbursesAllocations:[{transactionId | stagedDraftId+stagedRowId, amount}]}. update_staged_rows can't set links, and propose_transaction_edits only edits saved transactions. Reimbursement links are review-only; propose them, never commit them unasked.",
   },
 } as const;
 

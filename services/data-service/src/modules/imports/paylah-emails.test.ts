@@ -28,7 +28,10 @@ describe("PayLah email guide", () => {
     assert.deepEqual(chat.matching, mcp.matching);
     assert.deepEqual(chat.payments.metadata, mcp.payments.metadata);
     assert.match(JSON.stringify(chat), /search_paylah_emails/);
-    for (const mcpOnly of ["find_similar_transactions", "get_ledger_reimbursement_candidates", "update_import_draft_row"])
+    assert.match(JSON.stringify(chat), /find_similar_transactions/);
+    assert.match(JSON.stringify(chat), /get_reimbursement_candidates/);
+    assert.match(JSON.stringify(mcp), /get_ledger_reimbursement_candidates/);
+    for (const mcpOnly of ["get_ledger_reimbursement_candidates", "update_import_draft_row"])
       assert.equal(JSON.stringify(chat).includes(mcpOnly), false, `${mcpOnly} is not a chat tool`);
   });
 

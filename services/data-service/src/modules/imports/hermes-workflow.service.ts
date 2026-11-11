@@ -98,7 +98,7 @@ function publicFile(file: {
   };
 }
 
-async function audit(
+export async function audit(
   tx: Prisma.TransactionClient,
   userId: string,
   actor: Actor,
@@ -710,6 +710,57 @@ export class HermesWorkflowService {
     };
   }
 
+  /** Run a draft's statement through a parser's current version; main drafts get import rules and suggestions. */
+  static async runDraftParser(
+    userId: string,
+    draft: {
+      mode: string;
+      sourceFilename: string;
+      sourceFile: { storagePath: string; contentType: string };
+    },
+    parserId: string,
+  ) {
+    const bytes = await readFile(draft.sourceFile.storagePath);
+    const form = new FormData();
+    form.append(
+      "file",
+      new Blob([bytes], { type: draft.sourceFile.contentType }),
+      draft.sourceFilename,
+    );
+    form.append("parserId", parserId);
+    const internalToken = process.env.INTERNAL_SERVICE_TOKEN;
+    if (!internalToken)
+      throw new Error("INTERNAL_SERVICE_TOKEN is required for parser calls");
+    const response = await fetch(new URL("/parse", PARSER_SERVICE_URL), {
+      method: "POST",
+      body: form,
+      headers: {
+        "X-Internal-Service-Token": internalToken,
+        "X-Authenticated-User-Id": userId,
+      },
+    });
+    const result = (await response.json()) as {
+      error?: string;
+      parserVersion?: string;
+      transactions?: Array<Record<string, unknown>>;
+    };
+    if (!response.ok || !Array.isArray(result.transactions)) {
+      throw new Error(result.error || `Parser returned ${response.status}`);
+    }
+    const parsedTransactions =
+      draft.mode === "main"
+        ? await enrichImportRows(
+            userId,
+            { filename: draft.sourceFilename, parserId },
+            result.transactions,
+          )
+        : result.transactions;
+    return {
+      result: result as typeof result & { transactions: Array<Record<string, unknown>> },
+      parsedTransactions: parsedTransactions as Array<Record<string, unknown>>,
+    };
+  }
+
   static async parseDraft(
     userId: string,
     draftId: string,
@@ -736,43 +787,11 @@ export class HermesWorkflowService {
       data: { status: "inspecting", error: null },
     });
     try {
-      const bytes = await readFile(draft.sourceFile.storagePath);
-      const form = new FormData();
-      form.append(
-        "file",
-        new Blob([bytes], { type: draft.sourceFile.contentType }),
-        draft.sourceFilename,
+      const { result, parsedTransactions } = await this.runDraftParser(
+        userId,
+        { ...draft, sourceFile: draft.sourceFile },
+        parserId,
       );
-      form.append("parserId", parserId);
-      const internalToken = process.env.INTERNAL_SERVICE_TOKEN;
-      if (!internalToken)
-        throw new Error("INTERNAL_SERVICE_TOKEN is required for parser calls");
-      const response = await fetch(new URL("/parse", PARSER_SERVICE_URL), {
-        method: "POST",
-        body: form,
-        headers: {
-          "X-Internal-Service-Token": internalToken,
-          "X-Authenticated-User-Id": userId,
-        },
-      });
-      const result = (await response.json()) as {
-        error?: string;
-        parserVersion?: string;
-        transactions?: Array<Record<string, unknown>>;
-      };
-      if (!response.ok || !Array.isArray(result.transactions)) {
-        throw new Error(result.error || `Parser returned ${response.status}`);
-      }
-
-      const parsedTransactions =
-        draft.mode === "main"
-          ? await enrichImportRows(
-              userId,
-              { filename: draft.sourceFilename, parserId },
-              result.transactions,
-            )
-          : result.transactions;
-
       return await runInTransaction(async (tx) => {
         await removeDraftLinks(tx, userId, draft.id);
         await tx.classificationProposal.deleteMany({
@@ -790,7 +809,7 @@ export class HermesWorkflowService {
               return {
                 draftId: draft.id,
                 rowIndex,
-                parsedPayload: result.transactions![
+                parsedPayload: result.transactions[
                   rowIndex
                 ] as Prisma.InputJsonValue,
                 currentPayload: transaction as unknown as Prisma.InputJsonValue,
@@ -1981,8 +2000,10 @@ export class HermesWorkflowService {
       });
       return next;
     });
-    if (draft.sourceFile && !draft.sourceFile.retained)
-      await unlink(draft.sourceFile.storagePath).catch(() => undefined);
+    // Inside a chat approval the transaction commits later; delete the file only then.
+    const file = draft.sourceFile;
+    if (file && !file.retained)
+      await afterCommit(() => unlink(file.storagePath).catch(() => undefined));
     return updated;
   }
 }

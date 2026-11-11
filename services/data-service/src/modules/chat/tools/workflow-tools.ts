@@ -4,7 +4,9 @@ import { z } from "zod";
 import { ChatContext, ChatError, idSchema } from "../contracts";
 import { ParserFactoryService as factory } from "../../imports/parser-factory.service";
 import { ToolDefinition } from "../providers/provider";
-import { ImportTools } from "./imports";
+import { ImportTools, STAGED_EDIT_LIMIT } from "./imports";
+import { inspectJsonSchema } from "./draft-inspect";
+import { checkStatementTotals, totalsDefinition } from "./statement-totals";
 import { rowItemSchema } from "./documents";
 import { json } from "./transactions";
 import {
@@ -32,13 +34,13 @@ export const workflowDefinitions: ToolDefinition[] = [
   {
     name: "inspect_staged_import",
     description:
-      "Read the draft rows, suggestions and rationale. Rows include their version for labelling proposals.",
-    inputSchema: obj({ draftId: str }, ["draftId"]),
+      "Read a staged import. With only draftId it returns a summary, not rows: counts by review status, unlabelled and needing-review counts, money in/out per account, the statement period, amount problems, PayLah rows still to name (and whether Gmail is connected), the parser and its version, and the first rows needing review. Start there. To read rows, add filters (rowIds, needsReview, unlabelled, direction 'in' for credits, dateFrom/dateTo, search) and page with offset/limit (at most 100 rows per call; nextOffset says where the next page starts); fields picks what each row returns. Every row comes with its id and current version, which update_staged_rows and suggest_draft_labels need. Ask only for the rows and fields you need; don't re-read the whole import after each edit (write tools return the new row versions).",
+    inputSchema: inspectJsonSchema,
   },
   {
     name: "inspect_statement",
     description:
-      "Read uploaded statement text without retaining it as a parser fixture. Returns the statementFileId (upload_…) that parser tools and retain_fixture use.",
+      "Read uploaded statement text without retaining it as a parser fixture, up to 12 pages per call: startPage/endPage pick the pages, and nextPage says where to continue. Returns the statementFileId (upload_…) that parser tools and retain_fixture use.",
     inputSchema: obj(
       {
         attachmentId: {
@@ -46,8 +48,26 @@ export const workflowDefinitions: ToolDefinition[] = [
           description:
             "The attachment ID from this conversation (its statementFileId also works)",
         },
+        startPage: { type: "integer", minimum: 1, description: "First page to read (default 1)" },
+        endPage: { type: "integer", minimum: 1, description: "Last page to read (default: 12 pages from startPage)" },
       },
       ["attachmentId"],
+    ),
+  },
+  totalsDefinition,
+  {
+    name: "restage_draft",
+    description:
+      "Propose re-running an uncommitted staged import with the current version of its parser, for example after a parser fix or when inspect_staged_import's parserVersionNote says it was staged with an older version. The user approves it in the interface; the preview shows rows kept, added and removed. Rows that still match (same date, amounts and description) keep their labels, categories, edited descriptions, metadata and reimbursement links; rows the parser no longer produces are removed, rows added with add_staged_rows stay. Use this instead of discarding and staging the statement again. Nothing is committed.",
+    inputSchema: obj({ draftId: str }, ["draftId"]),
+  },
+  {
+    name: "discard_draft",
+    description:
+      "Propose discarding uncommitted staged imports (up to 20). The user approves it in the interface; the preview lists their rows, labels and links that would be lost. To re-parse an import with a fixed parser use restage_draft instead.",
+    inputSchema: obj(
+      { draftIds: { type: "array", items: str, minItems: 1, maxItems: 20 } },
+      ["draftIds"],
     ),
   },
   {
@@ -90,14 +110,14 @@ export const workflowDefinitions: ToolDefinition[] = [
   {
     name: "update_staged_rows",
     description:
-      "Edit rows of a staged import directly: description, label, categoryId and metadata only (metadata keys are merged into the row's). Dates, amounts, accounts, balances and reimbursement links never change this way. For links, use propose_transaction_edits when the reimbursement is a saved transaction (it may pay back staged rows), or request_transaction_review when the reimbursement is a staged row. Each row needs its current version from inspect_staged_import. Nothing is committed: the user still reviews and commits the import. Use it when the source of the change is clear (for example PayLah emails matched by get_paylah_email_guide); use suggest_draft_labels for label guesses the user should confirm.",
+      `Edit rows of a staged import directly: description, label, categoryId and metadata only (metadata keys are merged into the row's). Dates, amounts, accounts, balances and reimbursement links never change this way. For links, use propose_transaction_edits when the reimbursement is a saved transaction (it may pay back staged rows), or request_transaction_review when the reimbursement is a staged row. Each row needs its current version from inspect_staged_import. Send up to ${STAGED_EDIT_LIMIT} rows in one call (a whole statement); each row is saved on its own, and failed lists rows that weren't. Nothing is committed: the user still reviews and commits the import. Use it when the source of the change is clear (for example PayLah emails matched by get_paylah_email_guide); use suggest_draft_labels for label guesses the user should confirm.`,
     inputSchema: obj(
       {
         draftId: str,
         rows: {
           type: "array",
           minItems: 1,
-          maxItems: 100,
+          maxItems: STAGED_EDIT_LIMIT,
           items: obj(
             {
               rowId: str,
@@ -254,17 +274,34 @@ export async function executeWorkflowTool(
   if (name === "suggest_draft_labels") return imports.labels(context, raw);
   if (name === "update_staged_rows") return imports.editRows(context, raw);
   if (name === "add_staged_rows") return imports.addRows(context, raw);
+  if (name === "check_statement_totals")
+    return checkStatementTotals(db, context, raw);
   if (name === "inspect_statement") {
-    const { attachmentId } = z
-      .object({ attachmentId: idSchema })
+    const { attachmentId, startPage, endPage, fromPage } = z
+      .object({
+        attachmentId: idSchema,
+        startPage: z.number().int().min(1).optional(),
+        endPage: z.number().int().min(1).optional(),
+        // read_attachment's name for it; the model reaches for it here too.
+        fromPage: z.number().int().min(1).optional(),
+      })
       .strict()
+      .refine(
+        (v) => !v.endPage || v.endPage >= (v.startPage || v.fromPage || 1),
+        "endPage must not be before startPage",
+      )
       .parse(raw);
     const file = await requireConversationAttachment(db, context, attachmentId);
     if (isImageType(file.statementFile.contentType))
       throw new ChatError(400, IMAGE_NOT_STATEMENT);
     return {
       statementFileId: file.statementFileId,
-      ...(await factory.inspectStatement(context.userId, file.statementFileId)),
+      ...(await factory.inspectStatement(
+        context.userId,
+        file.statementFileId,
+        startPage || fromPage || 1,
+        endPage,
+      )),
     };
   }
   if (name === "list_parsers") {

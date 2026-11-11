@@ -20,6 +20,8 @@ import { TransactionActions, json } from "./transactions";
 import { ReadTools } from "./read";
 import { documentDefinitions, executeDocumentTool } from "./documents";
 import { MemoryService, memoryDefinitions } from "../memories.service";
+import { executeLedgerTool, ledgerDefinitions, ledgerToolNames } from "./ledger";
+import { executeRuleTool, ruleDefinitions, ruleToolNames } from "./import-rules";
 import {
   ComponentTools,
   componentForModel,
@@ -125,7 +127,7 @@ export function createToolRegistry(
     {
       name: "find_transactions",
       description:
-        "Find a bounded page of saved transactions with IDs for review or edit proposals. Visible only to you; use show_component with transaction_list to display transactions.",
+        "Find a page of saved transactions with IDs for review or edit proposals: at most 100 per call (limit, default 30). Returns total (all matches) and nextOffset; call again with offset=nextOffset for the next page. Visible only to you; use show_component with transaction_list to display transactions.",
       inputSchema: objectSchema(
         {
           ...range,
@@ -244,6 +246,8 @@ export function createToolRegistry(
   const memories = new MemoryService(db);
   definitions.push(...workflowDefinitions);
   definitions.push(...mailDefinitions);
+  definitions.push(...ledgerDefinitions);
+  definitions.push(...ruleDefinitions);
   async function execute(
     context: ChatContext,
     name: string,
@@ -264,10 +268,36 @@ export function createToolRegistry(
         blocks: [],
         model: json(await read.summary(context.userId, input)),
       };
-    if (name === "find_transactions")
+    if (name === "find_transactions") {
+      const page = await read.transactionPage(context.userId, input);
+      const offset = (input as { offset?: number })?.offset || 0;
+      const next = offset + page.rows.length;
       return {
         blocks: [],
-        model: json(await read.transactions(context.userId, input)),
+        model: json({
+          total: page.total,
+          offset,
+          nextOffset: next < page.total ? next : null,
+          rows: page.rows,
+        }),
+      };
+    }
+    if (name === "restage_draft" || name === "discard_draft") {
+      const proposal = await approvals.proposeAction(context, {
+        ...(input as object),
+        kind: name,
+      });
+      return proposalResult(proposal);
+    }
+    if (ledgerToolNames.includes(name))
+      return {
+        blocks: [],
+        model: json(await executeLedgerTool(db, context, name, input)),
+      };
+    if (ruleToolNames.includes(name))
+      return {
+        blocks: [],
+        model: json(await executeRuleTool(db, context, name, input)),
       };
     if (name === "show_component") {
       const block = json(
@@ -386,6 +416,11 @@ export function createToolRegistry(
         "inspect_statement",
         "get_paylah_email_guide",
         "search_paylah_emails",
+        "find_similar_transactions",
+        "get_reimbursement_candidates",
+        "check_statement_totals",
+        "list_import_rules",
+        "test_import_rule",
       ].includes(name),
   };
 }

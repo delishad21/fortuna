@@ -6,8 +6,13 @@ import { z } from "zod";
 import { withDatabase } from "../../../lib/database-context";
 import { HermesWorkflowService as workflow } from "../../imports/hermes-workflow.service";
 import { ChatError, idSchema, ChatContext } from "../contracts";
-import { paylahHint } from "../../imports/paylah-emails";
-import { draftAmountIssues } from "../../imports/draft-review";
+import {
+  InspectableDraft,
+  draftRowsPage,
+  draftSummary,
+  inspectSchema,
+  wantsRows,
+} from "./draft-inspect";
 import { rowSchema } from "./documents";
 import {
   ActionHandler,
@@ -17,6 +22,8 @@ import {
   json,
 } from "./transactions";
 const actor = { actorType: "system" as const, actorId: "fortuna-chat" };
+/** update_staged_rows takes a whole statement's rows in one call; each row is saved on its own. */
+export const STAGED_EDIT_LIMIT = 500;
 export const commitDraftsSchema = z
   .object({
     kind: z.literal("commit_drafts"),
@@ -153,28 +160,6 @@ export class ImportActions implements ActionHandler {
     return json({ draftResults: results });
   }
 }
-/** Rows whose amounts look wrong, so the chat raises them before anything else. */
-function amountIssueHint(draft: {
-  mode?: string;
-  rows: Array<{ rowIndex: number; currentPayload: unknown }>;
-}) {
-  const issues = draftAmountIssues(
-    draft.rows.map((row) => row.currentPayload),
-    { runningBalance: draft.mode !== "trip" },
-  );
-  const amountIssues = draft.rows.flatMap((row, index) =>
-    issues[index].errors.length || issues[index].warnings.length
-      ? [{ rowIndex: row.rowIndex, errors: issues[index].errors, warnings: issues[index].warnings }]
-      : [],
-  );
-  return amountIssues.length
-    ? {
-        amountIssues,
-        amountIssuesNote:
-          "These rows' amounts don't match the statement as parsed. Tell the user before suggesting labels; don't commit until they're fixed.",
-      }
-    : {};
-}
 /** Says so when a draft's rows came from an older parser version than the current one. */
 async function parserVersionHint(
   userId: string,
@@ -196,14 +181,25 @@ export class ImportTools {
   async list(userId: string) {
     return workflow.listDrafts(userId);
   }
+  /** The draft's summary, or a filtered page of its rows when any filter is given. */
   async inspect(userId: string, raw: unknown) {
-    const { draftId } = z.object({ draftId: idSchema }).strict().parse(raw);
-    const draft = await workflow.getDraft(userId, draftId);
-    return {
-      ...draft,
-      ...(await parserVersionHint(userId, draft)),
-      ...paylahHint(draft.rows, "chat"),
-    };
+    const input = inspectSchema.parse(raw);
+    const draft = (await workflow.getDraft(
+      userId,
+      input.draftId,
+    )) as unknown as InspectableDraft;
+    if (wantsRows(input)) return draftRowsPage(draft, input);
+    return this.summary(userId, draft);
+  }
+  private async summary(userId: string, draft: InspectableDraft) {
+    const [hint, gmail] = await Promise.all([
+      parserVersionHint(userId, draft),
+      this.db.mailConnection.count({ where: { userId } }),
+    ]);
+    return draftSummary(draft, {
+      gmailConnected: gmail > 0,
+      parserVersionNote: hint.parserVersionNote,
+    });
   }
   async stage(context: ChatContext, raw: unknown) {
     const input = z
@@ -232,15 +228,22 @@ export class ImportTools {
       },
       actor,
     );
-    const staged = draft.rows.length
-      ? draft
-      : await workflow.parseDraft(context.userId, draft.id, input.parserId, actor);
+    if (!draft.rows.length)
+      await workflow.parseDraft(context.userId, draft.id, input.parserId, actor);
+    // The summary, not every row: the model reads rows with inspect_staged_import.
+    const staged = (await workflow.getDraft(
+      context.userId,
+      draft.id,
+    )) as unknown as InspectableDraft;
     return {
-      ...staged,
-      ...(staged === draft
-        ? await parserVersionHint(context.userId, staged)
+      ...(draft.duplicate
+        ? {
+            duplicate: true,
+            duplicateNote:
+              "This statement was already staged; this is the existing import.",
+          }
         : {}),
-      ...amountIssueHint(staged),
+      ...(await this.summary(context.userId, staged)),
     };
   }
   async assign(context: ChatContext, raw: unknown) {
@@ -253,12 +256,20 @@ export class ImportTools {
       })
       .strict()
       .parse(raw);
-    return workflow.assignDraftAccount(
+    const { draft, account, updatedCount } = await workflow.assignDraftAccount(
       context.userId,
       input.draftId,
       input,
       actor,
     );
+    return {
+      draftId: draft.id,
+      version: draft.version,
+      account,
+      updatedCount,
+      // Row versions moved on; these keep update_staged_rows working without a re-read.
+      rowVersions: Object.fromEntries(draft.rows.map((row) => [row.id, row.version])),
+    };
   }
   /**
    * Edit staged rows through the same path as the staged import page, writing each row's
@@ -292,7 +303,10 @@ export class ImportTools {
               .strict(),
           )
           .min(1)
-          .max(100)
+          .max(
+            STAGED_EDIT_LIMIT,
+            `At most ${STAGED_EDIT_LIMIT} rows per call; send the rest in another call`,
+          )
           .refine(
             (rows) => new Set(rows.map((r) => r.rowId)).size === rows.length,
             "Rows must be unique",
@@ -443,7 +457,7 @@ export class ImportTools {
               .strict(),
           )
           .min(1)
-          .max(100),
+          .max(100, "At most 100 proposals per call; send the rest in another call"),
       })
       .strict()
       .parse(raw);

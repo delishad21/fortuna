@@ -273,7 +273,7 @@ export class TransactionService {
     };
   }
 
-  private static ruleMatches(
+  static ruleMatches(
     rule: {
       accountIdentifier?: string | null;
       matchType: string;

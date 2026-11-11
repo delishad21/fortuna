@@ -4,12 +4,15 @@ import { ImportActions } from "./imports";
 import { ParserActions } from "./parsers";
 import { SettingsActions } from "./settings";
 import { ChatError } from "../contracts";
+import { DiscardAction, RestageAction } from "./draft-actions";
 export class ChatActions implements ActionHandler {
   constructor(private db: PrismaClient) {}
   private handler(input: unknown): ActionHandler {
     const kind = (input as { kind?: string })?.kind;
     if (kind === "edit_transactions") return new TransactionActions(this.db);
     if (kind === "commit_drafts") return new ImportActions(this.db);
+    if (kind === "restage_draft") return new RestageAction(this.db);
+    if (kind === "discard_draft") return new DiscardAction(this.db);
     if (
       [
         "retain_fixture",

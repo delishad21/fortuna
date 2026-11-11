@@ -166,7 +166,7 @@ test("read tools answer the model without displaying raw data", () =>
     const context = { userId: user.id } as any;
     const found = await registry.execute(context, "find_transactions", range);
     assert.deepEqual(found.blocks, []);
-    assert.equal((found.model as unknown[]).length, 30);
+    assert.equal((found.model as { rows: unknown[] }).rows.length, 30);
     const shown = await registry.execute(context, "show_component", {
       component: "summary_tiles",
       title: "August",

@@ -37,6 +37,6 @@ export function staleParserNote(
     return null;
   if (stagedVersion === "assistant") return null;
   const how =
-    "Its rows show what that version produced, not what the current parser does. To use the current one, ask the user to discard this staged import and then stage the statement again; don't judge or rebuild the parser from these rows.";
+    "Its rows show what that version produced, not what the current parser does. To use the current one, propose restage_draft: it re-parses the statement and keeps labels, categories, metadata and reimbursement links on rows that still match. Don't judge or rebuild the parser from these rows.";
   return `Staged with an older version of ${parserId} (${stagedVersion || "unrecorded"}; the current one is ${currentVersion}); re-stage to use the current one. ${how}`;
 }
