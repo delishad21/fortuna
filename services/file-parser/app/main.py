@@ -4,7 +4,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
-from .parsers import PARSER_MAP, revolut_statement_parser
+from .parsers import PARSER_MAP, PARSER_VERSIONS, revolut_statement_parser
 from .parsers.config_candidate import evaluate_candidate
 from .parsers.config_candidate import parse_config_csv
 from .fixture_inspector import inspect_fixture
@@ -62,7 +62,7 @@ def parse_file():
     try:
         # Get the parser function from the map
         parser_func = PARSER_MAP.get(parser_id)
-        parser_version = "builtin"
+        parser_version = PARSER_VERSIONS.get(parser_id)
         if parser_id == "revolut_statement" and supplemental_content:
             transactions = revolut_statement_parser.parse_with_supplemental(
                 content, supplemental_content
@@ -147,6 +147,20 @@ def get_parsers():
             "mode": "bank",
         },
         {
+            "id": "uob_one_credit_card_pdf",
+            "name": "UOB One Credit Card Statement",
+            "fileType": "pdf",
+            "description": "Parser for UOB One credit card statements, including payments, rebates and other credits",
+            "mode": "bank",
+        },
+        {
+            "id": "simplygo_transit_statement",
+            "name": "SimplyGo Transit Statement",
+            "fileType": "pdf",
+            "description": "Parser for SimplyGo monthly transit statements, one row per journey with its legs",
+            "mode": "bank",
+        },
+        {
             "id": "ocbc_frank_statement",
             "name": "OCBC FRANK Account Statement",
             "fileType": "pdf",
@@ -171,11 +185,16 @@ def get_parsers():
 
     if mode in {"bank", "trip"}:
         parser_items = [item for item in parser_items if item["mode"] == mode]
+    for item in parser_items:
+        item["parserVersion"] = PARSER_VERSIONS[item["id"]]
 
     try:
         # A built-in parser replaces a user parser with the same ID (it runs first in /parse).
+        modes = [mode] if mode in {"bank", "trip"} else ["bank", "trip"]
         parser_items.extend(
-            item for item in list_dynamic_parsers(mode, request.headers)
+            {**item, "parserVersion": f"dynamic-v{item.get('version')}"}
+            for dynamic_mode in modes
+            for item in list_dynamic_parsers(dynamic_mode, request.headers)
             if item.get("id") not in PARSER_MAP
         )
     except RuntimeError as error:
