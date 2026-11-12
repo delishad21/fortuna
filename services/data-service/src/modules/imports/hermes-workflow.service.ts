@@ -18,6 +18,11 @@ import {
   validateDraftTransaction,
 } from "./hermes-workflow.utils";
 import { cleanupExpiredWorkflowData } from "./workflow-cleanup";
+import {
+  STATEMENT_FILE_LIFE_MS,
+  statementFilesInUse,
+  statementFilesUsedByChats,
+} from "./statement-files";
 import { enrichImportRows } from "./import-enrichment";
 import { findStagedDuplicates, type DuplicateFinding, type StagedRowSummary } from "./staged-duplicates";
 import {
@@ -36,7 +41,7 @@ const STORAGE_ROOT = path.resolve(
 );
 const PARSER_SERVICE_URL =
   process.env.PARSER_SERVICE_URL || "http://file-parser:4000";
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const SEVEN_DAYS_MS = STATEMENT_FILE_LIFE_MS;
 /** Parser ID recorded on drafts whose rows were extracted by the assistant rather than a parser. */
 export const ASSISTANT_ROWS_PARSER_ID = "assistant_rows";
 const COMMIT_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -128,6 +133,25 @@ export async function audit(
 // Trip drafts keep their reimbursement allocations (to trip entries or rows of the
 // same statement) in the row itself; the main-ledger links table only knows bank
 // transactions and main-ledger draft rows.
+/**
+ * Marks a draft's statement file deleted unless it is kept as a parser fixture
+ * or something else still uses it (another open draft, or a chat); the kept
+ * file keeps its expiry and the cleanup deletes it later. Call it after the
+ * draft itself is closed. Says whether the file was deleted.
+ */
+async function deleteUnusedStatementFile(
+  tx: Prisma.TransactionClient,
+  file: { id: string; retained: boolean },
+) {
+  if (file.retained) return false;
+  if ((await statementFilesInUse(tx, [file.id])).has(file.id)) return false;
+  await tx.statementFile.update({
+    where: { id: file.id },
+    data: { status: "deleted", deletedAt: new Date() },
+  });
+  return true;
+}
+
 const storedPayloadFor = (mode: string, payload: Record<string, unknown>) =>
   mode === "trip" ? payload : storedDraftPayload(payload);
 
@@ -197,7 +221,9 @@ export async function applyTripAssignments(
 
 export class HermesWorkflowService {
   static async cleanupExpiredData(now = new Date()) {
-    return cleanupExpiredWorkflowData(prisma, unlink, now);
+    return cleanupExpiredWorkflowData(prisma, unlink, now, (ids) =>
+      statementFilesInUse(prisma, ids, { now }),
+    );
   }
 
   static async registerStatement(
@@ -215,7 +241,16 @@ export class HermesWorkflowService {
       where: { userId_sha256: { userId, sha256 } },
     });
     if (existing && !existing.deletedAt && existing.expiresAt > new Date()) {
-      return { ...publicFile(existing), duplicate: true };
+      // Uploading the same file again gives it a fresh 7-day life.
+      const expiresAt = new Date(Date.now() + SEVEN_DAYS_MS);
+      const current =
+        existing.retained || existing.expiresAt >= expiresAt
+          ? existing
+          : await prisma.statementFile.update({
+              where: { id: existing.id },
+              data: { expiresAt },
+            });
+      return { ...publicFile(current), duplicate: true };
     }
 
     await mkdir(STORAGE_ROOT, { recursive: true, mode: 0o700 });
@@ -547,6 +582,7 @@ export class HermesWorkflowService {
         mode: true,
         parserId: true,
         sourceFilename: true,
+        sourceFileId: true,
         status: true,
         version: true,
         targetTripId: true,
@@ -591,10 +627,20 @@ export class HermesWorkflowService {
       linked.get(a)!.add(b);
       linked.get(b)!.add(a);
     }
+    // Discarding these keeps their statement file while a chat still uses it.
+    const usedByChats = await statementFilesUsedByChats(
+      prisma,
+      drafts.flatMap((draft) =>
+        draft.sourceFileId && !["committed", "discarded", "expired"].includes(draft.status)
+          ? [draft.sourceFileId]
+          : [],
+      ),
+    );
     return drafts.map(({ rows, ...draft }) => ({
       ...draft,
       reviewSummary: summarizeDraftReview(rows, { runningBalance: draft.mode === "main" }),
       linkedDraftIds: [...(linked.get(draft.id) || [])],
+      sourceFileInChat: !!draft.sourceFileId && usedByChats.has(draft.sourceFileId),
     }));
   }
 
@@ -1934,11 +1980,7 @@ export class HermesWorkflowService {
               committedImportBatchId: batchId,
             },
           });
-          if (sourceFile && !sourceFile.retained) {
-            await tx.statementFile.update({
-              where: { id: sourceFile.id },
-              data: { status: "deleted", deletedAt: new Date() },
-            });
+          if (sourceFile && (await deleteUnusedStatementFile(tx, sourceFile))) {
             const storagePath = sourceFile.storagePath;
             await afterCommit(() => unlink(storagePath).catch(() => undefined));
           }
@@ -1987,23 +2029,19 @@ export class HermesWorkflowService {
           version: { increment: 1 },
         },
       });
-      if (draft.sourceFile && !draft.sourceFile.retained) {
-        await tx.statementFile.update({
-          where: { id: draft.sourceFile.id },
-          data: { status: "deleted", deletedAt: new Date() },
-        });
-      }
+      const fileDeleted =
+        !!draft.sourceFile && (await deleteUnusedStatementFile(tx, draft.sourceFile));
       await audit(tx, userId, actor, {
         toolName: "discard_import_draft",
         targetType: "import_draft",
         targetId: draft.id,
       });
-      return next;
+      return { next, fileDeleted };
     });
     // Inside a chat approval the transaction commits later; delete the file only then.
     const file = draft.sourceFile;
-    if (file && !file.retained)
+    if (file && updated.fileDeleted)
       await afterCommit(() => unlink(file.storagePath).catch(() => undefined));
-    return updated;
+    return updated.next;
   }
 }

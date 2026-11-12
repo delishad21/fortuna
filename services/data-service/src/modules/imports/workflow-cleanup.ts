@@ -11,13 +11,17 @@ type CleanupPrisma = {
 export async function cleanupExpiredWorkflowData(
   prisma: CleanupPrisma,
   removeFile: (path: string) => Promise<void>,
-  now = new Date(),
+  now: Date,
+  /** The files among ids that an open draft or a chat still uses; those stay. */
+  filesInUse: (ids: string[]) => Promise<{ has: (id: string) => boolean }>,
 ) {
-  const files = await prisma.statementFile.findMany({
+  const expired = await prisma.statementFile.findMany({
     where: { retained: false, deletedAt: null, expiresAt: { lte: now } },
     select: { id: true, storagePath: true },
     take: 500,
   });
+  const inUse = await filesInUse(expired.map((file) => file.id));
+  const files = expired.filter((file) => !inUse.has(file.id));
 
   if (files.length) {
     await prisma.statementFile.updateMany({

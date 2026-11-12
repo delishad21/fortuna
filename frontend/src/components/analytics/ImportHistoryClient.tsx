@@ -72,6 +72,20 @@ export function ImportHistoryClient({
   const deleteTargets = (pendingDelete || [])
     .map((id) => staged.find((draft) => draft.id === id))
     .filter((draft): draft is (typeof staged)[number] => !!draft);
+  // A statement stays while a chat or a staged import outside this delete still uses it.
+  const keptFiles = deleteTargets.flatMap((draft): string[] => {
+    if (!draft.sourceFileId) return [];
+    if (draft.sourceFileInChat)
+      return [`${draft.sourceFilename} is kept because a chat is still using it; it is deleted when it expires.`];
+    const sharer = staged.find(
+      (other) =>
+        other.sourceFileId === draft.sourceFileId &&
+        !deleteTargets.some((target) => target.id === other.id),
+    );
+    return sharer
+      ? [`${draft.sourceFilename} is kept because another staged import still uses it.`]
+      : [];
+  });
   const deleteDrafts = async (draftIds: string[]) => {
     setDeleting(true);
     setDeleteError("");
@@ -360,7 +374,8 @@ export function ImportHistoryClient({
         message={[
           deleteTargets.map((draft) => draft.sourceFilename).join("\n"),
           "",
-          "Its rows and review edits are discarded and nothing is saved to your transactions. The uploaded statement is deleted unless it is kept as a parser fixture.",
+          "Its rows and review edits are discarded and nothing is saved to your transactions. The uploaded statement is deleted unless it is kept as a parser fixture or still in use.",
+          ...new Set(keptFiles),
           ...(deleteTargets.some((draft) => (draft.linkedDraftIds || []).length)
             ? ["Reimbursement links between these rows and other staged imports are removed too."]
             : []),
