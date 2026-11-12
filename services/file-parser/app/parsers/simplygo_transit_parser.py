@@ -180,6 +180,9 @@ def _transaction(journey):
         ],
         "sourcePage": journey["sourcePage"],
         "statement": "SimplyGo Transit Statement",
+        # One card can pay for several riders, so the statement can list the
+        # same journey twice; each line is a fare that was charged.
+        "distinctWithinDraft": True,
     }
     fares = [leg["fare"] for leg in legs]
     if not legs:

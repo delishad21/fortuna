@@ -14,6 +14,7 @@ import {
   materializeDraftTransaction,
   proposalCanAutoApply,
   sanitizeStatementFilename,
+  stableJson,
   validateDraftAccountAssignment,
   validateDraftTransaction,
 } from "./hermes-workflow.utils";
@@ -1728,6 +1729,9 @@ export class HermesWorkflowService {
         description: String(payload.description || ""),
         amountIn: payload.amountIn == null ? null : Number(payload.amountIn),
         amountOut: payload.amountOut == null ? null : Number(payload.amountOut),
+        accountIdentifier: payload.accountIdentifier == null ? null : String(payload.accountIdentifier),
+        metadata: payload.metadata,
+        content: stableJson(payload),
         distinctWithinDraft:
           (payload.metadata as Record<string, unknown> | undefined)?.distinctWithinDraft === true,
       };
@@ -1773,7 +1777,12 @@ export class HermesWorkflowService {
     return {
       valid: validations.every((item) => item.validation.valid),
       validations,
-      duplicates: [...savedDuplicates, ...stagedDuplicates],
+      // A row's content is only for comparing rows; it repeats the row itself.
+      duplicates: [...savedDuplicates, ...stagedDuplicates].map(({ row, match, ...finding }) => ({
+        ...finding,
+        row: { ...row, content: undefined },
+        match: { ...match, content: undefined },
+      })),
     };
   }
 
