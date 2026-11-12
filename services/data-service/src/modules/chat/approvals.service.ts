@@ -3,6 +3,7 @@ import { withTransactionClient } from "../../lib/database-context";
 import { ChatContext, ChatError, CONVERSATION_BUSY } from "./contracts";
 import { ActionHandler, StaleAction, json } from "./tools/transactions";
 import { PROPOSAL_LIFETIME_MS, supersedeProposals } from "./pending";
+import { dispatchQueue, lockUser, queueContinuation } from "./queue";
 export class ApprovalService {
   constructor(
     private db: PrismaClient,
@@ -243,7 +244,7 @@ export class ApprovalService {
     for (const effect of effects) await effect().catch(() => {});
     // Retried decisions also reconcile the continuation if the process stopped after commit.
     await this.db.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM users WHERE id=${userId} FOR UPDATE`;
+      await lockUser(tx, userId);
       const proposal = await tx.chatActionProposal.findFirst({
         where: { id: proposalId, userId },
         include: { run: true },
@@ -266,53 +267,10 @@ export class ApprovalService {
         data: { status: "completed" },
       });
       if (!["applied", "rejected"].includes(proposal.status)) return;
-      const key = "continuation-" + run.id;
-      if (
-        await tx.chatRun.findUnique({
-          where: {
-            userId_conversationId_idempotencyKey: {
-              userId,
-              conversationId: run.conversationId,
-              idempotencyKey: key,
-            },
-          },
-        })
-      )
-        return;
-      // A reply already on its way in this conversation will see the outcome. Replies in
-      // other conversations don't matter, and the continuation isn't held to the per-user
-      // cap: it would be lost, not delayed, and the worker's concurrency still bounds it.
-      if (
-        await tx.chatRun.count({
-          where: {
-            userId,
-            conversationId: run.conversationId,
-            status: { in: ["queued", "running"] },
-          },
-        })
-      )
-        return;
-      const connection = await tx.chatConnection.findFirst({
-        where: {
-          userId,
-          provider: run.provider,
-          selected: true,
-          status: "connected",
-          generation: run.connectionGeneration,
-        },
-      });
-      if (!connection) return;
-      await tx.chatRun.create({
-        data: {
-          userId,
-          conversationId: run.conversationId,
-          idempotencyKey: key,
-          provider: run.provider,
-          model: run.model,
-          effort: run.effort,
-          connectionGeneration: connection.generation,
-        },
-      });
+      // The reply that picks up after the decision waits its turn behind anything already
+      // queued in this conversation, like a message would, so it never races or gets lost.
+      await queueContinuation(tx, run);
+      await dispatchQueue(tx, userId);
     });
     return result;
   }

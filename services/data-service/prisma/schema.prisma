@@ -880,6 +880,7 @@ model ChatConversation {
   messages ChatMessage[]
   attachments ChatAttachment[]
   runs ChatRun[]
+  queue ChatQueuedMessage[]
   @@unique([id, userId])
   @@index([userId, updatedAt])
   @@map("chat_conversations")
@@ -895,6 +896,34 @@ model ChatMessage {
   conversation ChatConversation @relation(fields:[conversationId,userId],references:[id,userId],onDelete:Cascade)
   @@index([conversationId, createdAt])
   @@map("chat_messages")
+}
+
+// A message waiting for the conversation's current reply to finish. It becomes a user
+// message and a run when its turn comes (see queue.ts); until then it can be edited or removed.
+model ChatQueuedMessage {
+  id String @id @default(dbgenerated("gen_random_uuid()::text"))
+  userId String @map("user_id")
+  conversationId String @map("conversation_id")
+  idempotencyKey String @map("idempotency_key")
+  /// "message" from the user, or "continuation" after an approval.
+  kind String @default("message")
+  text String @default("")
+  attachmentIds Json @default("[]") @map("attachment_ids")
+  reviewId String? @map("review_id")
+  reviewTitle String? @map("review_title")
+  /// Each review row's version when the review was queued, to tell what changed by its turn.
+  reviewRows Json? @map("review_rows")
+  /// "queued", or "failed" when it couldn't start (error says why).
+  status String @default("queued")
+  error String?
+  queuedAt DateTime @default(dbgenerated("clock_timestamp()")) @map("queued_at") @db.Timestamp(6)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  conversation ChatConversation @relation(fields:[conversationId,userId],references:[id,userId],onDelete:Cascade)
+  @@unique([userId,conversationId,idempotencyKey])
+  @@index([conversationId,status,queuedAt])
+  @@index([userId,status])
+  @@map("chat_queued_messages")
 }
 
 model ChatAttachment {

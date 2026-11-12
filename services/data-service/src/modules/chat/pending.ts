@@ -7,7 +7,8 @@ import { Prisma, PrismaClient } from "@prisma/client";
  * Proposal statuses: pending, applied, rejected (by the user), stale (records changed),
  * expired, superseded (replaced by a newer proposal), cancelled (run stopped),
  * closed (closed by an older version without a recorded reason).
- * Review statuses: pending, submitted, superseded, cancelled, closed.
+ * Review statuses: pending, queued (sent back while the conversation was replying; locked
+ * until its turn), submitted, superseded, cancelled, closed.
  */
 export const PROPOSAL_LIFETIME_MS = 24 * 60 * 60 * 1000;
 type Db = PrismaClient | Prisma.TransactionClient;

@@ -8,7 +8,6 @@ import { ApprovalService } from "./approvals.service";
 import { MemoryService, MEMORY_LIMIT } from "./memories.service";
 import { TransactionActions } from "./tools/transactions";
 import { createToolRegistry } from "./tools/registry";
-import { CHAT_LIMITS, CONVERSATION_BUSY, TOO_MANY_RUNS } from "./contracts";
 
 type Db = Parameters<Parameters<typeof withChatDb>[0]>[0];
 
@@ -30,77 +29,29 @@ const message = (key: string) => ({
   idempotencyKey: key,
 });
 
-test("two conversations of one user both get runs; a second message in the same one is refused", () =>
+test("two conversations of one user both get runs; a second message in the same one waits", () =>
   withChatDb(async (db) => {
     const user = await connectedUser(db, "two-chats");
     const chat = new ChatService(db);
     const a = await chat.createConversation(user.id);
     const b = await chat.createConversation(user.id);
-    const [first, second] = await Promise.all([
+    const [first, second] = (await Promise.all([
       chat.submitMessage(user.id, a.id, message("a1")),
       chat.submitMessage(user.id, b.id, message("b1")),
-    ]);
+    ])) as Array<{ runId: string }>;
     assert.notEqual(first.runId, second.runId);
     assert.equal(await db.chatRun.count({ where: { status: "queued" } }), 2);
-    await assert.rejects(
-      chat.submitMessage(user.id, a.id, message("a2")),
-      (e: any) => e.status === 409 && e.message === CONVERSATION_BUSY,
-    );
-    // A running reply blocks its conversation the same way a queued one does.
+    const waiting = (await chat.submitMessage(user.id, a.id, message("a2"))) as any;
+    assert.equal(waiting.queued, true);
+    assert.equal(await db.chatRun.count({ where: { conversationId: a.id } }), 1);
     const repo = new RunRepository(db);
     const claimed = (await repo.claimRun())!;
-    await assert.rejects(
-      chat.submitMessage(user.id, claimed.conversationId, message("again")),
-      (e: any) => e.message === CONVERSATION_BUSY,
-    );
     // The other run waits behind it, and its events say so.
-    const waiting = claimed.id === first.runId ? second.runId : first.runId;
-    const events = await repo.listEvents(user.id, waiting, 0);
+    const behind = claimed.id === first.runId ? second.runId : first.runId;
+    const events = await repo.listEvents(user.id, behind, 0);
     assert.equal(events.status, "queued");
     assert.equal(events.queued, true);
     assert.equal((await repo.listEvents(user.id, claimed.id, 0)).queued, false);
-  }));
-
-test("a user can't have more than the per-user cap of replies queued or running", () =>
-  withChatDb(async (db) => {
-    const user = await connectedUser(db, "cap");
-    const other = await connectedUser(db, "cap-other");
-    const chat = new ChatService(db);
-    const conversations = await Promise.all(
-      Array.from({ length: CHAT_LIMITS.activeRunsPerUser + 1 }, () =>
-        chat.createConversation(user.id),
-      ),
-    );
-    const results = await Promise.allSettled(
-      conversations.map((c, i) =>
-        chat.submitMessage(user.id, c.id, message(`m${i}`)),
-      ),
-    );
-    const refused = results.filter((r) => r.status === "rejected");
-    assert.equal(refused.length, 1);
-    assert.equal(
-      (refused[0] as PromiseRejectedResult).reason.message,
-      TOO_MANY_RUNS,
-    );
-    assert.equal(
-      await db.chatRun.count({ where: { userId: user.id } }),
-      CHAT_LIMITS.activeRunsPerUser,
-    );
-    // The cap is per user: someone else can still send.
-    const theirs = await chat.createConversation(other.id);
-    await chat.submitMessage(other.id, theirs.id, message("x"));
-    // Once a reply finishes, the waiting conversation can send.
-    const done = await db.chatRun.findFirstOrThrow({
-      where: { userId: user.id },
-    });
-    await db.chatRun.update({
-      where: { id: done.id },
-      data: { status: "completed" },
-    });
-    const blocked = conversations.find(
-      (_, i) => results[i].status === "rejected",
-    )!;
-    await chat.submitMessage(user.id, blocked.id, message("retry"));
   }));
 
 test("concurrent update_staged_rows on the same row: one saves, the other reports a version failure", () =>

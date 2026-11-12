@@ -9,7 +9,7 @@ import { withDatabase } from "../../lib/database-context";
 import { HermesWorkflowService } from "../imports/hermes-workflow.service";
 import { CHAT_LIMITS } from "./contracts";
 import { createToolRegistry } from "./tools/registry";
-import { decisionSchema } from "./contracts";
+import { cancelSchema, decisionSchema } from "./contracts";
 import { ConnectionService } from "./connections.service";
 import { MailConnectionService } from "./mail/gmail";
 import { RunRepository } from "./run.repository";
@@ -157,6 +157,42 @@ export function createChatRouter(
             req.body,
           ),
         ),
+    ),
+  );
+  router.put(
+    "/conversations/:id/queue/:itemId",
+    route(async (req, res) =>
+      res.json(
+        await service.editQueued(
+          res.locals.userId,
+          idSchema.parse(req.params.id),
+          idSchema.parse(req.params.itemId),
+          req.body,
+        ),
+      ),
+    ),
+  );
+  router.delete(
+    "/conversations/:id/queue/:itemId",
+    route(async (req, res) =>
+      res.json(
+        await service.removeQueued(
+          res.locals.userId,
+          idSchema.parse(req.params.id),
+          idSchema.parse(req.params.itemId),
+        ),
+      ),
+    ),
+  );
+  router.delete(
+    "/conversations/:id/queue",
+    route(async (req, res) =>
+      res.json(
+        await service.removeQueued(
+          res.locals.userId,
+          idSchema.parse(req.params.id),
+        ),
+      ),
     ),
   );
   const upload = multer({
@@ -386,7 +422,11 @@ export function createChatRouter(
     "/runs/:id/cancel",
     route(async (req, res) =>
       res.json(
-        await runs.cancelRun(res.locals.userId, idSchema.parse(req.params.id)),
+        await runs.cancelRun(
+          res.locals.userId,
+          idSchema.parse(req.params.id),
+          cancelSchema.parse(req.body || {}).queue,
+        ),
       ),
     ),
   );

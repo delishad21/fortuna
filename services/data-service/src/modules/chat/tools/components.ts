@@ -489,6 +489,9 @@ export function submittedReviewForModel(data: any) {
   return {
     reviewId: data?.reviewId,
     title: data?.title,
+    ...(data?.changedSinceQueued
+      ? { changedSinceQueued: data.changedSinceQueued, note: data.note }
+      : {}),
     rows: rows.map((row) => {
       const value = row?.value || {},
         original = row?.original || {};

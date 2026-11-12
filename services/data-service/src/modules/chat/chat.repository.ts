@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { cancelPending, expireProposals } from "./pending";
+import { lockUser, removeQueued } from "./queue";
 export class ChatRepository {
   constructor(private db: PrismaClient) {}
   createConversation(userId: string) {
@@ -18,6 +19,7 @@ export class ChatRepository {
             },
           },
         },
+        queue: { orderBy: [{ queuedAt: "asc" }, { id: "asc" }] },
         runs: {
           orderBy: { createdAt: "desc" },
           take: 50,
@@ -42,7 +44,8 @@ export class ChatRepository {
   async deleteConversation(userId: string, id: string) {
     // Soft-delete until active workers observe cancellation; finance records are never cascaded.
     return this.db.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM users WHERE id=${userId} FOR UPDATE`;
+      await lockUser(tx, userId);
+      await removeQueued(tx, { userId, conversationId: id });
       await tx.chatRun.updateMany({
         where: {
           userId,

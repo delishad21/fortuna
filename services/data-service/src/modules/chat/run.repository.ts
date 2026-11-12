@@ -2,22 +2,20 @@ import { Prisma, PrismaClient, ChatRun } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { ChatError } from "./contracts";
 import { cancelPending } from "./pending";
+import { dispatchQueue, dispatchQueueNow, lockUser, removeQueued } from "./queue";
 export type ClaimedRun = ChatRun & { leaseToken: string };
 export class RunRepository {
   constructor(private db: PrismaClient) {}
   async claimRun(): Promise<ClaimedRun | null> {
+    // A run interrupted too often fails; what was queued behind it goes next.
+    const abandoned = await this.db.$queryRaw<Array<{ user_id: string }>>`
+      UPDATE chat_runs SET status='failed', lease_until=NULL, updated_at=NOW(),
+        error='Run interrupted repeatedly. Your saved data is preserved.'
+      WHERE status='running' AND lease_until<NOW() AND attempts>=3
+      RETURNING user_id`;
+    for (const userId of new Set(abandoned.map((r) => r.user_id)))
+      await dispatchQueueNow(this.db, userId);
     return this.db.$transaction(async (tx) => {
-      await tx.chatRun.updateMany({
-        where: {
-          status: "running",
-          leaseUntil: { lt: new Date() },
-          attempts: { gte: 3 },
-        },
-        data: {
-          status: "failed",
-          error: "Run interrupted repeatedly. Your saved data is preserved.",
-        },
-      });
       const ids = await tx.$queryRaw<
         Array<{ id: string }>
       >`SELECT id FROM chat_runs WHERE cancel_requested=false AND (status='queued' OR (status='running' AND lease_until<NOW() AND attempts<3)) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`;
@@ -100,8 +98,20 @@ export class RunRepository {
       cursor: events.at(-1)?.sequence || after,
     };
   }
-  async cancelRun(userId: string, runId: string) {
+  /** Stops one reply. Messages queued behind it are kept (and the next starts) or cleared. */
+  async cancelRun(
+    userId: string,
+    runId: string,
+    queue: "keep" | "clear" = "keep",
+  ) {
     return this.db.$transaction(async (tx) => {
+      await lockUser(tx, userId);
+      const run = await tx.chatRun.findFirst({ where: { id: runId, userId } });
+      if (run && queue === "clear")
+        await removeQueued(tx, {
+          userId,
+          conversationId: run.conversationId,
+        });
       const count = await tx.chatRun.updateMany({
         where: {
           id: runId,
@@ -112,6 +122,7 @@ export class RunRepository {
       });
       // Stopping a run closes what it left waiting; only an active run can be stopped.
       if (count.count) await cancelPending(tx, { userId, runId });
+      await dispatchQueue(tx, userId);
       return { cancelled: count.count > 0 };
     });
   }
@@ -122,6 +133,7 @@ export class RunRepository {
     error?: string,
   ) {
     return this.db.$transaction(async (tx) => {
+      await lockUser(tx, run.userId);
       const changed = await tx.chatRun.updateMany({
         where: {
           id: run.id,
@@ -141,6 +153,8 @@ export class RunRepository {
           blocks,
         },
       });
+      // The next queued message, here or in a conversation held back by the cap, goes now.
+      await dispatchQueue(tx, run.userId);
     });
   }
 }

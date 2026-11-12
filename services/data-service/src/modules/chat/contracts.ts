@@ -15,6 +15,8 @@ export type RunStatus =
 export const CHAT_LIMITS = {
   /** Runs one user may have queued or running at once, across conversations; one per conversation. */
   activeRunsPerUser: 3,
+  /** Messages that may wait in one conversation's queue for its current reply to finish. */
+  queuedPerConversation: 10,
   modelTurns: 12,
   toolCalls: 40,
   /** The last calls of the budget only go to write tools, so a run can still save what it found. */
@@ -36,8 +38,6 @@ export const CHAT_LIMITS = {
 /** Refusal when a conversation already has a reply queued or running. */
 export const CONVERSATION_BUSY =
   "This conversation is still replying: wait or press Stop";
-/** Refusal when the user's conversations already hold every active run they may have. */
-export const TOO_MANY_RUNS = `${CHAT_LIMITS.activeRunsPerUser} conversations are already replying. Wait for one to finish, or press Stop on one.`;
 export const idSchema = z
   .string()
   .min(1)
@@ -63,6 +63,24 @@ export const submitMessageSchema = z
     (v) => new Set(v.attachmentIds).size === v.attachmentIds.length,
     "Attachments must be unique",
   );
+/** Changes to a message waiting in a conversation's queue. */
+export const queuedEditSchema = z
+  .object({
+    text: z.string().trim().max(CHAT_LIMITS.messageCharacters),
+    attachmentIds: z
+      .array(idSchema)
+      .max(CHAT_LIMITS.attachmentCount)
+      .default([]),
+  })
+  .strict()
+  .refine(
+    (v) => new Set(v.attachmentIds).size === v.attachmentIds.length,
+    "Attachments must be unique",
+  );
+/** Stopping a reply keeps or clears the messages queued behind it. */
+export const cancelSchema = z
+  .object({ queue: z.enum(["keep", "clear"]).default("keep") })
+  .strict();
 export const decisionSchema = z
   .object({
     decision: z.enum(["approve", "reject"]),

@@ -1,38 +1,57 @@
-import { withLiveStagedRows, ReviewRow } from "./reviews.service";
+import { ReviewRow } from "./reviews.service";
 import { PrismaClient } from "@prisma/client";
 import { ChatRepository } from "./chat.repository";
 import {
   CHAT_LIMITS,
-  CONVERSATION_BUSY,
   ChatError,
-  SUBMITTED_REVIEW_TITLE,
+  queuedEditSchema,
   submitMessageSchema,
-  TOO_MANY_RUNS,
 } from "./contracts";
+import {
+  checkAttachments,
+  dispatchQueue,
+  lockUser,
+  QUEUE_FULL,
+  queuePosition,
+  removeQueued,
+  reviewSnapshot,
+} from "./queue";
+const ATTACHMENT_GONE =
+  "An attachment is missing or expired. Please upload it again.";
 export class ChatService extends ChatRepository {
   constructor(private client: PrismaClient) {
     super(client);
   }
+  /**
+   * Queues the message in its conversation and starts it right away when nothing is
+   * replying there. Returns the run when it started, or its place in the queue.
+   */
   async submitMessage(userId: string, conversationId: string, raw: unknown) {
     const input = submitMessageSchema.parse(raw);
     if (process.env.CHAT_ENABLED === "false")
       throw new ChatError(503, "Chat is temporarily disabled on this server");
     return this.client.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM users WHERE id=${userId} FOR UPDATE`;
+      await lockUser(tx, userId);
       const conversation = await tx.chatConversation.findFirst({
         where: { id: conversationId, userId, deletedAt: null },
       });
       if (!conversation) throw new ChatError(404, "Conversation not found");
-      const repeated = await tx.chatRun.findUnique({
-        where: {
-          userId_conversationId_idempotencyKey: {
-            userId,
-            conversationId,
-            idempotencyKey: input.idempotencyKey,
-          },
+      const key = {
+        userId_conversationId_idempotencyKey: {
+          userId,
+          conversationId,
+          idempotencyKey: input.idempotencyKey,
         },
-      });
+      };
+      const repeated = await tx.chatRun.findUnique({ where: key });
       if (repeated) return { runId: repeated.id };
+      const waiting = await tx.chatQueuedMessage.findUnique({ where: key });
+      if (waiting)
+        return {
+          queued: true,
+          queuedId: waiting.id,
+          position: await queuePosition(tx, waiting),
+        };
       const review = input.reviewId
         ? await tx.chatTransactionReview.findFirst({
             where: { id: input.reviewId, userId, conversationId },
@@ -45,111 +64,150 @@ export class ChatService extends ChatRepository {
           409,
           "Review changed on another device. Reload before sending.",
         );
-      // A new message moves on without deciding anything: the waiting run is done, and its
-      // proposals and reviews stay pending until the user confirms, rejects or submits them.
-      await tx.chatRun.updateMany({
-        where: { userId, conversationId, status: "awaiting_confirmation" },
-        data: { status: "completed" },
-      });
-      // One reply at a time per conversation; other conversations can send, up to a per-user
-      // cap so one user can't flood the provider. Runs beyond the worker's capacity wait queued.
       if (
-        await tx.chatRun.count({
-          where: { userId, conversationId, status: { in: ["queued", "running"] } },
-        })
+        !(await tx.chatConnection.findFirst({
+          where: { userId, selected: true, status: "connected" },
+        }))
       )
-        throw new ChatError(409, CONVERSATION_BUSY);
-      if (
-        (await tx.chatRun.count({
-          where: { userId, status: { in: ["queued", "running"] } },
-        })) >= CHAT_LIMITS.activeRunsPerUser
-      )
-        throw new ChatError(409, TOO_MANY_RUNS);
-      const connection = await tx.chatConnection.findFirst({
-        where: { userId, selected: true, status: "connected" },
-      });
-      if (!connection)
         throw new ChatError(409, "Connect an AI provider in Settings first");
-      const files = await tx.chatAttachment.findMany({
-        where: { id: { in: input.attachmentIds }, userId, conversationId },
-        include: { statementFile: true },
-      });
       if (
-        files.length !== input.attachmentIds.length ||
-        files.some(
-          (f) =>
-            f.statementFile.deletedAt ||
-            (!f.statementFile.retained &&
-              f.statementFile.expiresAt <= new Date()),
-        )
+        (
+          await checkAttachments(
+            tx,
+            userId,
+            conversationId,
+            input.attachmentIds,
+          )
+        ).problem ||
+        (await tx.chatAttachment.count({
+          where: { id: { in: input.attachmentIds }, userId, conversationId },
+        })) !== input.attachmentIds.length
       )
-        throw new ChatError(
-          400,
-          "An attachment is missing or expired. Please upload it again.",
-        );
-      if (review)
-        await tx.chatTransactionReview.update({
-          where: { id: review.id },
-          data: { status: "submitted" },
-        });
-      await tx.chatMessage.create({
-        data: {
-          userId,
-          conversationId,
-          role: "user",
-          blocks: [
-            { type: "text", text: input.text },
-            ...(review
-              ? [
-                  {
-                    type: "data",
-                    title: SUBMITTED_REVIEW_TITLE,
-                    data: {
-                      reviewId: review.id,
-                      title: review.title,
-                      rows: await withLiveStagedRows(
-                        tx,
-                        review.rows as unknown as ReviewRow[],
-                      ),
-                    },
-                  },
-                ]
-              : []),
-            ...files.map((f) => ({
-              type: "attachment",
-              id: f.id,
-              filename: f.statementFile.filename,
-              mediaType: f.statementFile.contentType.startsWith("image/")
-                ? "image"
-                : "statement",
-            })),
-          ],
-        },
-      });
-      await tx.chatConversation.update({
-        where: { id: conversationId },
-        data: {
-          updatedAt: new Date(),
-          ...(conversation.title === "New conversation"
-            ? { title: input.text.slice(0, 80) || "Statement import" }
-            : {}),
-        },
-      });
-      const run = await tx.chatRun.create({
+        throw new ChatError(400, ATTACHMENT_GONE);
+      if (
+        (await tx.chatQueuedMessage.count({
+          where: { conversationId, kind: "message" },
+        })) >= CHAT_LIMITS.queuedPerConversation
+      )
+        throw new ChatError(409, QUEUE_FULL);
+      const item = await tx.chatQueuedMessage.create({
         data: {
           userId,
           conversationId,
           idempotencyKey: input.idempotencyKey,
-          provider: connection.provider,
-          model:
-            connection.provider === "codex"
-              ? "gpt-6-luna"
-              : "openai/gpt-6-luna-pro",
-          effort: connection.provider === "codex" ? "max" : null,
-          connectionGeneration: connection.generation,
+          text: input.text,
+          attachmentIds: input.attachmentIds,
+          ...(review
+            ? {
+                reviewId: review.id,
+                reviewTitle: review.title,
+                reviewRows: await reviewSnapshot(
+                  tx,
+                  review.rows as unknown as ReviewRow[],
+                ),
+              }
+            : {}),
         },
       });
-      return { runId: run.id };
+      // Locked while it waits: no edits, and it can't be sent twice.
+      if (review)
+        await tx.chatTransactionReview.update({
+          where: { id: review.id },
+          data: { status: "queued" },
+        });
+      const started = await dispatchQueue(tx, userId);
+      const runId = started.get(item.id);
+      if (runId) return { runId };
+      const failed = await tx.chatQueuedMessage.findUnique({
+        where: { id: item.id },
+      });
+      if (failed?.status === "failed")
+        throw new ChatError(409, failed.error || "Message not sent");
+      return {
+        queued: true,
+        queuedId: item.id,
+        position: await queuePosition(tx, item),
+      };
+    });
+  }
+  /** Changes a message still waiting its turn; one that failed to start is queued again. */
+  async editQueued(
+    userId: string,
+    conversationId: string,
+    id: string,
+    raw: unknown,
+  ) {
+    const input = queuedEditSchema.parse(raw);
+    return this.client.$transaction(async (tx) => {
+      await lockUser(tx, userId);
+      const item = await tx.chatQueuedMessage.findFirst({
+        where: {
+          id,
+          userId,
+          conversationId,
+          conversation: { deletedAt: null },
+        },
+      });
+      if (!item)
+        throw new ChatError(
+          409,
+          "This message already started or was removed",
+        );
+      if (item.kind !== "message")
+        throw new ChatError(400, "Only your own messages can be edited");
+      if (!input.text && !input.attachmentIds.length && !item.reviewId)
+        throw new ChatError(400, "Write a message or attach a statement");
+      if (
+        (await checkAttachments(tx, userId, conversationId, input.attachmentIds))
+          .problem ||
+        (await tx.chatAttachment.count({
+          where: { id: { in: input.attachmentIds }, userId, conversationId },
+        })) !== input.attachmentIds.length
+      )
+        throw new ChatError(400, ATTACHMENT_GONE);
+      const retry = item.status === "failed";
+      if (retry) {
+        // Back to the end of the queue, after what was sent while it waited.
+        await tx.$executeRaw`UPDATE chat_queued_messages SET queued_at=clock_timestamp() WHERE id=${id}`;
+      }
+      await tx.chatQueuedMessage.update({
+        where: { id },
+        data: {
+          text: input.text,
+          attachmentIds: input.attachmentIds,
+          status: "queued",
+          error: null,
+        },
+      });
+      if (retry) await dispatchQueue(tx, userId);
+      return this.queueOf(tx, userId, conversationId);
+    });
+  }
+  /** Removes one queued message, or all of them; their reviews can be edited again. */
+  async removeQueued(userId: string, conversationId: string, id?: string) {
+    return this.client.$transaction(async (tx) => {
+      await lockUser(tx, userId);
+      const removed = await removeQueued(tx, {
+        userId,
+        conversationId,
+        ...(id ? { id } : {}),
+      });
+      if (id && !removed)
+        throw new ChatError(
+          409,
+          "This message already started or was removed",
+        );
+      return this.queueOf(tx, userId, conversationId);
+    });
+  }
+  private queueOf(
+    tx: Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0],
+    userId: string,
+    conversationId: string,
+  ) {
+    return tx.chatQueuedMessage.findMany({
+      where: { userId, conversationId },
+      orderBy: [{ queuedAt: "asc" }, { id: "asc" }],
     });
   }
 }
