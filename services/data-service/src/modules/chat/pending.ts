@@ -8,7 +8,8 @@ import { Prisma, PrismaClient } from "@prisma/client";
  * expired, superseded (replaced by a newer proposal), cancelled (run stopped),
  * closed (closed by an older version without a recorded reason).
  * Review statuses: pending, queued (sent back while the conversation was replying; locked
- * until its turn), submitted, superseded, cancelled, closed.
+ * until its turn), submitted, superseded, cancelled (by the user, with decidedAt set, or
+ * with its stopped run, without), closed.
  */
 export const PROPOSAL_LIFETIME_MS = 24 * 60 * 60 * 1000;
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -122,7 +123,10 @@ export async function supersedeReviews(
     });
   return replaced;
 }
-/** Closes what a stopped run left waiting; the user didn't reject any of it. */
+/**
+ * Closes what a stopped run left waiting; the user didn't reject any of it. Reviews get no
+ * decidedAt here: that marks the ones the user cancelled themselves.
+ */
 export async function cancelPending(db: Db, where: { userId: string; runId?: string; conversationId?: string; run?: Prisma.ChatRunWhereInput }) {
   await db.chatActionProposal.updateMany({
     where: { ...where, status: "pending" },
@@ -166,7 +170,7 @@ export async function pendingForModel(
   if (!proposals.length && !reviews.length) return null;
   return {
     type: "pending_approvals",
-    note: "Still waiting for the user in the interface from earlier turns. Sending a message did not reject or close them: the user can still confirm, reject or submit them. Don't propose or request them again; refer to them instead. A new proposal or review covering the same records replaces the old one. Outcomes (applied, rejected) appear in the conversation as they happen.",
+    note: "Still waiting for the user in the interface from earlier turns. Sending a message did not reject or close them: the user can still confirm, reject or submit them. Don't propose or request them again; refer to them instead. A new proposal or review covering the same records replaces the old one. Outcomes (applied, rejected, a review the user cancelled) appear in the conversation as they happen.",
     proposals: proposals.map((p) => ({
       proposalId: p.id,
       kind: p.kind,

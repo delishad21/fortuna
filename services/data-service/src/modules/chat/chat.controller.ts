@@ -100,6 +100,18 @@ export function createChatRouter(
       ),
     ),
   );
+  router.post(
+    "/reviews/:id/cancel",
+    route(async (req, res) =>
+      res.json(
+        await reviews.cancel(
+          res.locals.userId,
+          idSchema.parse(req.params.id),
+          req.body,
+        ),
+      ),
+    ),
+  );
   router.get(
     "/transactions/:id",
     route(async (req, res) => {

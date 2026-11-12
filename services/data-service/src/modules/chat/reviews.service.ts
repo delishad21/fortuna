@@ -128,6 +128,9 @@ const stale = (error: unknown) =>
         "This row changed elsewhere. Your edit was not saved. Reload the row and try again.",
       )
     : error;
+/** What the assistant reads in the conversation after the user cancels a review. */
+export const cancelledReviewNote = (title: string) =>
+  `The user cancelled the review "${title}" without applying its suggestions. Don't suggest those changes again unless the user asks.`;
 export class ReviewService {
   constructor(private db: PrismaClient) {}
   async create(context: ChatContext, raw: unknown) {
@@ -391,6 +394,54 @@ export class ReviewService {
         data: { version: { increment: 1 } },
       });
     }
+    return this.get(userId, id);
+  }
+  /**
+   * Closes a review the user doesn't want, without applying its suggestions. A review
+   * queued behind the current reply is cancelled too, and its queued message removed.
+   * The conversation records it, so the next reply doesn't raise the suggestions again.
+   */
+  async cancel(userId: string, id: string, raw: unknown) {
+    const input = z
+      .object({ version: z.number().int().positive() })
+      .strict()
+      .parse(raw);
+    await this.db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM users WHERE id=${userId} FOR UPDATE`;
+      const review = await tx.chatTransactionReview.findFirst({
+        where: { id, userId, run: { conversation: { deletedAt: null } } },
+      });
+      if (!review) throw new ChatError(404, "Review not found");
+      if (review.status === "cancelled" && review.decidedAt) return;
+      if (review.status === "submitted")
+        throw new ChatError(
+          409,
+          "This review was already sent to Fortuna, so it can't be cancelled.",
+        );
+      if (!["pending", "queued"].includes(review.status))
+        throw new ChatError(409, "This review is already closed.");
+      if (review.version !== input.version)
+        throw new ChatError(
+          409,
+          "This review changed on another device. Reload it before cancelling.",
+        );
+      // A queued review that has started is already "submitted"; this one hasn't.
+      await tx.chatQueuedMessage.deleteMany({
+        where: { userId, reviewId: id },
+      });
+      await tx.chatTransactionReview.update({
+        where: { id },
+        data: { status: "cancelled", decidedAt: new Date() },
+      });
+      await tx.chatMessage.create({
+        data: {
+          userId,
+          conversationId: review.conversationId,
+          role: "assistant",
+          blocks: json([{ type: "text", text: cancelledReviewNote(review.title) }]),
+        },
+      });
+    });
     return this.get(userId, id);
   }
 }

@@ -1026,6 +1026,8 @@ model ChatTransactionReview {
   status String @default("pending")
   version Int @default(1)
   rows Json
+  /// Set when the user cancelled the review; a review closed by a stopped reply has none.
+  decidedAt DateTime? @map("decided_at")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
   run ChatRun @relation(fields:[runId,userId,conversationId],references:[id,userId,conversationId],onDelete:Cascade)

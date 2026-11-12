@@ -26,7 +26,14 @@ export class ChatRepository {
           include: {
             proposals: true,
             reviews: {
-              select: { id: true, title: true, status: true, createdAt: true },
+              select: {
+                id: true,
+                title: true,
+                status: true,
+                version: true,
+                decidedAt: true,
+                createdAt: true,
+              },
             },
           },
         },
