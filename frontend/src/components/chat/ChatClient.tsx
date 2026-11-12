@@ -27,6 +27,10 @@ import {
   emptyStream,
   applyRunEvents,
   QUEUED_TEXT,
+  QUEUE_HINT,
+  SendResult,
+  queuedCount,
+  changedWhileQueued,
   workingOn,
   generatingRun,
   PendingAttachment,
@@ -46,6 +50,7 @@ import { ChatTransactions, asTransactions } from "./ChatTransactions";
 import { ChatComponent } from "./ChatComponents";
 import { Markdown } from "./Markdown";
 import { ActivitySteps } from "./ActivitySteps";
+import { QueuedMessages } from "./QueuedMessages";
 /** A sent image, fetched through the owner-scoped chat proxy. */
 function AttachedImage({ id, filename }: { id: string; filename: string }) {
   const [failed, setFailed] = useState(false);
@@ -96,7 +101,7 @@ export function ChatClient() {
     dragDepth = useRef(0);
   const [dragging, setDragging] = useState(false),
     [seconds, setSeconds] = useState(0),
-    [blockedHint, setBlockedHint] = useState(false);
+    [stopping, setStopping] = useState(false);
   selected.current = id;
   streamRef.current = stream;
   const refreshList = useCallback(
@@ -136,7 +141,7 @@ export function ChatClient() {
   const run = conversation?.runs[0];
   const running = generatingRun(run);
   useEffect(() => {
-    setBlockedHint(false);
+    setStopping(false);
     if (!running) return;
     const started = Date.now();
     setSeconds(0);
@@ -229,11 +234,12 @@ export function ChatClient() {
     return created.id;
   }
   async function send() {
-    if ((!text.trim() && !files.length) || generatingRun(run)) return;
+    if (!text.trim() && !files.length) return;
     await action(async () => {
       const target = await ensureConversation();
       sendKey.current ||= crypto.randomUUID();
-      await chatApi(`/conversations/${target}/messages`, {
+      // While a reply runs, the server queues the message and sends it after the reply.
+      await chatApi<SendResult>(`/conversations/${target}/messages`, {
         method: "POST",
         body: {
           text,
@@ -245,7 +251,7 @@ export function ChatClient() {
       files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
       setFiles([]);
       sendKey.current = null;
-      setStream(emptyStream());
+      if (!generatingRun(run)) setStream(emptyStream());
       await refresh();
       await refreshList();
     });
@@ -368,17 +374,34 @@ export function ChatClient() {
             transactions={transactions}
           />
         );
-      if (value.title === "Submitted transaction review")
+      if (value.title === "Submitted transaction review") {
+        const changed = changedWhileQueued(value.data);
         return (
-          <p
-            key={index}
-            className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1 text-sm text-primary"
-          >
-            Submitted review: {value.data?.title || "Transactions"}
-            {Array.isArray(value.data?.rows) &&
-              ` · ${value.data.rows.length} rows`}
-          </p>
+          <div key={index} className="space-y-2">
+            <p className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1 text-sm text-primary">
+              Submitted review: {value.data?.title || "Transactions"}
+              {Array.isArray(value.data?.rows) &&
+                ` · ${value.data.rows.length} rows`}
+            </p>
+            {changed.length > 0 && (
+              <div className="rounded-lg border border-stroke bg-gray-1 px-3 py-2 text-sm dark:border-stroke-dark dark:bg-dark-3">
+                <p className="font-medium">
+                  {changed.length === 1
+                    ? "1 row changed while this review waited. Your edit to it may no longer apply:"
+                    : `${changed.length} rows changed while this review waited. Your edits to them may no longer apply:`}
+                </p>
+                <ul className="mt-1 list-disc pl-5 text-dark-5 dark:text-dark-6">
+                  {changed.map((c) => (
+                    <li key={c.rowId}>
+                      {c.description}: {c.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         );
+      }
       // Raw tool data from older replies is for the model, not the reader.
       return null;
     }
@@ -438,6 +461,17 @@ export function ChatClient() {
         }
       />
     );
+  }
+  /** Stops the current reply; queued messages are kept (the next one starts) or cleared. */
+  function stop(queue: "keep" | "clear") {
+    setStopping(false);
+    void action(async () => {
+      await chatApi(`/runs/${run!.id}/cancel`, {
+        method: "POST",
+        body: { queue },
+      });
+      await refresh();
+    });
   }
   async function reject(target: Proposal) {
     await chatApi(`/proposals/${target.id}/reject`, {
@@ -501,6 +535,7 @@ export function ChatClient() {
     );
   }
   const generating = generatingRun(run);
+  const waitingInQueue = queuedCount(conversation);
   // Proposals that no reply links to (e.g. from a run that stopped early) stay reachable here.
   const linked = new Set(
     [
@@ -575,11 +610,52 @@ export function ChatClient() {
             </span>
           </div>
         )}
-        {generating && blockedHint && (
-          <p className="px-4 pt-2 text-xs text-dark-5 dark:text-dark-6">
-            Your draft is kept. Send it when Fortuna finishes, or stop this
-            reply first.
+        {!generating && waitingInQueue > 0 && (
+          <p
+            role="status"
+            className="flex items-center gap-2 border-b border-stroke px-4 py-2 text-sm font-medium dark:border-stroke-dark"
+          >
+            {QUEUED_TEXT}
           </p>
+        )}
+        {generating && stopping && (
+          <div
+            role="alertdialog"
+            aria-label="Stop the current reply"
+            className="space-y-2 border-b border-stroke px-4 py-3 text-sm dark:border-stroke-dark"
+          >
+            <p>
+              Stop the current reply?{" "}
+              {waitingInQueue === 1
+                ? "1 queued message is waiting."
+                : `${waitingInQueue} queued messages are waiting.`}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => stop("keep")}
+                className="rounded-lg bg-primary px-3 py-1.5 font-medium text-white hover:opacity-90 disabled:opacity-40"
+              >
+                Stop and keep the queue
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => stop("clear")}
+                className="rounded-lg border border-stroke px-3 py-1.5 hover:bg-gray-2 disabled:opacity-40 dark:border-stroke-dark dark:hover:bg-dark-3"
+              >
+                Stop and clear the queue
+              </button>
+              <button
+                type="button"
+                onClick={() => setStopping(false)}
+                className="rounded-lg px-3 py-1.5 hover:bg-gray-2 dark:hover:bg-dark-3"
+              >
+                Keep replying
+              </button>
+            </div>
+          </div>
         )}
         {files.length > 0 && (
           <div className="flex flex-wrap gap-2 px-3 pt-3">
@@ -647,8 +723,7 @@ export function ChatClient() {
               !e.nativeEvent.isComposing
             ) {
               e.preventDefault();
-              if (generating) setBlockedHint(true);
-              else void send();
+              void send();
             }
           }}
           onPaste={(e) => {
@@ -661,7 +736,7 @@ export function ChatClient() {
           rows={2}
           placeholder={
             generating
-              ? "Fortuna is working. You can draft your next message here."
+              ? "Write your next message. It will send after the current reply."
               : id
                 ? "Reply to Fortuna…"
                 : "Ask Fortuna about your money…"
@@ -685,45 +760,47 @@ export function ChatClient() {
             type="button"
             aria-label="Attach file"
             title="Attach statements, screenshots or photos"
-            disabled={busy || files.length >= 5 || generating}
+            disabled={busy || files.length >= 5}
             onClick={() => fileInput.current?.click()}
             className="rounded-lg p-2 text-dark-5 hover:bg-gray-2 hover:text-dark disabled:opacity-40 dark:text-dark-6 dark:hover:bg-dark-3 dark:hover:text-white"
           >
             <Paperclip size={18} />
           </button>
-          <span className="hidden min-w-0 flex-1 truncate text-xs text-dark-5 dark:text-dark-6 sm:block">
-            Enter to send · Shift+Enter for a new line · Drop files to attach
-          </span>
-          <span className="flex-1 sm:hidden" />
           {generating ? (
+            <span className="min-w-0 flex-1 truncate text-xs text-dark-5 dark:text-dark-6">
+              {QUEUE_HINT}
+            </span>
+          ) : (
+            <>
+              <span className="hidden min-w-0 flex-1 truncate text-xs text-dark-5 dark:text-dark-6 sm:block">
+                Enter to send · Shift+Enter for a new line · Drop files to
+                attach
+              </span>
+              <span className="flex-1 sm:hidden" />
+            </>
+          )}
+          {generating && (
             <button
               type="button"
               disabled={busy}
               onClick={() =>
-                void action(async () => {
-                  await chatApi(`/runs/${run!.id}/cancel`, {
-                    method: "POST",
-                    body: {},
-                  });
-                  await refresh();
-                })
+                waitingInQueue ? setStopping(true) : stop("keep")
               }
               className="inline-flex h-9 items-center gap-1.5 rounded-full bg-dark px-3.5 text-sm font-medium text-white hover:opacity-90 dark:bg-white dark:text-dark"
             >
               <Square size={12} fill="currentColor" aria-hidden />
               Stop
             </button>
-          ) : (
-            <button
-              type="submit"
-              aria-label="Send message"
-              title="Send message"
-              disabled={busy || (!text.trim() && !files.length)}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-white transition-opacity hover:opacity-90 disabled:opacity-40"
-            >
-              <ArrowUp size={18} />
-            </button>
           )}
+          <button
+            type="submit"
+            aria-label={generating ? "Queue message" : "Send message"}
+            title={generating ? QUEUE_HINT : "Send message"}
+            disabled={busy || (!text.trim() && !files.length)}
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+          >
+            <ArrowUp size={18} />
+          </button>
         </div>
       </div>
       <p className="mt-1.5 px-1 text-center text-[11px] text-dark-5 dark:text-dark-6">
@@ -921,6 +998,9 @@ export function ChatClient() {
                       .map((b, i) => block(b, i))}
                   </div>
                 </article>
+              )}
+              {conversation && (
+                <QueuedMessages conversation={conversation} onChanged={refresh} />
               )}
               {unlinked.length > 0 && (
                 <section

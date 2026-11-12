@@ -17,6 +17,7 @@ import {
   reviewSuggestionSummary,
   isUnsure,
   REVIEW_STATES,
+  SendResult,
 } from "./api";
 import { NeedsBadge } from "./ActionCard";
 import { Expandable } from "./Details";
@@ -129,7 +130,7 @@ export function ChatReviewCards({
     setError("");
     try {
       key.current ||= `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      await api(`/conversations/${review.conversationId}/messages`, {
+      const sent = await api<SendResult>(`/conversations/${review.conversationId}/messages`, {
         method: "POST",
         body: {
           text: `Here is my completed review: ${review.title}`,
@@ -138,7 +139,8 @@ export function ChatReviewCards({
           idempotencyKey: key.current,
         },
       });
-      setReview({ ...review, status: "submitted" });
+      // While a reply runs, the review waits its turn, locked.
+      setReview({ ...review, status: sent.queued ? "queued" : "submitted" });
       await onSubmitted();
     } catch (e) {
       setError((e as Error).message);

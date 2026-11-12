@@ -4,6 +4,8 @@ import { TransactionTable } from "@/components/transaction-table/TransactionTabl
 import type { Transaction } from "@/components/transaction-table/types";
 import {
   chatApi,
+  REVIEW_STATES,
+  SendResult,
   TransactionReview,
   reviewSuggestionSummary,
   isUnsure,
@@ -121,7 +123,7 @@ export function TransactionReviewEditor({
     setSaving(pending.current);
     try {
       key.current ||= crypto.randomUUID();
-      await chatApi(`/conversations/${v.conversationId}/messages`, {
+      const sent = await chatApi<SendResult>(`/conversations/${v.conversationId}/messages`, {
         method: "POST",
         body: {
           text: `Here is my completed review: ${v.title}`,
@@ -130,7 +132,8 @@ export function TransactionReviewEditor({
           idempotencyKey: key.current,
         },
       });
-      accept({ ...v, status: "submitted" });
+      // While a reply runs, the review waits its turn, locked.
+      accept({ ...v, status: sent.queued ? "queued" : "submitted" });
       await onSubmitted();
     } catch (e) {
       setError((e as Error).message);
@@ -176,8 +179,8 @@ export function TransactionReviewEditor({
         <h3 className="font-semibold">{review.title}</h3>
         <p role="status" className="text-xs text-dark-5 dark:text-dark-6">
           {closed
-            ? review.status === "submitted"
-              ? "Sent to Fortuna"
+            ? review.status === "submitted" || review.status === "queued"
+              ? REVIEW_STATES[review.status]
               : "Closed"
             : saving
               ? "Saving…"
@@ -293,7 +296,9 @@ export function TransactionReviewEditor({
           }}
           primaryActionLabel={
             closed
-              ? "Review closed"
+              ? review.status === "queued"
+                ? "Queued"
+                : "Review closed"
               : saving
                 ? "Saving…"
                 : "Send review to Fortuna"

@@ -184,11 +184,25 @@ export type Run = {
   proposals: Proposal[];
   reviews?: RunReview[];
 };
+/** A message waiting for the conversation's current reply to finish. */
+export type QueuedMessage = {
+  id: string;
+  /** "message" from the user, or "continuation" after an approval. */
+  kind: string;
+  text: string;
+  attachmentIds: string[];
+  reviewId: string | null;
+  reviewTitle: string | null;
+  /** "queued", or "failed" when it couldn't start; `error` says why. */
+  status: string;
+  error: string | null;
+};
 export type Conversation = {
   id: string;
   title: string;
   messages: Array<{ id: string; role: string; blocks: Block[] }>;
   runs: Run[];
+  queue?: QueuedMessage[];
   attachments: Array<{
     id: string;
     statementFile: {
@@ -245,6 +259,51 @@ export type Stream = {
 };
 /** Shown while a run waits behind replies in other conversations. */
 export const QUEUED_TEXT = "Queued: waiting for another chat to finish";
+/** Shown in the composer while a reply runs: sending now queues the message. */
+export const QUEUE_HINT = "Will send after the current reply";
+/** What sending a message returns: the run it started, or its place in the queue. */
+export type SendResult = {
+  runId?: string;
+  queued?: boolean;
+  queuedId?: string;
+  position?: number;
+};
+/** Each waiting message with its marker: "Queued (n)" in order, or why it wasn't sent. */
+export function queueItems(conversation: Conversation | null) {
+  let position = 0;
+  return (conversation?.queue || []).map((item) => ({
+    item,
+    position: item.status === "queued" ? ++position : null,
+    marker:
+      item.status === "failed"
+        ? "Not sent"
+        : item.kind === "continuation"
+          ? `Queued (${position}) · Fortuna continues after your approval`
+          : `Queued (${position})`,
+    editable: item.kind === "message",
+  }));
+}
+/** Messages still waiting their turn (not the ones that failed to start). */
+export const queuedCount = (conversation: Conversation | null) =>
+  (conversation?.queue || []).filter((q) => q.status === "queued").length;
+/** The filenames of a queued message's attachments, from the conversation's uploads. */
+export const queuedFiles = (
+  conversation: Conversation | null,
+  item: QueuedMessage,
+) =>
+  item.attachmentIds.map((id) => ({
+    id,
+    filename:
+      conversation?.attachments.find((a) => a.id === id)?.statementFile
+        .filename || "Attachment",
+  }));
+/** Rows of a review that changed while it waited in the queue, as stored on the sent message. */
+export const changedWhileQueued = (data: any) =>
+  (Array.isArray(data?.changedSinceQueued) ? data.changedSinceQueued : []) as Array<{
+    rowId: string;
+    description: string;
+    reason: string;
+  }>;
 /** Applies one poll of a run's events, including whether it is still waiting its turn. */
 export const applyRunEvents = (
   state: Stream,

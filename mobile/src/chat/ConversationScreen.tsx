@@ -21,6 +21,10 @@ import {
   emptyStream,
   applyRunEvents,
   QUEUED_TEXT,
+  QUEUE_HINT,
+  SendResult,
+  queuedCount,
+  changedWhileQueued,
   workingOn,
   generatingRun,
   PendingAttachment,
@@ -39,6 +43,7 @@ import { Details, Expandable } from "./Details";
 import { ChatComponent } from "./Components";
 import { ActionCard } from "./ActionCard";
 import { AttachedImage } from "./AttachedImage";
+import { QueuedMessages } from "./QueuedMessages";
 export function ChatConversationScreen({ route, navigation }: any) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [id, setId] = useState<string | undefined>(route.params?.id);
@@ -51,7 +56,8 @@ export function ChatConversationScreen({ route, navigation }: any) {
     [files, setFiles] = useState<PendingAttachment[]>([]),
     [stream, setStream] = useState<Stream>(emptyStream),
     [error, setError] = useState(""),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [stopping, setStopping] = useState(false);
   const cursor = useRef(stream),
     inFlight = useRef(false),
     sendKey = useRef<string | null>(null),
@@ -189,13 +195,14 @@ export function ChatConversationScreen({ route, navigation }: any) {
     }
   }
   async function send() {
-    if (generatingRun(run) || (!text.trim() && !files.length)) return;
+    if (!text.trim() && !files.length) return;
     await action(async () => {
       sendKey.current ||= `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const target =
         id || (await api("/conversations", { method: "POST", body: {} })).id;
       if (!id) setId(target);
-      await api(`/conversations/${target}/messages`, {
+      // While a reply runs, the server queues the message and sends it after the reply.
+      await api<SendResult>(`/conversations/${target}/messages`, {
         method: "POST",
         body: {
           text,
@@ -207,10 +214,26 @@ export function ChatConversationScreen({ route, navigation }: any) {
       setText("");
       setFiles([]);
       sendKey.current = null;
-      setStream(emptyStream());
+      if (!generatingRun(run)) setStream(emptyStream());
       await refresh();
     });
   }
+  /** Stops the current reply; queued messages are kept (the next one starts) or cleared. */
+  function stop(queue: "keep" | "clear") {
+    setStopping(false);
+    void action(async () => {
+      await api(`/runs/${run!.id}/cancel`, {
+        method: "POST",
+        body: { queue },
+      });
+      await refresh();
+    });
+  }
+  const generating = generatingRun(run),
+    waitingInQueue = queuedCount(conversation);
+  useEffect(() => {
+    if (!generating) setStopping(false);
+  }, [generating]);
   type PickedAsset = {
     uri: string;
     name: string;
@@ -351,15 +374,43 @@ export function ChatConversationScreen({ route, navigation }: any) {
           }
         />
       );
-    if (block.type === "data")
-      return block.title === "Submitted transaction review" ? (
-        <Txt key={index} muted size={12}>
-          Submitted review: {block.data?.title || "Transactions"}
-          {Array.isArray(block.data?.rows)
-            ? ` · ${block.data.rows.length} rows`
-            : ""}
-        </Txt>
-      ) : null;
+    if (block.type === "data") {
+      if (block.title !== "Submitted transaction review") return null;
+      const changed = changedWhileQueued(block.data);
+      return (
+        <View key={index} style={{ gap: 6 }}>
+          <Txt muted size={12}>
+            Submitted review: {block.data?.title || "Transactions"}
+            {Array.isArray(block.data?.rows)
+              ? ` · ${block.data.rows.length} rows`
+              : ""}
+          </Txt>
+          {changed.length > 0 && (
+            <View
+              style={{
+                gap: 4,
+                padding: 10,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: colors.line,
+                backgroundColor: colors.card,
+              }}
+            >
+              <Txt size={13} bold>
+                {changed.length === 1
+                  ? "1 row changed while this review waited. Your edit to it may no longer apply:"
+                  : `${changed.length} rows changed while this review waited. Your edits to them may no longer apply:`}
+              </Txt>
+              {changed.map((c) => (
+                <Txt key={c.rowId} muted size={13}>
+                  • {c.description}: {c.reason}
+                </Txt>
+              ))}
+            </View>
+          )}
+        </View>
+      );
+    }
     return (
       <View
         key={index}
@@ -558,6 +609,9 @@ export function ChatConversationScreen({ route, navigation }: any) {
                   .map(renderBlock)}
               </>
             )}
+            {conversation && (
+              <QueuedMessages conversation={conversation} onChanged={refresh} />
+            )}
             {unlinked.length > 0 && (
               <View style={{ gap: 8 }}>
                 <Txt bold>Waiting for your approval</Txt>
@@ -632,10 +686,40 @@ export function ChatConversationScreen({ route, navigation }: any) {
             {error}
           </Txt>
         )}
-        <Txt muted size={12}>
-          Attach statements, or screenshots for Fortuna to read. Attachments
-          expire after 7 days.
-        </Txt>
+        {generating && stopping ? (
+          <View style={{ gap: 8 }} accessibilityLabel="Stop the current reply">
+            <Txt size={13}>
+              Stop the current reply?{" "}
+              {waitingInQueue === 1
+                ? "1 queued message is waiting."
+                : `${waitingInQueue} queued messages are waiting.`}
+            </Txt>
+            <Button
+              title="Stop and keep the queue"
+              disabled={busy}
+              onPress={() => stop("keep")}
+            />
+            <Button
+              title="Stop and clear the queue"
+              secondary
+              disabled={busy}
+              onPress={() => stop("clear")}
+            />
+            <Button
+              title="Keep replying"
+              ghost
+              onPress={() => setStopping(false)}
+            />
+          </View>
+        ) : (
+          <Txt muted size={12} accessibilityLiveRegion="polite">
+            {generating
+              ? QUEUE_HINT
+              : waitingInQueue
+                ? QUEUED_TEXT
+                : "Attach statements, or screenshots for Fortuna to read. Attachments expire after 7 days."}
+          </Txt>
+        )}
         {files.some((f) => f.preview) && (
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
             {files
@@ -703,7 +787,11 @@ export function ChatConversationScreen({ route, navigation }: any) {
             setText(v);
             sendKey.current = null;
           }}
-          placeholder="Ask Fortuna…"
+          placeholder={
+            generating
+              ? "Write your next message…"
+              : "Ask Fortuna…"
+          }
           style={{ maxHeight: 130, minHeight: 55 }}
         />
         <View style={{ flexDirection: "row", gap: 10 }}>
@@ -712,7 +800,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
             label="Photos"
             tone="purple"
             size={50}
-            disabled={busy || files.length >= 5 || generatingRun(run)}
+            disabled={busy || files.length >= 5}
             onPress={() => void attachPhotos()}
           />
           <IconButton
@@ -720,34 +808,27 @@ export function ChatConversationScreen({ route, navigation }: any) {
             label="Files"
             tone="purple"
             size={50}
-            disabled={busy || files.length >= 5 || generatingRun(run)}
+            disabled={busy || files.length >= 5}
             onPress={() => void attachFile()}
           />
+          {generating && (
+            <IconButton
+              icon="stop-circle-outline"
+              label="Stop"
+              size={50}
+              disabled={busy}
+              onPress={() =>
+                waitingInQueue ? setStopping(true) : stop("keep")
+              }
+            />
+          )}
           <View style={{ flex: 1 }}>
-            {generatingRun(run) ? (
-              <Button
-                title="Stop"
-                icon="stop-circle-outline"
-                secondary
-                disabled={busy}
-                onPress={() =>
-                  void action(async () => {
-                    await api(`/runs/${run!.id}/cancel`, {
-                      method: "POST",
-                      body: {},
-                    });
-                    await refresh();
-                  })
-                }
-              />
-            ) : (
-              <Button
-                title="Send message"
-                icon="send"
-                disabled={busy || (!text.trim() && !files.length)}
-                onPress={() => void send()}
-              />
-            )}
+            <Button
+              title={generating ? "Queue message" : "Send message"}
+              icon="send"
+              disabled={busy || (!text.trim() && !files.length)}
+              onPress={() => void send()}
+            />
           </View>
         </View>
       </View>

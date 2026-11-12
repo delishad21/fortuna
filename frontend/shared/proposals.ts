@@ -385,6 +385,7 @@ export const PROPOSAL_STATES: Record<string, string> = {
 };
 export const REVIEW_STATES: Record<string, string> = {
   pending: "Needs your review",
+  queued: "Queued: sends after the current reply",
   submitted: "Sent to Fortuna",
   superseded: "Replaced by a newer review",
   cancelled: "Closed when you stopped the reply",

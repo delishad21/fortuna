@@ -13,6 +13,8 @@ const routes: Array<[string, RegExp]> = [
   ["GET", /^conversations\/[\w-]+$/],
   ["DELETE", /^conversations\/[\w-]+$/],
   ["POST", /^conversations\/[\w-]+\/messages$/],
+  ["PUT", /^conversations\/[\w-]+\/queue\/[\w-]+$/],
+  ["DELETE", /^conversations\/[\w-]+\/queue(\/[\w-]+)?$/],
   ["GET", /^runs\/[\w-]+\/events$/],
   ["POST", /^runs\/[\w-]+\/cancel$/],
   ["POST", /^files$/],

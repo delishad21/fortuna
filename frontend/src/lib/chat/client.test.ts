@@ -7,6 +7,12 @@ import {
   applyRunEvents,
   QUEUED_TEXT,
   workingOn,
+  queueItems,
+  queuedCount,
+  queuedFiles,
+  changedWhileQueued,
+  REVIEW_STATES,
+  Conversation,
 } from "../../../shared/chat";
 test("replayed and unordered events render once in sequence; reset discards interrupted text", () => {
   const events = [
@@ -46,4 +52,64 @@ test("a poll says when a run waits behind another conversation, and clears it on
   assert.equal(started.queued, false);
   assert.equal(started.text, "Hi");
   assert.equal(workingOn(started), "Writing a reply");
+});
+test("queued messages are numbered in order; failed ones say they weren't sent", () => {
+  const item = (id: string, extra: object = {}) => ({
+    id,
+    kind: "message",
+    text: id,
+    attachmentIds: [] as string[],
+    reviewId: null,
+    reviewTitle: null,
+    status: "queued",
+    error: null,
+    ...extra,
+  });
+  const conversation: Conversation = {
+    id: "c1",
+    title: "Chat",
+    messages: [],
+    runs: [],
+    attachments: [
+      {
+        id: "att1",
+        statementFile: {
+          filename: "DBS Oct.pdf",
+          expiresAt: "2099-01-01",
+          deletedAt: null,
+        },
+      },
+    ],
+    queue: [
+      item("a"),
+      item("b", { status: "failed", error: "Not sent: DBS Oct.pdf expired" }),
+      item("c", { attachmentIds: ["att1"] }),
+      item("d", { kind: "continuation", text: "" }),
+    ],
+  };
+  assert.deepEqual(
+    queueItems(conversation).map((q) => [q.marker, q.editable]),
+    [
+      ["Queued (1)", true],
+      ["Not sent", true],
+      ["Queued (2)", true],
+      ["Queued (3) · Fortuna continues after your approval", false],
+    ],
+  );
+  assert.equal(queuedCount(conversation), 3);
+  assert.deepEqual(queuedFiles(conversation, conversation.queue![2]), [
+    { id: "att1", filename: "DBS Oct.pdf" },
+  ]);
+  assert.equal(REVIEW_STATES.queued, "Queued: sends after the current reply");
+});
+test("a sent review lists the rows that changed while it waited", () => {
+  assert.deepEqual(changedWhileQueued({ rows: [] }), []);
+  assert.deepEqual(
+    changedWhileQueued({
+      changedSinceQueued: [
+        { rowId: "r1", description: "Kopi", reason: "no longer staged" },
+      ],
+    }).map((c) => c.description),
+    ["Kopi"],
+  );
 });
