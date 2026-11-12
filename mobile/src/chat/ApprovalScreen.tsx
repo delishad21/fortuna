@@ -1,11 +1,19 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Switch, View } from "react-native";
-import { Button, Card, Screen, Txt } from "../ui";
-import { useChatApi, Conversation, Proposal, previewHasChanges } from "./api";
+import { Button, Card, Screen, Txt, useTheme } from "../ui";
+import {
+  useChatApi,
+  Conversation,
+  Proposal,
+  previewHasChanges,
+  proposalState,
+  timeLeft,
+} from "./api";
 import { ProposalView } from "./ProposalView";
 export function ChatApprovalScreen({ route, navigation }: any) {
   const { id, conversationId } = route.params,
     api = useChatApi(),
+    { colors } = useTheme(),
     [proposal, setProposal] = useState<Proposal | null>(null),
     [busy, setBusy] = useState(false),
     [override, setOverride] = useState(false),
@@ -28,9 +36,9 @@ export function ChatApprovalScreen({ route, navigation }: any) {
   const preview = proposal?.preview || {},
     duplicates =
       Array.isArray(preview.duplicates) && preview.duplicates.length > 0,
-    pending =
-      proposal?.status === "pending" &&
-      new Date(proposal.expiresAt) > new Date();
+    state = proposal ? proposalState(proposal) : null,
+    pending = !!state?.pending,
+    left = pending ? timeLeft(proposal!.expiresAt) : "";
   async function decide(decision: "approve" | "reject") {
     if (locked.current) return;
     locked.current = true;
@@ -46,7 +54,9 @@ export function ChatApprovalScreen({ route, navigation }: any) {
           ? "Changes applied"
           : result.status === "stale"
             ? "Records changed. Return to the conversation and ask for a fresh preview. No changes were applied."
-            : "Proposal rejected.",
+            : result.status === "expired"
+              ? "This proposal expired; no changes were applied."
+              : "Proposal rejected.",
       );
     } catch (e) {
       setMessage((e as Error).message);
@@ -78,14 +88,13 @@ export function ChatApprovalScreen({ route, navigation }: any) {
         </Card>
       )}
       {!!message && <Txt accessibilityRole="alert">{message}</Txt>}
-      {proposal && !pending && (
-        <Txt muted>
-          Status: {proposal.status === "pending" ? "expired" : proposal.status}
+      {state && (
+        <Txt bold style={{ color: pending ? colors.purple : colors.muted }}>
+          {state.label}
+          {left ? ` · ${left}` : ""}
         </Txt>
       )}
-      {proposal &&
-        !pending &&
-        ["pending", "stale"].includes(proposal.status) && (
+      {proposal && state && ["expired", "stale"].includes(state.status) && (
           <Button
             title="Refresh preview"
             secondary
@@ -107,23 +116,26 @@ export function ChatApprovalScreen({ route, navigation }: any) {
             }}
           />
         )}
-      <Button
-        title="Confirm changes"
-        disabled={
-          busy ||
-          !pending ||
-          preview.valid === false ||
-          (!!proposal && !previewHasChanges(proposal)) ||
-          (duplicates && !override)
-        }
-        onPress={() => void decide("approve")}
-      />
-      <Button
-        title="Reject"
-        secondary
-        disabled={busy || !pending}
-        onPress={() => void decide("reject")}
-      />
+      {pending && (
+        <>
+          <Button
+            title="Confirm changes"
+            disabled={
+              busy ||
+              preview.valid === false ||
+              !previewHasChanges(proposal!) ||
+              (duplicates && !override)
+            }
+            onPress={() => void decide("approve")}
+          />
+          <Button
+            title="Reject"
+            secondary
+            disabled={busy}
+            onPress={() => void decide("reject")}
+          />
+        </>
+      )}
       <Button
         title="Back to conversation"
         secondary

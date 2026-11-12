@@ -25,6 +25,9 @@ import {
   IMAGE_UPLOAD_TYPES,
   IMAGE_UPLOAD_BYTES,
   stepLabel,
+  proposalState,
+  waitingForUser,
+  waitingText,
 } from "./api";
 import { appendFile } from "../upload";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -50,7 +53,9 @@ export function ChatConversationScreen({ route, navigation }: any) {
   const cursor = useRef(stream),
     inFlight = useRef(false),
     sendKey = useRef<string | null>(null),
-    list = useRef<FlatList>(null);
+    list = useRef<FlatList>(null),
+    /** Where each approval card or review sits inside its message, by block id. */
+    blockOffsets = useRef<Record<string, number>>({});
   const selected = useRef(id);
   selected.current = id;
   cursor.current = stream;
@@ -87,7 +92,45 @@ export function ChatConversationScreen({ route, navigation }: any) {
   );
   const unlinked = (conversation?.runs || [])
     .flatMap((r) => r.proposals)
-    .filter((p) => p.status === "pending" && !linked.has(p.id));
+    .filter((p) => proposalState(p).pending && !linked.has(p.id));
+  const waiting = waitingForUser(conversation);
+  const waitingLabel = waitingText(
+    waiting.proposals.length,
+    waiting.reviews.length,
+  );
+  function reject(proposalId: string) {
+    void action(async () => {
+      await api(`/proposals/${proposalId}/reject`, {
+        method: "POST",
+        body: {},
+      });
+      await refresh();
+    });
+  }
+  /** Scroll to the first approval card or review still waiting for the user. */
+  function showWaiting() {
+    const ids = new Set([
+      ...waiting.proposals.map((p) => p.id),
+      ...waiting.reviews.map((r) => r.id),
+    ]);
+    const messages = conversation?.messages || [];
+    for (let index = 0; index < messages.length; index++) {
+      const block = messages[index].blocks.find(
+        (b) =>
+          (b.type === "review" ||
+            (b.type === "link" && b.kind === "proposal")) &&
+          ids.has((b as { id: string }).id),
+      ) as { id: string } | undefined;
+      if (!block) continue;
+      list.current?.scrollToIndex({
+        index,
+        viewPosition: 0,
+        viewOffset: 12 - (blockOffsets.current[block.id] || 0),
+      });
+      return;
+    }
+    list.current?.scrollToEnd();
+  }
   useEffect(() => {
     cursor.current = emptyStream();
     setStream(emptyStream());
@@ -246,7 +289,14 @@ export function ChatConversationScreen({ route, navigation }: any) {
   function renderBlock(block: Block, index: number) {
     if (block.type === "review")
       return (
-        <ChatReviewCards key={block.id} id={block.id} onSubmitted={refresh} />
+        <View
+          key={block.id}
+          onLayout={(e) => {
+            blockOffsets.current[block.id] = e.nativeEvent.layout.y;
+          }}
+        >
+          <ChatReviewCards id={block.id} onSubmitted={refresh} />
+        </View>
       );
     if (block.type === "text")
       return (
@@ -309,10 +359,20 @@ export function ChatConversationScreen({ route, navigation }: any) {
         </Txt>
       ) : null;
     return (
-      <ActionCard
+      <View
         key={index}
+        onLayout={(e) => {
+          if (block.kind === "proposal")
+            blockOffsets.current[block.id] = e.nativeEvent.layout.y;
+        }}
+      >
+      <ActionCard
         label={block.label}
         kind={block.kind}
+        busy={busy}
+        onReject={
+          block.kind === "proposal" ? () => reject(block.id) : undefined
+        }
         proposal={
           block.kind === "proposal"
             ? conversation?.runs
@@ -335,6 +395,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
           )
         }
       />
+      </View>
     );
   }
   return (
@@ -406,6 +467,11 @@ export function ChatConversationScreen({ route, navigation }: any) {
         data={conversation?.messages || []}
         keyExtractor={(m) => m.id}
         keyboardShouldPersistTaps="handled"
+        onScrollToIndexFailed={({ index, averageItemLength }) => {
+          // Rows not measured yet: jump near the row, then aim again once it renders.
+          list.current?.scrollToOffset({ offset: index * averageItemLength });
+          setTimeout(() => showWaiting(), 250);
+        }}
         contentContainerStyle={{ padding: 20, gap: 24, flexGrow: 1 }}
         renderItem={({ item }) => (
           <View
@@ -499,20 +565,8 @@ export function ChatConversationScreen({ route, navigation }: any) {
                   .map(renderBlock)}
               </>
             )}
-            {run?.status === "awaiting_confirmation" && (
-              <Txt>
-                Review the pending changes, or send a new message to move on.
-              </Txt>
-            )}
             {unlinked.length > 0 && (
-              <View
-                style={{
-                  gap: 8,
-                  padding: 12,
-                  borderRadius: 12,
-                  backgroundColor: colors.tint,
-                }}
-              >
+              <View style={{ gap: 8 }}>
                 <Txt bold>Waiting for your approval</Txt>
                 {unlinked.map((p) => (
                   <ActionCard
@@ -520,6 +574,8 @@ export function ChatConversationScreen({ route, navigation }: any) {
                     kind={p.kind}
                     proposal={p}
                     label={`Review: ${p.preview?.title || "proposed change"}`}
+                    busy={busy}
+                    onReject={() => reject(p.id)}
                     onPress={() =>
                       navigation.navigate("ChatApproval", {
                         conversationId: id,
@@ -538,6 +594,36 @@ export function ChatConversationScreen({ route, navigation }: any) {
           </View>
         }
       />
+      {!!waitingLabel && (
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 8,
+            paddingHorizontal: 16,
+            paddingVertical: 8,
+            borderTopWidth: 1,
+            borderColor: colors.purple,
+            backgroundColor: colors.tint,
+          }}
+        >
+          <Ionicons name="alert-circle-outline" size={16} color={colors.purple} />
+          <Txt
+            size={13}
+            numberOfLines={2}
+            accessibilityLiveRegion="polite"
+            style={{ flex: 1, color: colors.purple }}
+          >
+            {waitingLabel}
+          </Txt>
+          <Button
+            title="Review"
+            label="Review waiting items"
+            compact
+            onPress={showWaiting}
+          />
+        </View>
+      )}
       <View
         style={{
           padding: 16,

@@ -16,7 +16,9 @@ import {
   ReviewRow,
   reviewSuggestionSummary,
   isUnsure,
+  REVIEW_STATES,
 } from "./api";
+import { NeedsBadge } from "./ActionCard";
 import { Expandable } from "./Details";
 import { accountDisplay } from "../../../frontend/shared/accounts";
 export function ChatReviewCards({
@@ -148,12 +150,28 @@ export function ChatReviewCards({
   const closed = review.status !== "pending";
   const suggestions = reviewSuggestionSummary(review.rows, review.categories);
   return (
-    <View style={{ gap: 12 }}>
+    <View
+      style={[
+        { gap: 12 },
+        !closed && {
+          padding: 12,
+          borderRadius: 8,
+          borderWidth: 2,
+          borderColor: colors.purple,
+          backgroundColor: colors.tint,
+        },
+      ]}
+    >
+      {!closed && <NeedsBadge label={REVIEW_STATES.pending} />}
       <Txt bold>{review.title}</Txt>
       {!!review.instructions && <Txt muted>{review.instructions}</Txt>}
       {suggestions.changed > 0 && (
         <View
-          style={{ backgroundColor: colors.tint, borderRadius: 8, padding: 10 }}
+          style={{
+            backgroundColor: closed ? colors.tint : colors.card,
+            borderRadius: 8,
+            padding: 10,
+          }}
         >
           <Txt size={13} style={{ color: colors.purple }}>
             Pre-filled · {suggestions.changed} of {suggestions.total} rows
@@ -163,9 +181,7 @@ export function ChatReviewCards({
       )}
       <Txt muted size={12}>
         {closed
-          ? review.status === "submitted"
-            ? "Sent to Fortuna"
-            : "Closed"
+          ? REVIEW_STATES[review.status] || "Closed"
           : "Save each row to sync it"}
       </Txt>
       {!!error && (
@@ -180,8 +196,9 @@ export function ChatReviewCards({
             padding: 16,
             borderWidth: 1,
             borderColor: isUnsure(row) && !closed ? colors.red : colors.line,
-            borderRadius: 12,
+            borderRadius: 8,
             gap: 8,
+            backgroundColor: colors.card,
           }}
         >
           <View
