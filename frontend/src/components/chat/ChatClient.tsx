@@ -14,6 +14,7 @@ import {
   X,
   Trash2,
   Bookmark,
+  CircleAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import {
@@ -31,6 +32,9 @@ import {
   IMAGE_UPLOAD_TYPES,
   IMAGE_UPLOAD_BYTES,
   attachmentContentPath,
+  waitingForUser,
+  waitingText,
+  REVIEW_STATES,
 } from "@/lib/chat/client";
 import { BrandMark } from "@/components/ui/Brand";
 import { TransactionReviewEditor } from "./TransactionReviewEditor";
@@ -292,14 +296,44 @@ export function ChatClient() {
     sendKey.current = null;
   }
   function block(value: Block, index: number, role = "assistant") {
-    if (value.type === "review")
+    if (value.type === "review") {
+      const status =
+        conversation?.runs
+          .flatMap((r) => r.reviews || [])
+          .find((r) => r.id === value.id)?.status || "pending";
       return (
-        <TransactionReviewEditor
+        <div
           key={value.id}
-          id={value.id}
-          onSubmitted={refresh}
-        />
+          data-approval={status === "pending" ? value.id : undefined}
+          tabIndex={-1}
+          className={
+            status === "pending"
+              ? "scroll-mt-4 space-y-2 rounded-xl border-2 border-primary bg-primary/5 p-3 outline-none"
+              : "space-y-2"
+          }
+        >
+          <p
+            className={`text-xs font-semibold ${status === "pending" ? "text-primary" : "text-dark-5 dark:text-dark-6"}`}
+          >
+            <span
+              className={
+                status === "pending"
+                  ? "rounded-full bg-primary px-2 py-0.5 text-white"
+                  : ""
+              }
+            >
+              {REVIEW_STATES[status] || "Closed"}
+            </span>
+          </p>
+          {/* Remount when the status changes elsewhere, so the editor reloads it. */}
+          <TransactionReviewEditor
+            key={status}
+            id={value.id}
+            onSubmitted={refresh}
+          />
+        </div>
       );
+    }
     if (value.type === "text")
       return role === "assistant" ? (
         <Markdown key={index} text={value.text} />
@@ -381,6 +415,7 @@ export function ChatClient() {
             .flatMap((r) => r.proposals)
             .find((p) => p.id === value.id)}
           onOpen={setProposal}
+          onReject={reject}
         />
       );
     return (
@@ -402,6 +437,20 @@ export function ChatClient() {
         }
       />
     );
+  }
+  async function reject(target: Proposal) {
+    await chatApi(`/proposals/${target.id}/reject`, {
+      method: "POST",
+      body: {},
+    });
+    await refresh();
+    setNotice("Proposal rejected.");
+  }
+  /** Scrolls to the first approval card or review still waiting for the user. */
+  function showWaiting() {
+    const first = document.querySelector<HTMLElement>("[data-approval]");
+    first?.scrollIntoView({ behavior: "smooth", block: "start" });
+    first?.focus({ preventScroll: true });
   }
   function conversationItem(item: ConversationSummary) {
     return (
@@ -460,9 +509,12 @@ export function ChatClient() {
       .filter((b) => b.type === "link" && b.kind === "proposal")
       .map((b) => (b as { id: string }).id),
   );
-  const unlinked = (conversation?.runs || [])
-    .flatMap((r) => r.proposals)
-    .filter((p) => p.status === "pending" && !linked.has(p.id));
+  const waiting = waitingForUser(conversation);
+  const unlinked = waiting.proposals.filter((p) => !linked.has(p.id));
+  const waitingLine = waitingText(
+    waiting.proposals.length,
+    waiting.reviews.length,
+  );
   const currentStep = [...stream.steps].reverse().find((s) => !s.done);
   const workingOn = currentStep
     ? stepLabel(currentStep.name)
@@ -862,14 +914,6 @@ export function ChatClient() {
                   </div>
                 </article>
               )}
-              {run?.status === "awaiting_confirmation" && (
-                <p
-                  role="status"
-                  className="text-center text-xs text-dark-5 dark:text-dark-6"
-                >
-                  Review the pending changes, or send a new message to move on.
-                </p>
-              )}
               {unlinked.length > 0 && (
                 <section
                   aria-label="Waiting for your approval"
@@ -885,6 +929,7 @@ export function ChatClient() {
                         proposal={p}
                         label={`Review: ${p.preview?.title || "proposed change"}`}
                         onOpen={setProposal}
+                        onReject={reject}
                       />
                     ))}
                   </div>
@@ -917,7 +962,30 @@ export function ChatClient() {
             )}
           </div>
         )}
-        <div className="shrink-0 pt-2">{composer}</div>
+        <div className="shrink-0 pt-2">
+          {id && waitingLine && (
+            <div className="mx-auto w-full max-w-6xl px-4 pb-2 md:px-6">
+              <button
+                type="button"
+                onClick={showWaiting}
+                className="flex w-full items-center gap-2 rounded-lg border border-primary bg-primary/10 px-3 py-2 text-left text-sm text-dark hover:bg-primary/15 dark:text-white"
+              >
+                <CircleAlert
+                  size={16}
+                  aria-hidden
+                  className="shrink-0 text-primary"
+                />
+                <span className="min-w-0 flex-1 font-medium">
+                  {waitingLine}
+                </span>
+                <span className="shrink-0 font-semibold text-primary">
+                  Review
+                </span>
+              </button>
+            </div>
+          )}
+          {composer}
+        </div>
       </section>
       {stagedDraft && (
         <StagedImportPanel
@@ -954,7 +1022,9 @@ export function ChatClient() {
                 ? "Changes applied"
                 : result.status === "stale"
                   ? "Records changed. Ask for a fresh preview; no changes were applied."
-                  : "Proposal rejected.",
+                  : result.status === "expired"
+                    ? "This proposal expired; no changes were applied."
+                    : "Proposal rejected.",
             );
           }}
         />

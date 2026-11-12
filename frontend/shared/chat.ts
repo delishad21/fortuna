@@ -1,4 +1,5 @@
 /** Public chat wire types shared by Next and Expo. Contains no server dependencies. */
+import { proposalState } from "./proposals";
 export type Block =
   | { type: "review"; id: string; title: string }
   | { type: "text"; text: string }
@@ -175,11 +176,13 @@ export type Proposal = {
   preview: any;
   expiresAt: string;
 };
+export type RunReview = { id: string; title: string; status: string };
 export type Run = {
   id: string;
   status: string;
   error?: string | null;
   proposals: Proposal[];
+  reviews?: RunReview[];
 };
 export type Conversation = {
   id: string;
@@ -395,6 +398,21 @@ export type TransactionReview = {
   categories: { id: string; name: string; color?: string }[];
   accounts: { id: string; accountIdentifier: string; color?: string }[];
 };
+/** What in this conversation still waits for the user, oldest first. */
+export function waitingForUser(
+  conversation: Conversation | null,
+  now = new Date(),
+) {
+  const runs = [...(conversation?.runs || [])].reverse();
+  return {
+    proposals: runs
+      .flatMap((r) => r.proposals)
+      .filter((p) => proposalState(p, now).pending),
+    reviews: runs
+      .flatMap((r) => r.reviews || [])
+      .filter((r) => r.status === "pending"),
+  };
+}
 export const generatingRun = (run?: Run) =>
   !!run && ["queued", "running"].includes(run.status);
 

@@ -4,7 +4,10 @@ import {
   formatMoney,
   linkChangeView,
   previewHasChanges,
+  proposalState,
   proposalSummary,
+  timeLeft,
+  waitingText,
 } from "../../../shared/chat";
 
 const stagedLink = {
@@ -61,4 +64,46 @@ test("link-only previews count links and empty previews are not confirmable", ()
     previewHasChanges({ kind: "create_category", preview: { after: {} } }),
     true,
   );
+});
+
+test("closed proposals say why and only a user rejection reads as rejected", () => {
+  const now = new Date("2026-11-12T06:00:00Z");
+  const soon = "2026-11-12T11:30:00Z";
+  assert.deepEqual(proposalState({ status: "pending", expiresAt: soon }, now), {
+    status: "pending",
+    pending: true,
+    label: "Needs your approval",
+  });
+  assert.equal(
+    proposalState({ status: "pending", expiresAt: "2026-11-12T05:00:00Z" }, now)
+      .label,
+    "Expired",
+  );
+  assert.equal(proposalState({ status: "rejected" }).label, "Rejected by you");
+  assert.equal(
+    proposalState({ status: "superseded" }).label,
+    "Replaced by a newer proposal",
+  );
+  assert.equal(
+    proposalState({ status: "stale" }).label,
+    "Records changed: ask for a fresh preview",
+  );
+  for (const status of [
+    "cancelled",
+    "closed",
+    "expired",
+    "stale",
+    "superseded",
+  ])
+    assert.doesNotMatch(proposalState({ status }).label, /reject/i);
+  assert.equal(timeLeft(soon, now), "5h left");
+  assert.equal(timeLeft("2026-11-12T06:40:00Z", now), "40m left");
+  assert.equal(timeLeft("2026-11-12T05:00:00Z", now), "");
+  assert.equal(waitingText(2, 0), "2 changes waiting for your approval");
+  assert.equal(
+    waitingText(1, 1),
+    "1 change and 1 review waiting for your approval",
+  );
+  assert.equal(waitingText(0, 1), "1 review waiting for you");
+  assert.equal(waitingText(0, 0), "");
 });

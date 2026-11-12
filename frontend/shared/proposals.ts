@@ -137,7 +137,9 @@ export function linkageView(
       const id = String(
         a.transactionId ||
           a.stagedRowId ||
-          (typeof a.pendingBatchIndex === "number" ? `row:${a.pendingBatchIndex}` : ""),
+          (typeof a.pendingBatchIndex === "number"
+            ? `row:${a.pendingBatchIndex}`
+            : ""),
       );
       return {
         id,
@@ -296,7 +298,11 @@ export function reviewSuggestionSummary(
 /** One end of a reimbursement link in an edit preview: a saved transaction or a staged row. */
 export type LinkEnd = LinkedSummary & {
   kind: "transaction" | "staged";
-  draft?: { id: string; filename?: string | null; parserId?: string | null } | null;
+  draft?: {
+    id: string;
+    filename?: string | null;
+    parserId?: string | null;
+  } | null;
 };
 export type LinkChange = {
   change: "added" | "removed" | "changed";
@@ -309,7 +315,10 @@ export type LinkChange = {
 const endAmount = (end: LinkEnd) =>
   Math.abs(Number(end.amountIn ?? end.amountOut ?? 0) || 0);
 /** "SINGLIFE · Sep 27, 2026" plus where it lives, e.g. "staged in uob-oct.pdf". */
-export function linkEndView(end: LinkEnd, money: (n: number, c: string) => string) {
+export function linkEndView(
+  end: LinkEnd,
+  money: (n: number, c: string) => string,
+) {
   return {
     title: transactionTitle(end),
     detail: [
@@ -361,6 +370,62 @@ export function previewHasChanges(proposal: { kind: string; preview: any }) {
   );
 }
 
+/** Shown on a proposal that waits for the user. */
+export const NEEDS_APPROVAL = "Needs your approval";
+/** Why a proposal is closed, in words; never "rejected" unless the user rejected it. */
+export const PROPOSAL_STATES: Record<string, string> = {
+  pending: NEEDS_APPROVAL,
+  applied: "Applied",
+  rejected: "Rejected by you",
+  expired: "Expired",
+  superseded: "Replaced by a newer proposal",
+  stale: "Records changed: ask for a fresh preview",
+  cancelled: "Closed when you stopped the reply",
+  closed: "Closed without a decision",
+};
+export const REVIEW_STATES: Record<string, string> = {
+  pending: "Needs your review",
+  submitted: "Sent to Fortuna",
+  superseded: "Replaced by a newer review",
+  cancelled: "Closed when you stopped the reply",
+  closed: "Closed without a decision",
+};
+/** Pending proposals past their 24 hours read as expired before the server marks them. */
+export function proposalState(
+  proposal: { status: string; expiresAt?: string },
+  now = new Date(),
+) {
+  const status =
+    proposal.status === "pending" &&
+    !!proposal.expiresAt &&
+    new Date(proposal.expiresAt) <= now
+      ? "expired"
+      : proposal.status;
+  return {
+    status,
+    pending: status === "pending",
+    label: PROPOSAL_STATES[status] || "Closed",
+  };
+}
+/** "5h left", "40m left": how long a pending proposal can still be confirmed. */
+export function timeLeft(expiresAt: string | undefined, now = new Date()) {
+  if (!expiresAt) return "";
+  const minutes = Math.floor(
+    (new Date(expiresAt).getTime() - now.getTime()) / 60000,
+  );
+  if (minutes <= 0) return "";
+  if (minutes < 60) return `${minutes}m left`;
+  return `${Math.floor(minutes / 60)}h left`;
+}
+/** "2 changes and 1 review waiting for you", for the bar above the composer. */
+export function waitingText(changes: number, reviews: number) {
+  const parts = [
+    ...(changes ? [`${changes} ${changes === 1 ? "change" : "changes"}`] : []),
+    ...(reviews ? [`${reviews} ${reviews === 1 ? "review" : "reviews"}`] : []),
+  ];
+  if (!parts.length) return "";
+  return `${parts.join(" and ")} waiting for ${changes ? "your approval" : "you"}`;
+}
 /** One-line description of what a proposal would do, for compact cards. */
 export function proposalSummary(proposal: {
   kind: string;
@@ -369,21 +434,7 @@ export function proposalSummary(proposal: {
   preview: any;
 }): { title: string; detail: string; color?: string | null; state: string } {
   const preview = proposal.preview || {};
-  const expired =
-    proposal.status === "pending" &&
-    !!proposal.expiresAt &&
-    new Date(proposal.expiresAt) <= new Date();
-  const state = expired
-    ? "Expired"
-    : proposal.status === "pending"
-      ? "Needs approval"
-      : proposal.status === "applied"
-        ? "Applied"
-        : proposal.status === "rejected"
-          ? "Rejected"
-          : proposal.status === "stale"
-            ? "Out of date"
-            : proposal.status;
+  const state = proposalState(proposal).label;
   const title = preview.title || "Proposed change";
   if (proposal.kind === "edit_transactions" || preview.changes) {
     const changes = preview.changes || [];
@@ -401,10 +452,14 @@ export function proposalSummary(proposal: {
     const links = preview.linkChanges || [];
     const counts = [
       ...(changes.length
-        ? [`${changes.length} ${changes.length === 1 ? "transaction" : "transactions"}`]
+        ? [
+            `${changes.length} ${changes.length === 1 ? "transaction" : "transactions"}`,
+          ]
         : []),
       ...(links.length
-        ? [`${links.length} reimbursement ${links.length === 1 ? "link" : "links"}`]
+        ? [
+            `${links.length} reimbursement ${links.length === 1 ? "link" : "links"}`,
+          ]
         : []),
     ];
     return {

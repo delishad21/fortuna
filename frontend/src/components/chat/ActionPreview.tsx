@@ -1,10 +1,13 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import {
+  NEEDS_APPROVAL,
   Proposal,
   displayValue,
   fieldLabel,
   previewHasChanges,
+  proposalState,
+  timeLeft,
 } from "@/lib/chat/client";
 import { ProposalView } from "./ProposalView";
 import { Button } from "@/components/ui/Button";
@@ -68,8 +71,8 @@ export function ActionPreview({
   const preview = proposal.preview || {},
     duplicates =
       Array.isArray(preview.duplicates) && preview.duplicates.length > 0;
-  const pending =
-    proposal.status === "pending" && new Date(proposal.expiresAt) > new Date();
+  const state = proposalState(proposal),
+    pending = state.pending;
   async function decide(value: "approve" | "reject") {
     if (busy) return;
     setBusy(true);
@@ -94,18 +97,31 @@ export function ActionPreview({
       className="m-auto max-h-[90dvh] w-[min(96vw,850px)] rounded-xl bg-white p-0 text-dark shadow-xl backdrop:bg-black/50 dark:bg-gray-dark dark:text-white"
     >
       <div className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-stroke bg-white p-5 dark:border-stroke-dark dark:bg-gray-dark">
-        <h2 id="approval-title" className="text-xl font-semibold">
-          {preview.title || "Review changes"}
-        </h2>
+        <div className="min-w-0">
+          <h2 id="approval-title" className="text-xl font-semibold">
+            {preview.title || "Review changes"}
+          </h2>
+          <p
+            className={`mt-1 text-xs font-medium ${pending ? "text-primary" : "text-dark-5 dark:text-dark-6"}`}
+          >
+            {pending
+              ? [NEEDS_APPROVAL, timeLeft(proposal.expiresAt)]
+                  .filter(Boolean)
+                  .join(" · ")
+              : state.label}
+          </p>
+        </div>
         <Button variant="ghost" disabled={busy} onClick={onClose}>
           Close
         </Button>
       </div>
       <div className="space-y-5 p-5">
-        <p className="text-sm text-dark-5 dark:text-dark-6">
-          Only these changes will be applied. If the records change before you
-          confirm, you’ll be asked for a fresh preview.
-        </p>
+        {pending && (
+          <p className="text-sm text-dark-5 dark:text-dark-6">
+            Only these changes will be applied. If the records change before you
+            confirm, you’ll be asked for a fresh preview.
+          </p>
+        )}
         <ProposalView proposal={proposal} />
         {duplicates && (
           <label className="flex gap-3 rounded-lg border border-orange p-4">
@@ -123,52 +139,60 @@ export function ActionPreview({
           </p>
         )}
         {!pending && (
-          <p role="status">
-            This proposal is{" "}
-            {proposal.status === "pending" ? "expired" : proposal.status}. Ask
-            for a fresh preview if needed.
+          <p
+            role="status"
+            className="rounded-lg bg-gray-2 px-3 py-2 text-sm dark:bg-dark-3"
+          >
+            {state.label}.
+            {["expired", "stale"].includes(state.status) &&
+              " Refresh the preview or ask Fortuna for a new one."}
           </p>
         )}
       </div>
-      <div className="sticky bottom-0 flex justify-end gap-3 border-t border-stroke bg-white p-5 dark:border-stroke-dark dark:bg-gray-dark">
-        {!pending && ["pending", "stale"].includes(proposal.status) && (
-          <Button
-            variant="secondary"
-            disabled={busy}
-            onClick={() => {
-              setBusy(true);
-              void onRefresh()
-                .catch((e) => setError(e.message))
-                .finally(() => {
-                  setBusy(false);
-                  setOverride(false);
-                });
-            }}
-          >
-            Refresh preview
-          </Button>
-        )}
-        <Button
-          variant="secondary"
-          disabled={busy || !pending}
-          onClick={() => void decide("reject")}
-        >
-          Reject
-        </Button>
-        <Button
-          disabled={
-            busy ||
-            !pending ||
-            preview.valid === false ||
-            !previewHasChanges(proposal) ||
-            (duplicates && !override)
-          }
-          isLoading={busy}
-          onClick={() => void decide("approve")}
-        >
-          Confirm changes
-        </Button>
-      </div>
+      {(pending || ["expired", "stale"].includes(state.status)) && (
+        <div className="sticky bottom-0 flex justify-end gap-3 border-t border-stroke bg-white p-5 dark:border-stroke-dark dark:bg-gray-dark">
+          {["expired", "stale"].includes(state.status) && (
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                void onRefresh()
+                  .catch((e) => setError(e.message))
+                  .finally(() => {
+                    setBusy(false);
+                    setOverride(false);
+                  });
+              }}
+            >
+              Refresh preview
+            </Button>
+          )}
+          {pending && (
+            <>
+              <Button
+                variant="secondary"
+                disabled={busy}
+                onClick={() => void decide("reject")}
+              >
+                Reject
+              </Button>
+              <Button
+                disabled={
+                  busy ||
+                  preview.valid === false ||
+                  !previewHasChanges(proposal) ||
+                  (duplicates && !override)
+                }
+                isLoading={busy}
+                onClick={() => void decide("approve")}
+              >
+                Confirm changes
+              </Button>
+            </>
+          )}
+        </div>
+      )}
     </dialog>
   );
 }
