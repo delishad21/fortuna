@@ -41,8 +41,9 @@ export const parserActionSchema = z.discriminatedUnion("kind", [
 ]);
 /**
  * retain_fixture for statements that are all kept already changes nothing, so it needs no
- * approval: the statements' live fixture workspace is returned instead (a new one when the
- * old one expired; keeping them was approved when they were first retained).
+ * approval: a live fixture workspace holding exactly these statements is returned, or a new
+ * one is made for them (keeping them was approved when they were first retained). A workspace
+ * that also holds other statements is never reused: test runs the candidate on each of them.
  */
 export async function retainedWorkspace(
   db: PrismaClient,
@@ -63,9 +64,7 @@ export async function retainedWorkspace(
     orderBy: { createdAt: "desc" },
   });
   const workspace =
-    live.find((w) =>
-      ids.every((id) => ((w.statementFileIds as string[]) || []).includes(id)),
-    ) ||
+    live.find((w) => sameStatements(w.statementFileIds, ids)) ||
     (await db.parserWorkspace.create({
       data: {
         userId,
@@ -78,6 +77,11 @@ export async function retainedWorkspace(
     files: files.map((f) => ({ statementFileId: f.id, filename: f.filename })),
     workspace,
   };
+}
+/** Whether a workspace holds exactly these statements, in any order. */
+function sameStatements(stored: unknown, ids: string[]) {
+  const held = new Set(Array.isArray(stored) ? (stored as string[]) : []);
+  return held.size === ids.length && ids.every((id) => held.has(id));
 }
 export class ParserActions implements ActionHandler {
   constructor(private db: PrismaClient) {}

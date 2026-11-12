@@ -338,7 +338,7 @@ export function createToolRegistry(
           model: json({
             alreadyRetained: true,
             message:
-              "These statements are already kept as parser fixtures, so there is nothing to approve and no proposal was made. Carry on with parser_step in this workspace.",
+              "These statements are already kept as parser fixtures, so there is nothing to approve and no proposal was made. A workspace with exactly these statements, and no others, is ready: use its workspaceId with parser_step (inspect, save, test, submit) right away. The user doesn't need to re-upload, re-attach or re-save these files.",
             workspaceId: kept.workspace.id,
             workspaceExpiresAt: kept.workspace.expiresAt,
             statements: kept.files,

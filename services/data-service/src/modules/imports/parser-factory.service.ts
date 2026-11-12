@@ -137,7 +137,7 @@ function candidateError(message: string) {
     /^The parser service rejected \S+ \(HTTP \d+\): ?/,
     "",
   );
-  return `The candidate raised an error on this fixture: ${reason || "no message"}. Every statement in the workspace is tested; if this one has another layout, start a workspace with only the statements this parser is for.`;
+  return `The candidate raised an error on this fixture: ${reason || "no message"}. Every statement in the workspace is tested; if this one has another layout, propose retain_fixture with only the statement IDs this parser is for: statements already kept get such a workspace at once, without re-uploading them.`;
 }
 export class ParserFactoryService {
   static async createWorkspace(userId: string, fileIds: string[]) {

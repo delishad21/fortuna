@@ -194,6 +194,91 @@ test("retain_fixture for statements already kept returns their workspace without
     assert.equal(await db.chatActionProposal.count(), 1);
   }));
 
+test("retain_fixture reuses only a workspace holding exactly the requested statements", () =>
+  withChatDb(async (db) => {
+    const { user, conversation, context } = await setup(db, "retain-exact");
+    const keep = async (name: string) => {
+      const a = await attach(db, user.id, conversation.id, name);
+      await db.statementFile.update({
+        where: { id: a.statementFileId },
+        data: { retained: true },
+      });
+      return a;
+    };
+    const simplygo = await keep("simplygo.pdf"),
+      uob = await keep("uob.pdf"),
+      mari = await keep("mari.pdf");
+    const live = {
+      fixtureConsentAt: new Date(),
+      expiresAt: new Date(Date.now() + 86400000),
+    };
+    const mixed = await db.parserWorkspace.create({
+      data: {
+        userId: user.id,
+        statementFileIds: [
+          mari.statementFileId,
+          simplygo.statementFileId,
+          uob.statementFileId,
+        ],
+        ...live,
+      },
+    });
+    const tools = createToolRegistry(db);
+    const retain = async (ids: string[]) =>
+      (
+        await tools.execute(context, "propose_action", {
+          action: { kind: "retain_fixture", statementFileIds: ids },
+        })
+      ).model as any;
+    // A kept statement that only sits in a mixed workspace gets one of its own.
+    const alone = await retain([simplygo.statementFileId]);
+    assert.equal(alone.alreadyRetained, true);
+    assert.notEqual(alone.workspaceId, mixed.id);
+    const created = await db.parserWorkspace.findUniqueOrThrow({
+      where: { id: alone.workspaceId },
+    });
+    assert.deepEqual(created.statementFileIds, [simplygo.statementFileId]);
+    assert.ok(created.fixtureConsentAt);
+    assert.ok(created.expiresAt > new Date());
+    // Asking again reuses it, and the same set in another order reuses the mixed one.
+    assert.equal((await retain([simplygo.id])).workspaceId, alone.workspaceId);
+    assert.equal(
+      (
+        await retain([
+          uob.statementFileId,
+          mari.statementFileId,
+          simplygo.statementFileId,
+        ])
+      ).workspaceId,
+      mixed.id,
+    );
+    // An expired exact match is replaced by a new workspace.
+    const expired = await db.parserWorkspace.create({
+      data: {
+        userId: user.id,
+        statementFileIds: [uob.statementFileId],
+        fixtureConsentAt: new Date(),
+        expiresAt: new Date(Date.now() - 1000),
+      },
+    });
+    const renewed = await retain([uob.statementFileId]);
+    assert.notEqual(renewed.workspaceId, expired.id);
+    assert.deepEqual(
+      (
+        await db.parserWorkspace.findUniqueOrThrow({
+          where: { id: renewed.workspaceId },
+        })
+      ).statementFileIds,
+      [uob.statementFileId],
+    );
+    assert.match(renewed.message, /exactly these statements/);
+    assert.equal(await db.chatActionProposal.count(), 0);
+    // Statements not all kept yet still need the user's approval.
+    const fresh = await attach(db, user.id, conversation.id, "fresh2.pdf");
+    await retain([simplygo.statementFileId, fresh.statementFileId]);
+    assert.equal(await db.chatActionProposal.count(), 1);
+  }));
+
 test("statement ID errors say which ID is wrong and why", () =>
   withChatDb(async (db) => {
     const { user, conversation, context } = await setup(db, "retain-errors");

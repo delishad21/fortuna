@@ -195,7 +195,7 @@ export const workflowDefinitions: ToolDefinition[] = [
   {
     name: "parser_step",
     description:
-      "Develop a parser in an approved fixture workspace. Check list_parsers first: a built-in parser for the statement makes this unnecessary, and built-in IDs can't be replaced. Operations: guide and definitions need nothing else; inspect needs workspaceId and fileId (a statement file ID, upload_…, from the workspace); save needs workspaceId and candidate; test and submit need workspaceId and candidateId (the id that save returns). A workspace only exists after the user approves a retain_fixture proposal for the statement (propose_action); until then, stop and ask the user to approve it. test runs the candidate on every statement in the workspace, so put only statements of one layout in a workspace. " +
+      "Develop a parser in an approved fixture workspace. Check list_parsers first: a built-in parser for the statement makes this unnecessary, and built-in IDs can't be replaced. Operations: guide and definitions need nothing else; inspect needs workspaceId and fileId (a statement file ID, upload_…, from the workspace); save needs workspaceId and candidate; test and submit need workspaceId and candidateId (the id that save returns). A workspace only exists after the user approves a retain_fixture proposal for the statement (propose_action); until then, stop and ask the user to approve it. test runs the candidate on every statement in the workspace, so a workspace must hold only statements of the one layout the parser is for; to get one, propose retain_fixture with only those statement IDs. A statement that is already kept needs no new approval, upload or re-saved file: retain_fixture with its ID returns a workspace with exactly the statements asked for. " +
       PARSER_CANDIDATE_FIELDS +
       " Approval and activation require propose_action.",
     inputSchema: obj(
@@ -219,7 +219,7 @@ export const workflowDefinitions: ToolDefinition[] = [
     description:
       "Create a human approval preview. This never approves or executes the change. A pending proposal stays open while the conversation goes on; a new proposal for the same records replaces it. Fields per kind (no others are accepted): " +
       "commit_drafts: draftIds (string[], staged import IDs). " +
-      "retain_fixture: statementFileIds (string[]: statement file IDs, upload_…, as inspect_statement returns them; this conversation's attachment IDs are accepted too; when every statement is already kept, no proposal is made and the result gives the workspaceId to use right away). " +
+      "retain_fixture: statementFileIds (string[]: statement file IDs, upload_…, as inspect_statement returns them; this conversation's attachment IDs are accepted too; list only the statements of one layout, since the workspace holds exactly these; when every statement is already kept, no proposal is made and the result gives the workspaceId of a workspace with exactly these statements, to use right away). " +
       "approve_parser: workspaceId, candidateId. " +
       "activate_parser | rollback_parser: definitionId, versionId. " +
       "create_account: accountIdentifier (string, what statements show), label (optional friendly name, e.g. 'UOB One credit card'), color (optional '#RRGGBB'). " +
@@ -363,6 +363,8 @@ export async function executeWorkflowTool(
         rules: [
           "Inspect consented fixture first",
           "A workspace's statements must share one layout: test runs the candidate on each",
+          "For a workspace with only some statements, propose retain_fixture with just their IDs; statements already kept get that workspace at once, with no approval",
+          "Never ask the user to re-upload, re-attach or re-save a statement that is already kept: uploads of the same file reuse the same statement",
           "Use one stable parserId",
           "No network/filesystem outside sandbox",
           "Validate counts, credits, debits and account identifiers",
