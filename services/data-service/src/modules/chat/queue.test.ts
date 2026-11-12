@@ -273,7 +273,7 @@ test("two paths finishing at once start the queued message exactly once", () =>
     );
   }));
 
-test("an attachment that expires while queued fails that message clearly; the next one goes", () =>
+test("an attachment deleted while queued fails that message clearly; the next one goes", () =>
   withChatDb(async (db) => {
     const { user, chat, conversation, repo } = await setup(db, "q-files");
     const file = await db.statementFile.create({
@@ -310,7 +310,7 @@ test("an attachment that expires while queued fails that message clearly; the ne
       where: { id: withFile.queuedId },
     });
     assert.equal(failed.status, "failed");
-    assert.match(failed.error!, /DBS Oct\.pdf was deleted or expired/);
+    assert.match(failed.error!, /DBS Oct\.pdf was deleted while this message waited/);
     assert.equal(
       (await db.chatRun.findFirstOrThrow({ where: { status: "queued" } }))
         .idempotencyKey,

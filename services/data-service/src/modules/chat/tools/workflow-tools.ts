@@ -40,7 +40,7 @@ export const workflowDefinitions: ToolDefinition[] = [
   {
     name: "inspect_statement",
     description:
-      "Read uploaded statement text without retaining it as a parser fixture, up to 12 pages per call: startPage/endPage pick the pages, and nextPage says where to continue. Returns the statementFileId (upload_…) that parser tools and retain_fixture use.",
+      "Read uploaded statement text, up to 12 pages per call: startPage/endPage pick the pages, and nextPage says where to continue. Returns the statementFileId (upload_…) that parser tools use.",
     inputSchema: obj(
       {
         attachmentId: {
@@ -195,13 +195,21 @@ export const workflowDefinitions: ToolDefinition[] = [
   {
     name: "parser_step",
     description:
-      "Develop a parser in an approved fixture workspace. Check list_parsers first: a built-in parser for the statement makes this unnecessary, and built-in IDs can't be replaced. Operations: guide and definitions need nothing else; inspect needs workspaceId and fileId (a statement file ID, upload_…, from the workspace); save needs workspaceId and candidate; test and submit need workspaceId and candidateId (the id that save returns). A workspace only exists after the user approves a retain_fixture proposal for the statement (propose_action); until then, stop and ask the user to approve it. test runs the candidate on every statement in the workspace, so a workspace must hold only statements of the one layout the parser is for; to get one, propose retain_fixture with only those statement IDs. A statement that is already kept needs no new approval, upload or re-saved file: retain_fixture with its ID returns a workspace with exactly the statements asked for. " +
+      "Develop a parser in a fixture workspace. Check list_parsers first: a built-in parser for the statement makes this unnecessary, and built-in IDs can't be replaced. Operations: guide and definitions need nothing else; workspace needs statementFileIds and returns a workspace holding exactly those statements, at once and without approval (every statement the user uploaded is kept, however old, so any of their statement file IDs works; this conversation's attachment IDs are accepted too); inspect needs workspaceId and fileId (a statement file ID, upload_…, from the workspace); save needs workspaceId and candidate; test and submit need workspaceId and candidateId (the id that save returns). test runs the candidate on every statement in the workspace, so list only statements of the one layout the parser is for. " +
       PARSER_CANDIDATE_FIELDS +
       " Approval and activation require propose_action.",
     inputSchema: obj(
       {
         operation: {
-          enum: ["guide", "inspect", "save", "test", "submit", "definitions"],
+          enum: ["guide", "workspace", "inspect", "save", "test", "submit", "definitions"],
+        },
+        statementFileIds: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: 10,
+          description:
+            "workspace only: statement file IDs (upload_…) or this conversation's attachment IDs, all of one layout",
         },
         workspaceId: str,
         candidateId: str,
@@ -219,7 +227,6 @@ export const workflowDefinitions: ToolDefinition[] = [
     description:
       "Create a human approval preview. This never approves or executes the change. A pending proposal stays open while the conversation goes on; a new proposal for the same records replaces it. Fields per kind (no others are accepted): " +
       "commit_drafts: draftIds (string[], staged import IDs). " +
-      "retain_fixture: statementFileIds (string[]: statement file IDs, upload_…, as inspect_statement returns them; this conversation's attachment IDs are accepted too; list only the statements of one layout, since the workspace holds exactly these; when every statement is already kept, no proposal is made and the result gives the workspaceId of a workspace with exactly these statements, to use right away). " +
       "approve_parser: workspaceId, candidateId. " +
       "activate_parser | rollback_parser: definitionId, versionId. " +
       "create_account: accountIdentifier (string, what statements show), label (optional friendly name, e.g. 'UOB One credit card'), color (optional '#RRGGBB'). " +
@@ -239,7 +246,6 @@ export const workflowDefinitions: ToolDefinition[] = [
             kind: {
               enum: [
                 "commit_drafts",
-                "retain_fixture",
                 "approve_parser",
                 "activate_parser",
                 "rollback_parser",
@@ -327,12 +333,14 @@ export async function executeWorkflowTool(
       .object({
         operation: z.enum([
           "guide",
+          "workspace",
           "inspect",
           "save",
           "test",
           "submit",
           "definitions",
         ]),
+        statementFileIds: z.array(idSchema).min(1).max(10).optional(),
         workspaceId: idSchema.optional(),
         candidateId: idSchema.optional(),
         fileId: idSchema.optional(),
@@ -361,10 +369,10 @@ export async function executeWorkflowTool(
           "json",
         ],
         rules: [
-          "Inspect consented fixture first",
+          "Inspect the fixture first",
           "A workspace's statements must share one layout: test runs the candidate on each",
-          "For a workspace with only some statements, propose retain_fixture with just their IDs; statements already kept get that workspace at once, with no approval",
-          "Never ask the user to re-upload, re-attach or re-save a statement that is already kept: uploads of the same file reuse the same statement",
+          "Get a workspace with parser_step workspace and exactly the statement IDs the parser is for; it needs no approval",
+          "Every statement the user uploaded is kept until they delete it, so never ask them to upload, re-attach or re-save one; a statement they deleted is the only one to ask for again",
           "Use one stable parserId",
           "No network/filesystem outside sandbox",
           "Validate counts, credits, debits and account identifiers",
@@ -378,10 +386,22 @@ export async function executeWorkflowTool(
       throw new ChatError(
         400,
         field === "workspaceId"
-          ? `parser_step ${input.operation} needs workspaceId. A workspace is created when the user approves a retain_fixture proposal for the statement; if that is still pending, stop and ask the user to approve it.`
+          ? `parser_step ${input.operation} needs workspaceId. Get one with parser_step workspace and the statement IDs; it needs no approval.`
           : `parser_step ${input.operation} needs ${field}.`,
       );
     };
+    if (input.operation === "workspace") {
+      if (!input.statementFileIds) need(undefined, "statementFileIds");
+      const ids = await toStatementFileIds(db, context, input.statementFileIds!);
+      const workspace = await factory.createWorkspace(context.userId, ids);
+      return {
+        workspaceId: workspace.id,
+        statementFileIds: workspace.statementFileIds,
+        expiresAt: workspace.expiresAt,
+        message:
+          "This workspace holds exactly these statements. Use its workspaceId with parser_step inspect, save, test and submit.",
+      };
+    }
     const workspaceId = need(input.workspaceId, "workspaceId");
     if (input.operation === "inspect") {
       const [fileId] = await toStatementFileIds(db, context, [

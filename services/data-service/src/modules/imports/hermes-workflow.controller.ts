@@ -96,7 +96,7 @@ hermesWorkflowRouter.get("/statements/:fileRef", requireAccountAuth(["drafts:rea
   try {
     const statement = await (await import("../../lib/prisma")).default.statementFile.findFirst({
       where: { id: request.params.fileRef, userId: authenticatedUserId(request), deletedAt: null },
-      select: { id: true, filename: true, contentType: true, sha256: true, sizeBytes: true, status: true, retained: true, expiresAt: true, createdAt: true },
+      select: { id: true, filename: true, contentType: true, sha256: true, sizeBytes: true, status: true, createdAt: true },
     });
     if (!statement) return response.status(404).json({ error: "Statement file not found" });
     return response.json({ statement });

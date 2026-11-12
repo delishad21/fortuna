@@ -81,35 +81,45 @@ const jsonResponse = (body: unknown, status = 200) =>
     status,
     headers: { "content-type": "application/json" },
   });
-test("parser workspace cannot retain expired or another user’s statements", () =>
+test("parser workspace refuses another user's or a deleted statement, and takes an old one", () =>
   withChatDb(async (db) =>
     withDatabase(db, async () => {
       const a = await db.user.create({ data: { username: "parser-a" } }),
         b = await db.user.create({ data: { username: "parser-b" } });
-      const file = await db.statementFile.create({
-        data: {
-          userId: b.id,
-          filename: "test.csv",
-          contentType: "text/csv",
-          sha256: "x",
-          storagePath: "/no-real-file",
-          sizeBytes: 1,
-          expiresAt: new Date(0),
-        },
+      const file = (data: Record<string, unknown>) =>
+        db.statementFile.create({
+          data: {
+            userId: b.id,
+            contentType: "text/csv",
+            storagePath: "/no-real-file",
+            sizeBytes: 1,
+            ...data,
+          } as any,
+        });
+      // Uploaded long ago, from before statements were kept: its old expiry means nothing.
+      const old = await file({
+        filename: "old.csv",
+        sha256: "x",
+        expiresAt: new Date(0),
+        retained: false,
+        createdAt: new Date("2026-01-01"),
+      });
+      const deleted = await file({
+        filename: "gone.csv",
+        sha256: "y",
+        status: "deleted",
+        deletedAt: new Date(),
       });
       await assert.rejects(
-        ParserFactoryService.createWorkspace(a.id, [file.id]),
+        ParserFactoryService.createWorkspace(a.id, [old.id]),
         /is not a statement file of this user/,
       );
       await assert.rejects(
-        ParserFactoryService.createWorkspace(b.id, [file.id]),
-        /test\.csv \(.+\) expired on 1970-01-01/,
+        ParserFactoryService.createWorkspace(b.id, [deleted.id]),
+        /gone\.csv \(.+\) was deleted from the Statements list by the user/,
       );
-      assert.equal(
-        (await db.statementFile.findUniqueOrThrow({ where: { id: file.id } }))
-          .retained,
-        false,
-      );
+      const workspace = await ParserFactoryService.createWorkspace(b.id, [old.id]);
+      assert.deepEqual(workspace.statementFileIds, [old.id]);
     }),
   ));
 test("parser approval rejects a report for different source even if marked passed", () =>
@@ -143,180 +153,153 @@ test("parser approval rejects a report for different source even if marked passe
     }),
   ));
 
-test("retain_fixture takes this conversation's attachment IDs and stores statement file IDs", () =>
-  withChatDb(async (db) => {
-    const { user, conversation, context } = await setup(db, "retain-ids");
-    const uob = await attach(db, user.id, conversation.id, "uob.pdf");
-    const simplygo = await attach(db, user.id, conversation.id, "simplygo.pdf");
-    const tools = createToolRegistry(db);
-    await tools.execute(context, "propose_action", {
-      action: {
-        kind: "retain_fixture",
-        statementFileIds: [uob.id, simplygo.statementFileId],
-      },
-    });
-    const proposal = await db.chatActionProposal.findFirstOrThrow();
-    assert.deepEqual((proposal.arguments as any).statementFileIds, [
-      uob.statementFileId,
-      simplygo.statementFileId,
-    ]);
-  }));
-
-test("retain_fixture for statements already kept returns their workspace without a proposal", () =>
-  withChatDb(async (db) => {
-    const { user, conversation, context } = await setup(db, "retain-kept");
-    const kept = await attach(db, user.id, conversation.id, "kept.pdf");
-    await db.statementFile.update({
-      where: { id: kept.statementFileId },
-      data: { retained: true },
-    });
-    const workspace = await db.parserWorkspace.create({
-      data: {
-        userId: user.id,
-        statementFileIds: [kept.statementFileId],
-        fixtureConsentAt: new Date(),
-        expiresAt: new Date(Date.now() + 86400000),
-      },
-    });
-    const tools = createToolRegistry(db);
-    const result = await tools.execute(context, "propose_action", {
-      action: { kind: "retain_fixture", statementFileIds: [kept.id] },
-    });
-    assert.equal(await db.chatActionProposal.count(), 0);
-    assert.deepEqual(result.blocks, []);
-    assert.equal((result.model as any).alreadyRetained, true);
-    assert.equal((result.model as any).workspaceId, workspace.id);
-    // One statement not kept yet still needs the user's approval.
-    const fresh = await attach(db, user.id, conversation.id, "fresh.pdf");
-    await tools.execute(context, "propose_action", {
-      action: { kind: "retain_fixture", statementFileIds: [kept.id, fresh.id] },
-    });
-    assert.equal(await db.chatActionProposal.count(), 1);
-  }));
-
-test("retain_fixture reuses only a workspace holding exactly the requested statements", () =>
-  withChatDb(async (db) => {
-    const { user, conversation, context } = await setup(db, "retain-exact");
-    const keep = async (name: string) => {
-      const a = await attach(db, user.id, conversation.id, name);
-      await db.statementFile.update({
-        where: { id: a.statementFileId },
-        data: { retained: true },
-      });
-      return a;
-    };
-    const simplygo = await keep("simplygo.pdf"),
-      uob = await keep("uob.pdf"),
-      mari = await keep("mari.pdf");
-    const live = {
-      fixtureConsentAt: new Date(),
-      expiresAt: new Date(Date.now() + 86400000),
-    };
-    const mixed = await db.parserWorkspace.create({
-      data: {
-        userId: user.id,
-        statementFileIds: [
-          mari.statementFileId,
-          simplygo.statementFileId,
-          uob.statementFileId,
-        ],
-        ...live,
-      },
-    });
-    const tools = createToolRegistry(db);
-    const retain = async (ids: string[]) =>
-      (
-        await tools.execute(context, "propose_action", {
-          action: { kind: "retain_fixture", statementFileIds: ids },
+test("parser_step workspace takes attachment IDs and needs no approval, even for an old statement", () =>
+  withChatDb(async (db) =>
+    withDatabase(db, async () => {
+      const { user, conversation, context } = await setup(db, "workspace-ids");
+      const uob = await attach(db, user.id, conversation.id, "uob.pdf");
+      // A statement from another conversation, uploaded weeks ago with a 7-day expiry.
+      const other = await db.chatConversation.create({ data: { userId: user.id } });
+      const old = await attach(
+        db,
+        user.id,
+        other.id,
+        "simplygo.pdf",
+        new Date("2026-10-01T00:00:00Z"),
+      );
+      const tools = createToolRegistry(db);
+      const result = (
+        await tools.execute(context, "parser_step", {
+          operation: "workspace",
+          statementFileIds: [uob.id, old.statementFileId],
         })
       ).model as any;
-    // A kept statement that only sits in a mixed workspace gets one of its own.
-    const alone = await retain([simplygo.statementFileId]);
-    assert.equal(alone.alreadyRetained, true);
-    assert.notEqual(alone.workspaceId, mixed.id);
-    const created = await db.parserWorkspace.findUniqueOrThrow({
-      where: { id: alone.workspaceId },
-    });
-    assert.deepEqual(created.statementFileIds, [simplygo.statementFileId]);
-    assert.ok(created.fixtureConsentAt);
-    assert.ok(created.expiresAt > new Date());
-    // Asking again reuses it, and the same set in another order reuses the mixed one.
-    assert.equal((await retain([simplygo.id])).workspaceId, alone.workspaceId);
-    assert.equal(
-      (
-        await retain([
-          uob.statementFileId,
-          mari.statementFileId,
-          simplygo.statementFileId,
-        ])
-      ).workspaceId,
-      mixed.id,
-    );
-    // An expired exact match is replaced by a new workspace.
-    const expired = await db.parserWorkspace.create({
-      data: {
-        userId: user.id,
-        statementFileIds: [uob.statementFileId],
-        fixtureConsentAt: new Date(),
-        expiresAt: new Date(Date.now() - 1000),
-      },
-    });
-    const renewed = await retain([uob.statementFileId]);
-    assert.notEqual(renewed.workspaceId, expired.id);
-    assert.deepEqual(
-      (
-        await db.parserWorkspace.findUniqueOrThrow({
-          where: { id: renewed.workspaceId },
-        })
-      ).statementFileIds,
-      [uob.statementFileId],
-    );
-    assert.match(renewed.message, /exactly these statements/);
-    assert.equal(await db.chatActionProposal.count(), 0);
-    // Statements not all kept yet still need the user's approval.
-    const fresh = await attach(db, user.id, conversation.id, "fresh2.pdf");
-    await retain([simplygo.statementFileId, fresh.statementFileId]);
-    assert.equal(await db.chatActionProposal.count(), 1);
-  }));
+      const workspace = await db.parserWorkspace.findUniqueOrThrow({
+        where: { id: result.workspaceId },
+      });
+      assert.deepEqual(workspace.statementFileIds, [
+        uob.statementFileId,
+        old.statementFileId,
+      ]);
+      assert.match(result.message, /exactly these statements/);
+      assert.equal(await db.chatActionProposal.count(), 0);
+      // retain_fixture is no longer a proposal kind.
+      await assert.rejects(
+        tools.execute(context, "propose_action", {
+          action: { kind: "retain_fixture", statementFileIds: [uob.id] },
+        }),
+      );
+      assert.equal(await db.chatActionProposal.count(), 0);
+      const definitions = JSON.stringify(tools.definitions);
+      assert.doesNotMatch(definitions, /retain_fixture|re-upload|upload it again|expire after|expired on/);
+    }),
+  ));
+
+test("parser_step workspace reuses only a workspace holding exactly the requested statements", () =>
+  withChatDb(async (db) =>
+    withDatabase(db, async () => {
+      const { user, conversation, context } = await setup(db, "workspace-exact");
+      const simplygo = await attach(db, user.id, conversation.id, "simplygo.pdf"),
+        uob = await attach(db, user.id, conversation.id, "uob.pdf"),
+        mari = await attach(db, user.id, conversation.id, "mari.pdf");
+      const mixed = await db.parserWorkspace.create({
+        data: {
+          userId: user.id,
+          statementFileIds: [
+            mari.statementFileId,
+            simplygo.statementFileId,
+            uob.statementFileId,
+          ],
+          fixtureConsentAt: new Date(),
+          expiresAt: new Date(Date.now() + 86400000),
+        },
+      });
+      const tools = createToolRegistry(db);
+      const workspace = async (ids: string[]) =>
+        (
+          await tools.execute(context, "parser_step", {
+            operation: "workspace",
+            statementFileIds: ids,
+          })
+        ).model as any;
+      // A statement that only sits in a mixed workspace gets one of its own.
+      const alone = await workspace([simplygo.statementFileId]);
+      assert.notEqual(alone.workspaceId, mixed.id);
+      const created = await db.parserWorkspace.findUniqueOrThrow({
+        where: { id: alone.workspaceId },
+      });
+      assert.deepEqual(created.statementFileIds, [simplygo.statementFileId]);
+      assert.ok(created.fixtureConsentAt);
+      assert.ok(created.expiresAt > new Date());
+      // Asking again reuses it, and the same set in another order reuses the mixed one.
+      assert.equal((await workspace([simplygo.id])).workspaceId, alone.workspaceId);
+      assert.equal(
+        (
+          await workspace([
+            uob.statementFileId,
+            mari.statementFileId,
+            simplygo.statementFileId,
+          ])
+        ).workspaceId,
+        mixed.id,
+      );
+      // An expired exact match is replaced by a new workspace.
+      const expired = await db.parserWorkspace.create({
+        data: {
+          userId: user.id,
+          statementFileIds: [uob.statementFileId],
+          fixtureConsentAt: new Date(),
+          expiresAt: new Date(Date.now() - 1000),
+        },
+      });
+      const renewed = await workspace([uob.statementFileId]);
+      assert.notEqual(renewed.workspaceId, expired.id);
+      assert.deepEqual(
+        (
+          await db.parserWorkspace.findUniqueOrThrow({
+            where: { id: renewed.workspaceId },
+          })
+        ).statementFileIds,
+        [uob.statementFileId],
+      );
+      assert.equal(await db.chatActionProposal.count(), 0);
+    }),
+  ));
 
 test("statement ID errors say which ID is wrong and why", () =>
-  withChatDb(async (db) => {
-    const { user, conversation, context } = await setup(db, "retain-errors");
-    const other = await db.chatConversation.create({
-      data: { userId: user.id },
-    });
-    const elsewhere = await attach(db, user.id, other.id, "elsewhere.pdf");
-    const old = await attach(
-      db,
-      user.id,
-      conversation.id,
-      "old.pdf",
-      new Date("2026-11-01T00:00:00Z"),
-    );
-    const tools = createToolRegistry(db);
-    // An attachment of another conversation isn't mapped, but its statement file is named.
-    await assert.rejects(
-      tools.execute(context, "propose_action", {
-        action: { kind: "retain_fixture", statementFileIds: [elsewhere.id] },
-      }),
-      new RegExp(
-        `not found: ${elsewhere.id} is a chat attachment ID, not a statement file; the attachment's statementFileId is ${elsewhere.statementFileId}`,
-      ),
-    );
-    await assert.rejects(
-      tools.execute(context, "propose_action", {
-        action: { kind: "retain_fixture", statementFileIds: [old.id] },
-      }),
-      /old\.pdf \(upload_oldpdf\) expired on 2026-11-01/,
-    );
-    await assert.rejects(
-      tools.execute(context, "propose_action", {
-        action: { kind: "retain_fixture", statementFileIds: ["nope123"] },
-      }),
-      /not found: nope123 is not a statement file/,
-    );
-    assert.equal(await db.chatActionProposal.count(), 0);
-  }));
+  withChatDb(async (db) =>
+    withDatabase(db, async () => {
+      const { user, conversation, context } = await setup(db, "workspace-errors");
+      const other = await db.chatConversation.create({
+        data: { userId: user.id },
+      });
+      const elsewhere = await attach(db, user.id, other.id, "elsewhere.pdf");
+      const gone = await attach(db, user.id, conversation.id, "gone.pdf");
+      await db.statementFile.update({
+        where: { id: gone.statementFileId },
+        data: { status: "deleted", deletedAt: new Date() },
+      });
+      const tools = createToolRegistry(db);
+      const workspace = (ids: string[]) =>
+        tools.execute(context, "parser_step", {
+          operation: "workspace",
+          statementFileIds: ids,
+        });
+      // An attachment of another conversation isn't mapped, but its statement file is named.
+      await assert.rejects(
+        workspace([elsewhere.id]),
+        new RegExp(
+          `not found: ${elsewhere.id} is a chat attachment ID, not a statement file; the attachment's statementFileId is ${elsewhere.statementFileId}`,
+        ),
+      );
+      await assert.rejects(
+        workspace([gone.id]),
+        /gone\.pdf \(upload_gonepdf\) was deleted from the Statements list by the user/,
+      );
+      await assert.rejects(workspace(["nope123"]), /not found: nope123 is not a statement file/);
+      assert.equal(await db.parserWorkspace.count(), 0);
+    }),
+  ));
 
 test("parser_step inspect takes an attachment ID; save explains the candidate's fields", () =>
   withChatDb(async (db) =>

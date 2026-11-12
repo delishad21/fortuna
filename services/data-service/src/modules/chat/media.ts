@@ -49,7 +49,7 @@ export function classifyUpload(file: { mimetype: string; buffer: Buffer }) {
 type Blocks = Array<{ type?: string; id?: string }>;
 /**
  * Load the most recent image attachments in the replayed messages as model inputs.
- * Older, expired or deleted images stay as their text attachment blocks only.
+ * Older or deleted images stay as their text attachment blocks only.
  */
 export async function loadModelImages(
   db: PrismaClient,
@@ -71,15 +71,13 @@ export async function loadModelImages(
     include: { statementFile: true },
   });
   const byId = new Map(attachments.map((a) => [a.id, a]));
-  const now = new Date();
   const recent = ids
     .filter((id) => {
       const file = byId.get(id)?.statementFile;
       return (
         file &&
         isImageType(file.contentType) &&
-        !file.deletedAt &&
-        (file.retained || file.expiresAt > now)
+        !file.deletedAt
       );
     })
     .slice(-CHAT_LIMITS.modelImages);

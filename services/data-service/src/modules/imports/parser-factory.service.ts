@@ -137,18 +137,35 @@ function candidateError(message: string) {
     /^The parser service rejected \S+ \(HTTP \d+\): ?/,
     "",
   );
-  return `The candidate raised an error on this fixture: ${reason || "no message"}. Every statement in the workspace is tested; if this one has another layout, propose retain_fixture with only the statement IDs this parser is for: statements already kept get such a workspace at once, without re-uploading them.`;
+  return `The candidate raised an error on this fixture: ${reason || "no message"}. Every statement in the workspace is tested; if this one has another layout, call parser_step workspace with only the statement IDs this parser is for.`;
+}
+/** Whether a workspace holds exactly these statements, in any order. */
+function sameStatements(stored: unknown, ids: string[]) {
+  const held = new Set(Array.isArray(stored) ? (stored as string[]) : []);
+  return held.size === ids.length && ids.every((id) => held.has(id));
 }
 export class ParserFactoryService {
-  static async createWorkspace(userId: string, fileIds: string[]) {
+  /**
+   * A live workspace holding exactly these statements, or a new one. Every
+   * uploaded statement is kept, so this needs no approval. A workspace that also
+   * holds other statements is never reused: test runs the candidate on each.
+   */
+  static async createWorkspace(userId: string, ids: string[]) {
+    const fileIds = [...new Set(ids)];
     return prisma.$transaction(async (tx) => {
       if (!fileIds.length || fileIds.length > 10)
         return fail(400, "A workspace takes 1 to 10 statement files");
       await requireStatementFiles(tx, userId, fileIds);
-      await tx.statementFile.updateMany({
-        where: { id: { in: fileIds }, userId },
-        data: { retained: true },
+      const live = await tx.parserWorkspace.findMany({
+        where: {
+          userId,
+          fixtureConsentAt: { not: null },
+          expiresAt: { gt: new Date() },
+        },
+        orderBy: { createdAt: "desc" },
       });
+      const same = live.find((w) => sameStatements(w.statementFileIds, fileIds));
+      if (same) return same;
       return tx.parserWorkspace.create({
         data: {
           userId,

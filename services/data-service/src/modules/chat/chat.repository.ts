@@ -15,7 +15,7 @@ export class ChatRepository {
         attachments: {
           include: {
             statementFile: {
-              select: { filename: true, expiresAt: true, deletedAt: true },
+              select: { filename: true, deletedAt: true },
             },
           },
         },

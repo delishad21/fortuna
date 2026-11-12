@@ -77,7 +77,9 @@ async function seedImages(
         storagePath,
         sha256: `sha-${i}`,
         sizeBytes: png.length + 1,
-        expiresAt: new Date(Date.now() + (i === 0 ? -1000 : 86400000)),
+        // The first was deleted from the Statements list; an old expiry means nothing.
+        expiresAt: new Date(Date.now() - 1000),
+        ...(i === 0 ? { status: "deleted", deletedAt: new Date() } : {}),
       },
     });
     const attachment = await db.chatAttachment.create({
@@ -94,7 +96,7 @@ async function seedImages(
 const attachmentBlocks = (ids: string[]) =>
   ids.map((id) => ({ type: "attachment", id, filename: id }));
 
-test("only the most recent unexpired, intact images are sent to the model", () =>
+test("only the most recent undeleted, intact images are sent to the model", () =>
   withChatDb(async (db) => {
     const { user, ids } = await seedImages(db, 11);
     // Tamper with one stored file: content no longer matches its recorded type.

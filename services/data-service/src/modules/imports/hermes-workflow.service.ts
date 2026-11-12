@@ -19,11 +19,7 @@ import {
   validateDraftTransaction,
 } from "./hermes-workflow.utils";
 import { cleanupExpiredWorkflowData } from "./workflow-cleanup";
-import {
-  STATEMENT_FILE_LIFE_MS,
-  statementFilesInUse,
-  statementFilesUsedByChats,
-} from "./statement-files";
+import { statementFilesInUse } from "./statement-files";
 import { enrichImportRows } from "./import-enrichment";
 import { findStagedDuplicates, type DuplicateFinding, type StagedRowSummary } from "./staged-duplicates";
 import {
@@ -42,7 +38,8 @@ const STORAGE_ROOT = path.resolve(
 );
 const PARSER_SERVICE_URL =
   process.env.PARSER_SERVICE_URL || "http://file-parser:4000";
-const SEVEN_DAYS_MS = STATEMENT_FILE_LIFE_MS;
+/** How long an untouched import draft lives; statement files themselves never expire. */
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 /** Parser ID recorded on drafts whose rows were extracted by the assistant rather than a parser. */
 export const ASSISTANT_ROWS_PARSER_ID = "assistant_rows";
 const COMMIT_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -97,8 +94,6 @@ function publicFile(file: {
   sha256: string;
   sizeBytes: number;
   status: string;
-  retained: boolean;
-  expiresAt: Date;
   createdAt: Date;
 }) {
   return {
@@ -108,8 +103,6 @@ function publicFile(file: {
     sha256: file.sha256,
     sizeBytes: file.sizeBytes,
     status: file.status,
-    retained: file.retained,
-    expiresAt: file.expiresAt,
     createdAt: file.createdAt,
   };
 }
@@ -144,25 +137,6 @@ export async function audit(
 // Trip drafts keep their reimbursement allocations (to trip entries or rows of the
 // same statement) in the row itself; the main-ledger links table only knows bank
 // transactions and main-ledger draft rows.
-/**
- * Marks a draft's statement file deleted unless it is kept as a parser fixture
- * or something else still uses it (another open draft, or a chat); the kept
- * file keeps its expiry and the cleanup deletes it later. Call it after the
- * draft itself is closed. Says whether the file was deleted.
- */
-async function deleteUnusedStatementFile(
-  tx: Prisma.TransactionClient,
-  file: { id: string; retained: boolean },
-) {
-  if (file.retained) return false;
-  if ((await statementFilesInUse(tx, [file.id])).has(file.id)) return false;
-  await tx.statementFile.update({
-    where: { id: file.id },
-    data: { status: "deleted", deletedAt: new Date() },
-  });
-  return true;
-}
-
 const storedPayloadFor = (mode: string, payload: Record<string, unknown>) =>
   mode === "trip" ? payload : storedDraftPayload(payload);
 
@@ -232,9 +206,7 @@ export async function applyTripAssignments(
 
 export class HermesWorkflowService {
   static async cleanupExpiredData(now = new Date()) {
-    return cleanupExpiredWorkflowData(prisma, unlink, now, (ids) =>
-      statementFilesInUse(prisma, ids, { now }),
-    );
+    return cleanupExpiredWorkflowData(prisma, now);
   }
 
   static async registerStatement(
@@ -251,18 +223,9 @@ export class HermesWorkflowService {
     const existing = await prisma.statementFile.findUnique({
       where: { userId_sha256: { userId, sha256 } },
     });
-    if (existing && !existing.deletedAt && existing.expiresAt > new Date()) {
-      // Uploading the same file again gives it a fresh 7-day life.
-      const expiresAt = new Date(Date.now() + SEVEN_DAYS_MS);
-      const current =
-        existing.retained || existing.expiresAt >= expiresAt
-          ? existing
-          : await prisma.statementFile.update({
-              where: { id: existing.id },
-              data: { expiresAt },
-            });
-      return { ...publicFile(current), duplicate: true };
-    }
+    // Uploads are deduplicated by content; a file the user deleted is stored again.
+    if (existing && !existing.deletedAt)
+      return { ...publicFile(existing), duplicate: true };
 
     await mkdir(STORAGE_ROOT, { recursive: true, mode: 0o700 });
     const filename = sanitizeStatementFilename(file.originalname);
@@ -282,8 +245,8 @@ export class HermesWorkflowService {
               storagePath,
               sizeBytes: file.size,
               status: "available",
-              expiresAt: new Date(Date.now() + SEVEN_DAYS_MS),
               deletedAt: null,
+              createdAt: new Date(),
             },
           })
         : await tx.statementFile.create({
@@ -295,7 +258,6 @@ export class HermesWorkflowService {
               storagePath,
               sha256,
               sizeBytes: file.size,
-              expiresAt: new Date(Date.now() + SEVEN_DAYS_MS),
             },
           });
       await audit(tx, userId, actor, {
@@ -537,8 +499,8 @@ export class HermesWorkflowService {
         deletedAt: null,
       },
     });
-    if (!file || (!file.retained && file.expiresAt <= new Date())) {
-      throw Object.assign(new Error("Statement file not found or expired"), {
+    if (!file) {
+      throw Object.assign(new Error("Statement file not found or deleted"), {
         status: 404,
       });
     }
@@ -651,20 +613,10 @@ export class HermesWorkflowService {
       linked.get(a)!.add(b);
       linked.get(b)!.add(a);
     }
-    // Discarding these keeps their statement file while a chat still uses it.
-    const usedByChats = await statementFilesUsedByChats(
-      prisma,
-      drafts.flatMap((draft) =>
-        draft.sourceFileId && !["committed", "discarded", "expired"].includes(draft.status)
-          ? [draft.sourceFileId]
-          : [],
-      ),
-    );
     return drafts.map(({ rows, ...draft }) => ({
       ...draft,
       reviewSummary: summarizeDraftReview(rows, { runningBalance: draft.mode === "main" }),
       linkedDraftIds: [...(linked.get(draft.id) || [])],
-      sourceFileInChat: !!draft.sourceFileId && usedByChats.has(draft.sourceFileId),
     }));
   }
 
@@ -1932,11 +1884,6 @@ export class HermesWorkflowService {
           const selectedIndices = draft.rows.flatMap((row, index) =>
             row.selected ? [index] : [],
           );
-          const sourceFile = draft.sourceFileId
-            ? await tx.statementFile.findFirst({
-                where: { id: draft.sourceFileId, userId },
-              })
-            : null;
           let result: Record<string, unknown>;
           if (draft.mode === "main") {
             const committed = await TransactionService.commitImport(
@@ -2012,10 +1959,6 @@ export class HermesWorkflowService {
               committedImportBatchId: batchId,
             },
           });
-          if (sourceFile && (await deleteUnusedStatementFile(tx, sourceFile))) {
-            const storagePath = sourceFile.storagePath;
-            await afterCommit(() => unlink(storagePath).catch(() => undefined));
-          }
           await audit(tx, userId, actor, {
             toolName: "commit_import_draft",
             targetType: "import_draft",
@@ -2043,7 +1986,6 @@ export class HermesWorkflowService {
   static async discardDraft(userId: string, draftId: string, actor: Actor) {
     const draft = await prisma.importDraft.findFirst({
       where: { id: draftId, userId },
-      include: { sourceFile: true },
     });
     if (!draft)
       throw Object.assign(new Error("Import draft not found"), { status: 404 });
@@ -2051,7 +1993,8 @@ export class HermesWorkflowService {
       throw Object.assign(new Error("Committed drafts cannot be discarded"), {
         status: 409,
       });
-    const updated = await runInTransaction(async (tx) => {
+    // The statement file stays: it is only deleted from the Statements list.
+    return runInTransaction(async (tx) => {
       await removeDraftLinks(tx, userId, draft.id);
       const next = await tx.importDraft.update({
         where: { id: draft.id },
@@ -2061,19 +2004,12 @@ export class HermesWorkflowService {
           version: { increment: 1 },
         },
       });
-      const fileDeleted =
-        !!draft.sourceFile && (await deleteUnusedStatementFile(tx, draft.sourceFile));
       await audit(tx, userId, actor, {
         toolName: "discard_import_draft",
         targetType: "import_draft",
         targetId: draft.id,
       });
-      return { next, fileDeleted };
+      return next;
     });
-    // Inside a chat approval the transaction commits later; delete the file only then.
-    const file = draft.sourceFile;
-    if (file && updated.fileDeleted)
-      await afterCommit(() => unlink(file.storagePath).catch(() => undefined));
-    return updated.next;
   }
 }

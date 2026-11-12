@@ -126,12 +126,11 @@ async function attachmentFile(
     include: { statementFile: true },
   });
   const file = attachment?.statementFile;
-  if (
-    !file ||
-    file.deletedAt ||
-    (!file.retained && file.expiresAt <= new Date())
-  )
-    throw new ChatError(404, "Attachment expired or missing. Upload it again.");
+  if (!file || file.deletedAt)
+    throw new ChatError(
+      404,
+      "Attachment missing, or the user deleted it from the Statements list.",
+    );
   return file;
 }
 

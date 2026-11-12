@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import { PrismaClient } from "@prisma/client";
 import { withChatDb } from "../chat/test-harness";
 import { withDatabase } from "../../lib/database-context";
 import { HermesWorkflowService } from "./hermes-workflow.service";
+import { StatementLibrary } from "./statement-library";
 
 const actor = { actorType: "user" as const };
 const DAY = 24 * 60 * 60 * 1000;
@@ -19,7 +21,12 @@ async function seed(db: PrismaClient) {
   return user;
 }
 
-async function statementFile(db: PrismaClient, userId: string, name: string) {
+async function statementFile(
+  db: PrismaClient,
+  userId: string,
+  name: string,
+  extra: { expiresAt?: Date; retained?: boolean; createdAt?: Date } = {},
+) {
   const storagePath = path.join(folder, `${name}-${Math.random()}`);
   writeFileSync(storagePath, "statement");
   return db.statementFile.create({
@@ -30,7 +37,7 @@ async function statementFile(db: PrismaClient, userId: string, name: string) {
       storagePath,
       sha256: storagePath,
       sizeBytes: 9,
-      expiresAt: new Date(Date.now() + 5 * DAY),
+      ...extra,
     },
   });
 }
@@ -53,36 +60,6 @@ function stageDraft(db: PrismaClient, userId: string, file: { id: string; filena
   });
 }
 
-/** Attaches the file to a new chat, added daysAgo, optionally sent in a message now. */
-async function attachToChat(
-  db: PrismaClient,
-  userId: string,
-  fileId: string,
-  options: { daysAgo: number; sentNow?: boolean },
-) {
-  const conversation = await db.chatConversation.create({ data: { userId } });
-  const attachment = await db.chatAttachment.create({
-    data: {
-      userId,
-      conversationId: conversation.id,
-      statementFileId: fileId,
-      createdAt: new Date(Date.now() - options.daysAgo * DAY),
-    },
-  });
-  if (options.sentNow)
-    await db.chatMessage.create({
-      data: {
-        userId,
-        conversationId: conversation.id,
-        role: "user",
-        blocks: [
-          { type: "text", text: "Import this" },
-          { type: "attachment", id: attachment.id, filename: "-6.pdf", mediaType: "statement" },
-        ],
-      },
-    });
-}
-
 async function commit(userId: string, draftId: string) {
   const selection = await HermesWorkflowService.prepareSelection(userId, [draftId], actor);
   assert.equal(selection.valid, true, JSON.stringify(selection.validations));
@@ -97,11 +74,10 @@ async function commit(userId: string, draftId: string) {
   );
 }
 
-async function assertKept(db: PrismaClient, file: { id: string; storagePath: string; expiresAt: Date }) {
+async function assertKept(db: PrismaClient, file: { id: string; storagePath: string }) {
   const stored = await db.statementFile.findUniqueOrThrow({ where: { id: file.id } });
   assert.equal(stored.deletedAt, null);
   assert.equal(stored.status, "available");
-  assert.equal(stored.expiresAt.getTime(), file.expiresAt.getTime(), "the kept file keeps its expiry");
   assert.ok(existsSync(file.storagePath));
 }
 
@@ -112,112 +88,98 @@ async function assertDeleted(db: PrismaClient, file: { id: string; storagePath: 
   assert.equal(existsSync(file.storagePath), false);
 }
 
-test("discarding a draft deletes its statement file when nothing else uses it", () =>
+test("committing or discarding a draft keeps its statement file", () =>
   withChatDb((db) =>
     withDatabase(db, async () => {
       const user = await seed(db);
-      const file = await statementFile(db, user.id, "old.pdf");
-      // A chat that used the file over a week ago no longer holds it.
-      await attachToChat(db, user.id, file.id, { daysAgo: 8 });
-      const draft = await stageDraft(db, user.id, file);
-      await HermesWorkflowService.discardDraft(user.id, draft.id, actor);
-      await assertDeleted(db, file);
+      const discarded = await statementFile(db, user.id, "discarded.pdf");
+      await HermesWorkflowService.discardDraft(user.id, (await stageDraft(db, user.id, discarded)).id, actor);
+      await assertKept(db, discarded);
+
+      const committed = await statementFile(db, user.id, "committed.pdf");
+      await commit(user.id, (await stageDraft(db, user.id, committed)).id);
+      await assertKept(db, committed);
     }),
   ));
 
-test("discarding a draft keeps a statement file another open draft uses, until that one closes", () =>
+test("statement files never expire and the cleanup leaves them alone", () =>
   withChatDb((db) =>
     withDatabase(db, async () => {
       const user = await seed(db);
-      const file = await statementFile(db, user.id, "dbs.pdf");
-      const older = await stageDraft(db, user.id, file);
-      const newer = await stageDraft(db, user.id, file);
-      await HermesWorkflowService.discardDraft(user.id, older.id, actor);
-      await assertKept(db, file);
-      await HermesWorkflowService.discardDraft(user.id, newer.id, actor);
-      await assertDeleted(db, file);
+      // A file from before this change, with an expiry long past and nothing using it.
+      const old = await statementFile(db, user.id, "old.pdf", {
+        expiresAt: new Date(Date.now() - 30 * DAY),
+        retained: false,
+        createdAt: new Date(Date.now() - 40 * DAY),
+      });
+      const later = new Date(Date.now() + 8 * DAY);
+      const cleaned = await HermesWorkflowService.cleanupExpiredData(later);
+      assert.equal("deletedFiles" in cleaned, false);
+      await assertKept(db, old);
+      // It can still be staged, and its old expiry doesn't matter.
+      const draft = await HermesWorkflowService.createDraft(user.id, { fileRef: old.id, mode: "main" }, actor);
+      assert.equal(draft.sourceFileId, old.id);
     }),
   ));
 
-test("discarding an old draft keeps a statement file just sent to a chat", () =>
+test("uploading the same file again reuses the kept statement and gives it no expiry", () =>
   withChatDb((db) =>
     withDatabase(db, async () => {
       const user = await seed(db);
-      const file = await statementFile(db, user.id, "-6.pdf");
-      // Attached two days ago, sent again in a message now (12 Nov's case).
-      await attachToChat(db, user.id, file.id, { daysAgo: 2, sentNow: true });
-      const draft = await stageDraft(db, user.id, file);
-      // The Import history dialog says the file stays.
-      const [listed] = await HermesWorkflowService.listDrafts(user.id);
-      assert.equal(listed.sourceFileInChat, true);
-      await HermesWorkflowService.discardDraft(user.id, draft.id, actor);
-      await assertKept(db, file);
-    }),
-  ));
-
-test("discarding a draft keeps a statement file in a chat whose run is still open", () =>
-  withChatDb((db) =>
-    withDatabase(db, async () => {
-      const user = await seed(db);
-      const file = await statementFile(db, user.id, "uob.pdf");
-      await attachToChat(db, user.id, file.id, { daysAgo: 8 });
-      const conversation = await db.chatAttachment.findFirstOrThrow({ where: { statementFileId: file.id } });
-      await db.chatRun.create({
+      const buffer = Buffer.from(`statement ${Math.random()}`);
+      const kept = await db.statementFile.create({
         data: {
           userId: user.id,
-          conversationId: conversation.conversationId,
-          idempotencyKey: "open",
-          provider: "openrouter",
-          model: "test",
-          status: "awaiting_confirmation",
+          filename: "dbs.pdf",
+          contentType: "application/pdf",
+          storagePath: path.join(folder, "dbs-kept"),
+          sha256: createHash("sha256").update(buffer).digest("hex"),
+          sizeBytes: buffer.length,
+          createdAt: new Date(Date.now() - 30 * DAY),
         },
       });
-      const draft = await stageDraft(db, user.id, file);
-      await HermesWorkflowService.discardDraft(user.id, draft.id, actor);
-      await assertKept(db, file);
+      assert.equal(kept.expiresAt, null);
+      assert.equal(kept.retained, true);
+      const again = await HermesWorkflowService.registerStatement(
+        user.id,
+        { originalname: "dbs (1).pdf", mimetype: "application/pdf", buffer, size: buffer.length },
+        actor,
+      );
+      assert.equal(again.id, kept.id);
+      assert.equal(again.duplicate, true);
+      assert.equal((await db.statementFile.findUniqueOrThrow({ where: { id: kept.id } })).expiresAt, null);
     }),
   ));
 
-test("committing a draft deletes its statement file unless a chat still uses it", () =>
+test("a statement is deleted only by hand, and not while an open draft uses it", () =>
   withChatDb((db) =>
     withDatabase(db, async () => {
       const user = await seed(db);
-      const alone = await statementFile(db, user.id, "alone.pdf");
-      const aloneDraft = await stageDraft(db, user.id, alone);
-      await commit(user.id, aloneDraft.id);
-      await assertDeleted(db, alone);
-
-      const shared = await statementFile(db, user.id, "shared.pdf");
-      await attachToChat(db, user.id, shared.id, { daysAgo: 0 });
-      const sharedDraft = await stageDraft(db, user.id, shared);
-      await commit(user.id, sharedDraft.id);
-      await assertKept(db, shared);
-    }),
-  ));
-
-test("committing a draft keeps a statement file another open draft uses", () =>
-  withChatDb((db) =>
-    withDatabase(db, async () => {
-      const user = await seed(db);
+      const other = await seed(db);
+      const library = new StatementLibrary(db);
       const file = await statementFile(db, user.id, "dbs.pdf");
-      const first = await stageDraft(db, user.id, file);
-      await stageDraft(db, user.id, file);
-      await commit(user.id, first.id);
-      await assertKept(db, file);
-    }),
-  ));
-
-test("the cleanup keeps an expired file an open draft uses and deletes it once nothing does", () =>
-  withChatDb((db) =>
-    withDatabase(db, async () => {
-      const user = await seed(db);
-      const file = await statementFile(db, user.id, "expired.pdf");
       const draft = await stageDraft(db, user.id, file);
-      const later = new Date(Date.now() + 6 * DAY);
-      assert.equal((await HermesWorkflowService.cleanupExpiredData(later)).deletedFiles, 0);
+
+      const [listed] = await library.list(user.id);
+      assert.equal(listed.id, file.id);
+      assert.equal(listed.inUse, true);
+      assert.deepEqual(listed.imports.map((d) => [d.id, d.status, d.rows]), [[draft.id, "review", 1]]);
+
+      await assert.rejects(library.remove(user.id, file.id), (error: any) => {
+        assert.equal(error.status, 409);
+        assert.match(error.message, /dbs\.pdf is still used by an open import/);
+        return true;
+      });
       await assertKept(db, file);
-      await db.importDraft.update({ where: { id: draft.id }, data: { status: "discarded" } });
-      assert.equal((await HermesWorkflowService.cleanupExpiredData(later)).deletedFiles, 1);
+      await assert.rejects(library.remove(other.id, file.id), { status: 404 });
+
+      await HermesWorkflowService.discardDraft(user.id, draft.id, actor);
+      assert.equal((await library.list(user.id))[0].inUse, false);
+      assert.deepEqual(await library.remove(user.id, file.id), { id: file.id, deleted: true });
       await assertDeleted(db, file);
+      assert.deepEqual(await library.list(user.id), []);
+      // The discarded import keeps its record.
+      assert.equal((await db.importDraft.findUniqueOrThrow({ where: { id: draft.id } })).sourceFileId, file.id);
+      await assert.rejects(library.remove(user.id, file.id), { status: 404 });
     }),
   ));

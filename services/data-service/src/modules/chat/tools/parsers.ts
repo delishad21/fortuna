@@ -1,7 +1,6 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { ParserFactoryService as factory } from "../../imports/parser-factory.service";
-import { requireStatementFiles } from "../../imports/statement-files";
 import { ChatError, idSchema } from "../contracts";
 import {
   ActionHandler,
@@ -11,12 +10,6 @@ import {
   json,
 } from "./transactions";
 export const parserActionSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("retain_fixture"),
-      statementFileIds: z.array(idSchema).min(1).max(10),
-    })
-    .strict(),
   z
     .object({
       kind: z.literal("approve_parser"),
@@ -39,50 +32,6 @@ export const parserActionSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
-/**
- * retain_fixture for statements that are all kept already changes nothing, so it needs no
- * approval: a live fixture workspace holding exactly these statements is returned, or a new
- * one is made for them (keeping them was approved when they were first retained). A workspace
- * that also holds other statements is never reused: test runs the candidate on each of them.
- */
-export async function retainedWorkspace(
-  db: PrismaClient,
-  userId: string,
-  raw: unknown,
-) {
-  const parsed = parserActionSchema.safeParse(raw);
-  if (!parsed.success || parsed.data.kind !== "retain_fixture") return null;
-  const ids = [...new Set(parsed.data.statementFileIds)];
-  const files = await requireStatementFiles(db, userId, ids);
-  if (!files.every((f) => f.retained)) return null;
-  const live = await db.parserWorkspace.findMany({
-    where: {
-      userId,
-      fixtureConsentAt: { not: null },
-      expiresAt: { gt: new Date() },
-    },
-    orderBy: { createdAt: "desc" },
-  });
-  const workspace =
-    live.find((w) => sameStatements(w.statementFileIds, ids)) ||
-    (await db.parserWorkspace.create({
-      data: {
-        userId,
-        statementFileIds: ids,
-        fixtureConsentAt: new Date(),
-        expiresAt: new Date(Date.now() + 7 * 86400000),
-      },
-    }));
-  return {
-    files: files.map((f) => ({ statementFileId: f.id, filename: f.filename })),
-    workspace,
-  };
-}
-/** Whether a workspace holds exactly these statements, in any order. */
-function sameStatements(stored: unknown, ids: string[]) {
-  const held = new Set(Array.isArray(stored) ? (stored as string[]) : []);
-  return held.size === ids.length && ids.every((id) => held.has(id));
-}
 export class ParserActions implements ActionHandler {
   constructor(private db: PrismaClient) {}
   private async state(
@@ -90,16 +39,6 @@ export class ParserActions implements ActionHandler {
     userId: string,
     input: z.infer<typeof parserActionSchema>,
   ) {
-    if (input.kind === "retain_fixture")
-      return (
-        await requireStatementFiles(tx, userId, input.statementFileIds)
-      ).map((f) => ({
-        id: f.id,
-        filename: f.filename,
-        sha256: f.sha256,
-        expiresAt: f.expiresAt,
-        retained: f.retained,
-      }));
     if (input.kind === "approve_parser") {
       const candidate = await tx.parserCandidate.findFirst({
         where: {
@@ -128,13 +67,11 @@ export class ParserActions implements ActionHandler {
       stateHash: stateHash(state),
       preview: json({
         title:
-          input.kind === "retain_fixture"
-            ? "Retain statements as parser fixtures"
-            : input.kind === "approve_parser"
-              ? "Approve tested parser"
-              : input.kind === "rollback_parser"
-                ? "Restore previous parser version"
-                : "Activate parser version",
+          input.kind === "approve_parser"
+            ? "Approve tested parser"
+            : input.kind === "rollback_parser"
+              ? "Restore previous parser version"
+              : "Activate parser version",
         details: parserPreview(input.kind, state),
       }),
     };
@@ -146,18 +83,12 @@ export class ParserActions implements ActionHandler {
     hash: string,
   ) {
     const input = parserActionSchema.parse(raw);
-    if (input.kind === "retain_fixture")
-      await tx.$queryRaw`SELECT id FROM statement_files WHERE user_id=${userId} AND id IN (${Prisma.join(input.statementFileIds)}) ORDER BY id FOR UPDATE`;
-    else if (input.kind === "approve_parser")
+    if (input.kind === "approve_parser")
       await tx.$queryRaw`SELECT id FROM parser_candidates WHERE id=${input.candidateId} FOR UPDATE`;
     else
       await tx.$queryRaw`SELECT id FROM dynamic_parser_definitions WHERE id=${input.definitionId} AND user_id=${userId} FOR UPDATE`;
     if (stateHash(await this.state(tx, userId, input)) !== hash)
       throw new StaleAction("Parser or fixture changed after preview");
-    if (input.kind === "retain_fixture")
-      return json(
-        await factory.createWorkspace(userId, input.statementFileIds),
-      );
     if (input.kind === "approve_parser")
       return json(
         await factory.approve(userId, input.workspaceId, input.candidateId),
@@ -179,14 +110,6 @@ const reportSummary = (report: unknown) =>
     : null;
 /** What a person needs to decide on a parser action; never source code or specifications. */
 function parserPreview(kind: string, state: any) {
-  if (kind === "retain_fixture")
-    return {
-      files: state.map((f: any) => ({
-        filename: f.filename,
-        expiresAt: f.expiresAt,
-        retained: f.retained,
-      })),
-    };
   if (kind === "approve_parser")
     return {
       parserId: state.parserId,

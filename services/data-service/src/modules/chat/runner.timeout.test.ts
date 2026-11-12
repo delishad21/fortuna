@@ -96,5 +96,5 @@ test("parser_step explains how to get a workspace", () =>
     const result = await tools
       .execute(context, "parser_step", { operation: "inspect", fileId: "f1" })
       .catch((e) => e);
-    assert.match(String(result.message), /retain_fixture proposal/);
+    assert.match(String(result.message), /parser_step workspace/);
   }));

@@ -35,8 +35,6 @@ export function proposalTargets(args: unknown): string[] {
       return keys("draft", a.draftIds);
     case "restage_draft":
       return keys("draft", a.draftId);
-    case "retain_fixture":
-      return keys("file", a.statementFileIds);
     case "approve_parser":
       return keys("candidate", a.candidateId);
     case "activate_parser":

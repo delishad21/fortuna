@@ -43,9 +43,7 @@ export async function checkAttachments(
     const f = byId.get(id);
     if (!f) return ["an attachment"];
     const file = f.statementFile;
-    return file.deletedAt || (!file.retained && file.expiresAt <= new Date())
-      ? [file.filename]
-      : [];
+    return file.deletedAt ? [file.filename] : [];
   });
   return {
     files: ids.flatMap((id) => {
@@ -63,7 +61,7 @@ export async function checkAttachments(
         : [];
     }),
     problem: gone.length
-      ? `${gone.join(", ")} ${gone.length === 1 ? "was" : "were"} deleted or expired`
+      ? `${gone.join(", ")} ${gone.length === 1 ? "was" : "were"} deleted`
       : null,
   };
 }

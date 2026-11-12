@@ -17,7 +17,7 @@ import {
   reviewSnapshot,
 } from "./queue";
 const ATTACHMENT_GONE =
-  "An attachment is missing or expired. Please upload it again.";
+  "An attachment is missing or was deleted from the Statements list. Attach it again.";
 export class ChatService extends ChatRepository {
   constructor(private client: PrismaClient) {
     super(client);

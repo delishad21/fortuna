@@ -99,7 +99,7 @@ export class RestageAction implements ActionHandler {
   }
 }
 
-/** Discard open imports; their unkept statement files are deleted. */
+/** Discard open imports; their statement files stay in the Statements list. */
 export class DiscardAction implements ActionHandler {
   constructor(private db: PrismaClient) {}
   private async load(db: Prisma.TransactionClient | PrismaClient, userId: string, draftIds: string[]) {
@@ -111,7 +111,6 @@ export class DiscardAction implements ActionHandler {
         version: true,
         status: true,
         sourceFilename: true,
-        sourceFile: { select: { retained: true } },
         rows: { select: { id: true, currentPayload: true, reviewStatus: true } },
       },
     });
@@ -138,7 +137,7 @@ export class DiscardAction implements ActionHandler {
       );
       linkCount += links.length;
       lines.push(
-        `${draft.sourceFilename}: ${plural(draft.rows.length, "row")}${edited ? `, ${edited} labelled or edited` : ""}${links.length ? `, ${plural(links.length, "reimbursement link")}` : ""}${draft.sourceFile && !draft.sourceFile.retained ? "; statement file deleted" : ""}`,
+        `${draft.sourceFilename}: ${plural(draft.rows.length, "row")}${edited ? `, ${edited} labelled or edited` : ""}${links.length ? `, ${plural(links.length, "reimbursement link")}` : ""}`,
       );
     }
     return {
@@ -157,7 +156,7 @@ export class DiscardAction implements ActionHandler {
           ...(linkCount ? { reimbursementLinksRemoved: linkCount } : {}),
         },
         lists: [{ heading: "Discarded", items: lines }],
-        note: "Nothing is saved from these imports; their labels and links are lost. A discarded statement can be staged again if its file is still kept.",
+        note: "Nothing is saved from these imports; their labels and links are lost. Their statement files are kept, so a discarded statement can be staged again.",
       }),
     };
   }

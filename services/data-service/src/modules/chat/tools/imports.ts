@@ -56,8 +56,6 @@ export class ImportActions implements ActionHandler {
           select: {
             id: true,
             deletedAt: true,
-            retained: true,
-            expiresAt: true,
           },
         },
         rows: {

@@ -117,8 +117,10 @@ model StatementFile {
   sha256      String
   sizeBytes   Int       @map("size_bytes")
   status      String    @default("available")
-  retained    Boolean   @default(false)
-  expiresAt   DateTime  @map("expires_at")
+  /// Unused: every file is kept until the user deletes it.
+  retained    Boolean   @default(true)
+  /// Unused: statement files no longer expire.
+  expiresAt   DateTime? @map("expires_at")
   deletedAt   DateTime? @map("deleted_at")
   createdAt   DateTime  @default(now()) @map("created_at")
 
@@ -126,7 +128,7 @@ model StatementFile {
   drafts ImportDraft[]
 
   @@unique([userId, sha256])
-  @@index([userId, expiresAt])
+  @@index([userId, createdAt])
   chatAttachments ChatAttachment[]
   @@unique([id, userId])
   @@map("statement_files")

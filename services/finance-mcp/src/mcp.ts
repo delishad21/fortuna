@@ -280,7 +280,7 @@ export function createFinanceMcpServer(identity: AccountIdentity) {
     "discard_import_draft",
     {
       title: "Discard import draft",
-      description: "Discard an uncommitted draft and schedule its unretained source statement for deletion.",
+      description: "Discard an uncommitted draft. Its source statement file is kept; only the user deletes statements, from the Statements list.",
       inputSchema: z.object({ draftId: z.string() }),
     },
     async ({ draftId }) => result(await dataServiceRequest(`/api/agent/drafts/${encodeURIComponent(draftId)}`, { method: "DELETE" })),
@@ -396,7 +396,7 @@ export function createFinanceMcpServer(identity: AccountIdentity) {
 
   server.registerTool(
     "create_parser_workspace",
-    { title: "Create parser development workspace", description: "Create a temporary workspace only after the user explicitly consents to retaining the supplied statements as parser fixtures.", inputSchema: z.object({ statementFileIds: z.array(z.string()).min(1).max(10), fixtureConsent: z.literal(true) }) },
+    { title: "Create parser development workspace", description: "Create a temporary parser workspace holding exactly the supplied statements (all of one layout); an existing live workspace with exactly these statements is returned instead. Uploaded statements are kept until the user deletes them, so any of their statement IDs works.", inputSchema: z.object({ statementFileIds: z.array(z.string()).min(1).max(10), fixtureConsent: z.literal(true) }) },
     async (input) => result(await dataServiceRequest("/api/agent/parser-factory/workspaces", { method: "POST", body: JSON.stringify(input) })),
   );
 

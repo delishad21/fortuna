@@ -602,12 +602,13 @@ test("discard_draft is an approval card and discards only after approval", () =>
       assert.equal(proposed.blocks[0].type, "link");
       const model = proposed.model as any;
       assert.equal(model.preview.title, "Discard DBS Sep 2026.pdf");
-      assert.match(model.preview.lists[0].items[0], /1 row, 1 labelled or edited; statement file deleted/);
+      assert.match(model.preview.lists[0].items[0], /^DBS Sep 2026\.pdf: 1 row, 1 labelled or edited$/);
       assert.equal((await db.importDraft.findUniqueOrThrow({ where: { id: draft.id } })).status, "review");
       const decision = await tools.approvals.decideAction(user.id, model.proposalId, "approve");
       assert.equal(decision.status, "applied");
       assert.equal((await db.importDraft.findUniqueOrThrow({ where: { id: draft.id } })).status, "discarded");
-      assert.equal((await db.statementFile.findUniqueOrThrow({ where: { id: file.id } })).status, "deleted");
+      // The statement file stays in the Statements list.
+      assert.equal((await db.statementFile.findUniqueOrThrow({ where: { id: file.id } })).status, "available");
       await assert.rejects(
         tools.execute(context, "discard_draft", { draftIds: [draft.id] }),
         /already discarded/,

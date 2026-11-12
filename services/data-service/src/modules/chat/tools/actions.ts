@@ -15,7 +15,6 @@ export class ChatActions implements ActionHandler {
     if (kind === "discard_draft") return new DiscardAction(this.db);
     if (
       [
-        "retain_fixture",
         "approve_parser",
         "activate_parser",
         "rollback_parser",

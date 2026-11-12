@@ -8,6 +8,7 @@ import multer from "multer";
 import { withDatabase } from "../../lib/database-context";
 import { HermesWorkflowService } from "../imports/hermes-workflow.service";
 import { CHAT_LIMITS } from "./contracts";
+import { StatementLibrary } from "../imports/statement-library";
 import { createToolRegistry } from "./tools/registry";
 import { cancelSchema, decisionSchema } from "./contracts";
 import { ConnectionService } from "./connections.service";
@@ -278,7 +279,6 @@ export function createChatRouter(
         attachmentId: attachment.id,
         statementFileId: statement.id,
         filename: statement.filename,
-        expiresAt: statement.expiresAt,
         kind: upload.kind,
       });
     }),
@@ -294,10 +294,9 @@ export function createChatRouter(
       if (
         !file ||
         !isImageType(file.contentType) ||
-        file.deletedAt ||
-        (!file.retained && file.expiresAt <= new Date())
+        file.deletedAt
       )
-        throw new ChatError(404, "Image not found or expired");
+        throw new ChatError(404, "Image not found or deleted");
       res.setHeader("Content-Type", file.contentType);
       res.setHeader("Cache-Control", "private, no-store");
       res.setHeader("Content-Security-Policy", "default-src 'none'");
@@ -352,6 +351,41 @@ export function createChatRouter(
     "/settings",
     route(async (req, res) =>
       res.json(await connections.update(res.locals.userId, req.body)),
+    ),
+  );
+  // Every uploaded statement, kept until the user deletes it here.
+  const statements = new StatementLibrary(db);
+  router.get(
+    "/statements",
+    route(async (_req, res) =>
+      res.json({ statements: await statements.list(res.locals.userId) }),
+    ),
+  );
+  router.get(
+    "/statements/:id/content",
+    route(async (req, res) => {
+      const file = await statements.file(
+        res.locals.userId,
+        idSchema.parse(req.params.id),
+      );
+      res.setHeader("Content-Type", file.contentType);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${file.filename.replace(/[^\w.\- ]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+      );
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("Content-Security-Policy", "default-src 'none'");
+      createReadStream(file.storagePath)
+        .on("error", () => res.status(404).end())
+        .pipe(res);
+    }),
+  );
+  router.delete(
+    "/statements/:id",
+    route(async (req, res) =>
+      res.json(
+        await statements.remove(res.locals.userId, idSchema.parse(req.params.id)),
+      ),
     ),
   );
   // Gmail for PayLah alerts. The app password goes in once and never comes back out.
