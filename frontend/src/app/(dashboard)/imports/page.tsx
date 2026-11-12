@@ -21,7 +21,7 @@ export default async function ImportsPage({ searchParams }: { searchParams: Prom
 
   return (
     <ImportHistoryClient
-      initialTab={tab === "history" ? "history" : "import"}
+      initialTab={tab === "history" || tab === "statements" ? tab : "import"}
       imports={data.imports || []}
       agentDrafts={agentData.drafts || []}
       accountNumbers={accountNumbers}

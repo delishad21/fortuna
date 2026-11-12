@@ -38,7 +38,7 @@ export function AttachedImage({
   if (failed)
     return (
       <Txt muted size={12}>
-        Image: {filename} (expired)
+        Image: {filename} (deleted)
       </Txt>
     );
   if (!uri) return null;

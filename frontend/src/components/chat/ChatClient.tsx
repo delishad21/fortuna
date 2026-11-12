@@ -57,7 +57,7 @@ function AttachedImage({ id, filename }: { id: string; filename: string }) {
   if (failed)
     return (
       <p className="text-sm text-dark-5 dark:text-dark-6">
-        Image: {filename} (expired)
+        Image: {filename} (deleted)
       </p>
     );
   return (
@@ -800,8 +800,7 @@ export function ChatClient() {
         </div>
       </div>
       <p className="mt-1.5 px-1 text-center text-[11px] text-dark-5 dark:text-dark-6">
-        Fortuna only changes your records after you approve. Attachments expire
-        after 7 days.
+        Fortuna only changes your records after you approve.
       </p>
     </form>
   );

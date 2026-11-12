@@ -165,7 +165,7 @@ export async function commitAgentDraftSelection(
   );
 }
 
-/** Discard a staged import: it leaves the staged list, its links are removed, and an unretained statement file is deleted. */
+/** Discard a staged import: it leaves the staged list and its links are removed; its statement file is kept. */
 export async function discardAgentDraft(draftId: string) {
   return request<{ draft: Record<string, any> }>(
     `/api/agent/drafts/${encodeURIComponent(draftId)}`,

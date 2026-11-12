@@ -4,6 +4,9 @@ const routes: Array<[string, RegExp]> = [
   ["POST", /^reviews\/[\w-]+\/cancel$/],
   ["POST", /^components\/transactions$/],
   ["GET", /^attachments\/[\w-]+\/content$/],
+  ["GET", /^statements$/],
+  ["GET", /^statements\/[\w-]+\/content$/],
+  ["DELETE", /^statements\/[\w-]+$/],
   ["GET", /^memories$/],
   ["POST", /^memories$/],
   ["PUT", /^memories\/[\w-]+$/],
@@ -102,6 +105,9 @@ export async function forwardChatRequest(
         response.headers.get("content-type") || "application/json",
       "cache-control": "no-store",
       "x-content-type-options": "nosniff",
+      ...(response.headers.get("content-disposition")
+        ? { "content-disposition": response.headers.get("content-disposition")! }
+        : {}),
     },
   });
 }

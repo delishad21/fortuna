@@ -13,6 +13,8 @@ import * as DocumentPicker from "expo-document-picker";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useApi, useResource } from "./api";
+import { useChatApi } from "./chat/api";
+import { shareDownload } from "./sharing";
 import { appendFile } from "./upload";
 import {
   ActionMenu,
@@ -451,6 +453,110 @@ function StagedTab({ navigation, drafts, reload }: any) {
     </>
   );
 }
+type StoredStatement = {
+  id: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  createdAt: string;
+  inUse: boolean;
+  imports: Array<{ id: string; mode: string; status: string; createdAt: string; committedAt: string | null; rows: number }>;
+};
+const fileSize = (bytes: number) =>
+  bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+/** Every uploaded statement, kept until it is deleted here. */
+function StatementsTab({ navigation }: any) {
+  const chat = useChatApi();
+  const { session } = useApi();
+  const [list, setList] = useState<StoredStatement[] | null>(null);
+  const [error, setError] = useState("");
+  const load = useCallback(
+    () =>
+      chat<{ statements: StoredStatement[] }>("/statements")
+        .then((r) => {
+          setList(r.statements);
+          setError("");
+        })
+        .catch((e: Error) => setError(e.message)),
+    [chat],
+  );
+  useEffect(() => {
+    void load();
+  }, [load]);
+  const remove = (s: StoredStatement) =>
+    confirm(
+      "Delete statement?",
+      `${s.filename}\n\nThe file is removed from Fortuna. Transactions imported from it stay.`,
+      async () => {
+        await chat(`/statements/${encodeURIComponent(s.id)}`, { method: "DELETE" });
+        toast("Statement deleted");
+        await load();
+      },
+      "Delete",
+    );
+  return (
+    <>
+      {error ? <Banner tone="red" icon="alert-circle-outline" title="Statements" message={error} /> : null}
+      {list && list.length === 0 && (
+        <Card>
+          <Empty icon="document-text-outline" title="No statements" message="Files you upload here or attach in chat appear here." />
+        </Card>
+      )}
+      {list?.map((s) => (
+        <Card key={s.id}>
+          <View style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Txt bold numberOfLines={1}>
+                {s.filename}
+              </Txt>
+              <Txt muted size={12}>
+                Uploaded {fmtDate(s.createdAt)} · {fileSize(s.sizeBytes)}
+              </Txt>
+            </View>
+            <ActionMenu
+              title={s.filename}
+              actions={[
+                {
+                  label: "Download",
+                  icon: "download-outline",
+                  onPress: () =>
+                    void shareDownload(
+                      `${session?.server || ""}/api/chat/statements/${encodeURIComponent(s.id)}/content`,
+                      session?.token,
+                      s.filename,
+                      s.contentType,
+                    ),
+                },
+                s.inUse
+                  ? { label: "Delete (a staged import uses it)", icon: "trash-outline", disabled: true, onPress: () => undefined }
+                  : { label: "Delete statement", icon: "trash-outline", danger: true, onPress: () => remove(s) },
+              ]}
+            />
+          </View>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+            {s.imports.length ? (
+              s.imports.map((d) => {
+                const open = !["committed", "discarded", "expired", "failed"].includes(d.status);
+                const label = `${open ? "Staged" : humanize(d.status)} · ${plural(d.rows, "row")} · ${fmtDate(d.committedAt || d.createdAt, false)}`;
+                return open ? (
+                  <Pressable key={d.id} accessibilityRole="button" onPress={() => navigation.navigate("Draft", { ids: [d.id] })}>
+                    <Pill tone="blue" icon="layers-outline" label={label} />
+                  </Pressable>
+                ) : (
+                  <Pill key={d.id} label={label} />
+                );
+              })
+            ) : (
+              <Txt muted size={12}>
+                Not imported
+              </Txt>
+            )}
+          </View>
+        </Card>
+      ))}
+    </>
+  );
+}
 function HistoryTab({ navigation, history }: any) {
   const rows = Array.isArray(history.data) ? history.data : history.data?.imports || [];
   return (
@@ -473,7 +579,7 @@ export function ImportsScreen({ navigation, route }: any) {
   const history = useResource("getImportSummaries");
   useEffect(() => {
     const open = route?.params?.openTab;
-    if (open) setTab(open === "Staged" ? "Staged" : open === "History" ? "History" : "Upload");
+    if (open) setTab(["Staged", "History", "Statements"].includes(open) ? open : "Upload");
   }, [route?.params?.refreshKey, route?.params?.openTab]);
   const count = (drafts.data?.drafts || []).filter((d: any) => !CLOSED.includes(d.status)).length;
   useEffect(() => {
@@ -487,14 +593,15 @@ export function ImportsScreen({ navigation, route }: any) {
       }
     >
       <Tabs
-        values={["Upload", "Staged", "History"]}
-        labels={{ Upload: "Import", Staged: `Staged (${count})`, History: "Imported history" }}
+        values={["Upload", "Staged", "History", "Statements"]}
+        labels={{ Upload: "Import", Staged: `Staged (${count})`, History: "Imported history", Statements: "Statements" }}
         value={tab}
         onChange={setTab}
       />
       {tab === "Upload" && <UploadTab navigation={navigation} onStaged={drafts.reload} />}
       {tab === "Staged" && <StagedTab navigation={navigation} drafts={drafts} reload={drafts.reload} />}
       {tab === "History" && <HistoryTab navigation={navigation} history={history} />}
+      {tab === "Statements" && <StatementsTab navigation={navigation} />}
     </Screen>
   );
 }

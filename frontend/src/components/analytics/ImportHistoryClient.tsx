@@ -13,6 +13,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { AgentDraftReviewClient } from "@/components/import/AgentDraftReviewClient";
 import { ImportClient } from "@/components/import/ImportClient";
+import { StatementsList } from "@/components/import/StatementsList";
 
 type ImportSummary = {
   key: string;
@@ -47,7 +48,7 @@ export function ImportHistoryClient({
     label: string;
     description: string;
   }>;
-  initialTab?: "import" | "staged" | "history";
+  initialTab?: "import" | "staged" | "history" | "statements";
 }) {
   const router = useRouter();
   const [tab, setTab] = useState(initialTab);
@@ -72,20 +73,6 @@ export function ImportHistoryClient({
   const deleteTargets = (pendingDelete || [])
     .map((id) => staged.find((draft) => draft.id === id))
     .filter((draft): draft is (typeof staged)[number] => !!draft);
-  // A statement stays while a chat or a staged import outside this delete still uses it.
-  const keptFiles = deleteTargets.flatMap((draft): string[] => {
-    if (!draft.sourceFileId) return [];
-    if (draft.sourceFileInChat)
-      return [`${draft.sourceFilename} is kept because a chat is still using it; it is deleted when it expires.`];
-    const sharer = staged.find(
-      (other) =>
-        other.sourceFileId === draft.sourceFileId &&
-        !deleteTargets.some((target) => target.id === other.id),
-    );
-    return sharer
-      ? [`${draft.sourceFilename} is kept because another staged import still uses it.`]
-      : [];
-  });
   const deleteDrafts = async (draftIds: string[]) => {
     setDeleting(true);
     setDeleteError("");
@@ -157,6 +144,7 @@ export function ImportHistoryClient({
           { key: "import", label: "Import" },
           { key: "staged", label: `Staged (${staged.length})` },
           { key: "history", label: "Imported history" },
+          { key: "statements", label: "Statements" },
         ]}
         activeTab={tab}
         onChange={setTab}
@@ -374,8 +362,7 @@ export function ImportHistoryClient({
         message={[
           deleteTargets.map((draft) => draft.sourceFilename).join("\n"),
           "",
-          "Its rows and review edits are discarded and nothing is saved to your transactions. The uploaded statement is deleted unless it is kept as a parser fixture or still in use.",
-          ...new Set(keptFiles),
+          "Its rows and review edits are discarded and nothing is saved to your transactions. The uploaded statement stays in Statements.",
           ...(deleteTargets.some((draft) => (draft.linkedDraftIds || []).length)
             ? ["Reimbursement links between these rows and other staged imports are removed too."]
             : []),
@@ -383,6 +370,7 @@ export function ImportHistoryClient({
         confirmText={deleteTargets.length === 1 ? "Delete import" : "Delete imports"}
         onConfirm={() => void deleteDrafts(deleteTargets.map((draft) => draft.id))}
       />
+      {tab === "statements" && <StatementsList />}
       {tab === "history" && (
         <>
           {commitNotice && (

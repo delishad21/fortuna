@@ -27,3 +27,36 @@ export async function shareCsv(name: string, csv: string) {
     notice(error);
   }
 }
+/** Downloads a file the session may read and opens the share sheet (a download on web). */
+export async function shareDownload(
+  url: string,
+  token: string | undefined,
+  name: string,
+  mimeType: string,
+) {
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  try {
+    if (Platform.OS === "web") {
+      const response = await fetch(url, { headers });
+      if (!response.ok) throw new Error("The file could not be downloaded");
+      const href = URL.createObjectURL(await response.blob());
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(href);
+      return;
+    }
+    const file = await File.downloadFileAsync(url, new File(Paths.cache, name), {
+      headers,
+      idempotent: true,
+    });
+    try {
+      await Sharing.shareAsync(file.uri, { mimeType });
+    } finally {
+      file.delete();
+    }
+  } catch (error) {
+    notice(error);
+  }
+}

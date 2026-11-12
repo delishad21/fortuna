@@ -697,7 +697,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
               ? QUEUE_HINT
               : waitingInQueue
                 ? QUEUED_TEXT
-                : "Attach statements, or screenshots for Fortuna to read. Attachments expire after 7 days."}
+                : "Attach statements, or screenshots for Fortuna to read."}
           </Txt>
         )}
         {files.some((f) => f.preview) && (

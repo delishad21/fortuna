@@ -564,6 +564,7 @@ function SettingsChange({ kind, preview }: { kind: string; preview: any }) {
 
 function ParserChange({ kind, preview }: { kind: string; preview: any }) {
   const details = preview.details || {};
+  // Older conversations still show retain_fixture proposals from before every statement was kept.
   if (kind === "retain_fixture")
     return (
       <ul className="space-y-2">
@@ -574,11 +575,6 @@ function ParserChange({ kind, preview }: { kind: string; preview: any }) {
               className="flex justify-between gap-3 rounded-md border border-stroke px-3 py-2 text-sm dark:border-stroke-dark"
             >
               <span className="truncate font-medium">{f.filename}</span>
-              <span className="shrink-0 text-dark-5">
-                {f.retained
-                  ? "Already kept"
-                  : `Expires ${shortDate(f.expiresAt)}`}
-              </span>
             </li>
           ),
         )}

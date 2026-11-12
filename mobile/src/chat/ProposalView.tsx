@@ -504,6 +504,7 @@ export function ProposalView({ proposal }: { proposal: Proposal }) {
       </>
     );
   const details = preview.details || {};
+  // Older conversations still show retain_fixture proposals from before every statement was kept.
   if (proposal.kind === "retain_fixture")
     return (
       <Card>
@@ -518,11 +519,6 @@ export function ProposalView({ proposal }: { proposal: Proposal }) {
           >
             <Txt numberOfLines={1} style={{ flex: 1 }}>
               {f.filename}
-            </Txt>
-            <Txt muted size={12}>
-              {f.retained
-                ? "Already kept"
-                : `Expires ${shortDate(f.expiresAt)}`}
             </Txt>
           </View>
         ))}

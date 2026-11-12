@@ -81,3 +81,39 @@ test("proxy forwards cancelling a review, by POST only", async () => {
   }
   assert.deepEqual(forwarded, ["POST /api/chat/reviews/r1/cancel"]);
 });
+test("proxy lists, downloads and deletes statements, passing the download's filename on", async () => {
+  const forwarded: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: URL, init: RequestInit) => {
+    forwarded.push(`${init.method} ${url.pathname}`);
+    return new Response("%PDF", {
+      status: 200,
+      headers: {
+        "content-type": "application/pdf",
+        "content-disposition": 'attachment; filename="DBS Oct.pdf"',
+      },
+    });
+  }) as typeof fetch;
+  try {
+    const config = { url: "http://data.test", token: "test" };
+    const call = (method: string, path: string[]) =>
+      forwardChatRequest(
+        new Request("https://fortuna.test/api/chat", { method }),
+        "alice",
+        path,
+        config,
+      );
+    await call("GET", ["statements"]);
+    const download = await call("GET", ["statements", "upload_1", "content"]);
+    assert.equal(download.headers.get("content-disposition"), 'attachment; filename="DBS Oct.pdf"');
+    await call("DELETE", ["statements", "upload_1"]);
+    await assert.rejects(call("DELETE", ["statements"]));
+    assert.deepEqual(forwarded, [
+      "GET /api/chat/statements",
+      "GET /api/chat/statements/upload_1/content",
+      "DELETE /api/chat/statements/upload_1",
+    ]);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
