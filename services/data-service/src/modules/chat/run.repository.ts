@@ -1,6 +1,7 @@
 import { Prisma, PrismaClient, ChatRun } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { ChatError } from "./contracts";
+import { cancelPending } from "./pending";
 export type ClaimedRun = ChatRun & { leaseToken: string };
 export class RunRepository {
   constructor(private db: PrismaClient) {}
@@ -102,10 +103,8 @@ export class RunRepository {
         },
         data: { cancelRequested: true, status: "cancelled" },
       });
-      await tx.chatActionProposal.updateMany({
-        where: { userId, runId, status: "pending" },
-        data: { status: "rejected", decidedAt: new Date() },
-      });
+      // Stopping a run closes what it left waiting; only an active run can be stopped.
+      if (count.count) await cancelPending(tx, { userId, runId });
       return { cancelled: count.count > 0 };
     });
   }

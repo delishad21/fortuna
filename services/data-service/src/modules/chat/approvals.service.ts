@@ -2,6 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { withTransactionClient } from "../../lib/database-context";
 import { ChatContext, ChatError } from "./contracts";
 import { ActionHandler, StaleAction, json } from "./tools/transactions";
+import { PROPOSAL_LIFETIME_MS, supersedeProposals } from "./pending";
 export class ApprovalService {
   constructor(
     private db: PrismaClient,
@@ -19,12 +20,16 @@ export class ApprovalService {
     });
     if (!run) throw new ChatError(404, "Run not found");
     const prepared = await this.handler.prepare(context.userId, input);
-    return this.db.chatActionProposal.create({
-      data: {
-        ...context,
-        ...prepared,
-        expiresAt: new Date(Date.now() + 86400000),
-      },
+    return this.db.$transaction(async (tx) => {
+      const proposal = await tx.chatActionProposal.create({
+        data: {
+          ...context,
+          ...prepared,
+          expiresAt: new Date(Date.now() + PROPOSAL_LIFETIME_MS),
+        },
+      });
+      const replaced = await supersedeProposals(tx, proposal);
+      return { ...proposal, replaced };
     });
   }
   async refreshAction(userId: string, proposalId: string) {
@@ -35,7 +40,7 @@ export class ApprovalService {
         run: { cancelRequested: false, conversation: { deletedAt: null } },
       },
     });
-    if (!old || !["stale", "pending"].includes(old.status))
+    if (!old || !["stale", "expired", "pending"].includes(old.status))
       throw new ChatError(409, "This proposal cannot be refreshed");
     const prepared = await this.handler.prepare(userId, old.arguments);
     return this.db.$transaction(async (tx) => {
@@ -44,14 +49,14 @@ export class ApprovalService {
       const current = await tx.chatActionProposal.findUniqueOrThrow({
         where: { id: proposalId },
       });
-      if (!["stale", "pending"].includes(current.status))
+      if (!["stale", "expired", "pending"].includes(current.status))
         throw new ChatError(409, "Proposal already decided");
       if (
         await tx.chatRun.count({
           where: {
             userId,
             id: { not: old.runId },
-            status: { in: ["queued", "running", "awaiting_confirmation"] },
+            status: { in: ["queued", "running"] },
           },
         })
       )
@@ -71,19 +76,27 @@ export class ApprovalService {
         },
       });
       if (existing) return existing;
-      await tx.chatActionProposal.update({
-        where: { id: old.id },
-        data: { status: "stale" },
-      });
+      // An open proposal is replaced by the fresh one below; closed ones keep their reason.
+      if (current.status === "pending" && current.expiresAt <= new Date())
+        await tx.chatActionProposal.update({
+          where: { id: old.id },
+          data: { status: "expired", decidedAt: new Date() },
+        });
       const fresh = await tx.chatActionProposal.create({
         data: {
           userId,
           runId: old.runId,
           conversationId: old.conversationId,
           ...prepared,
-          expiresAt: new Date(Date.now() + 86400000),
+          expiresAt: new Date(Date.now() + PROPOSAL_LIFETIME_MS),
         },
       });
+      await supersedeProposals(tx, fresh);
+      if (current.status === "pending")
+        await tx.chatActionProposal.updateMany({
+          where: { id: old.id, status: "pending" },
+          data: { status: "superseded", decidedAt: new Date() },
+        });
       await tx.chatRun.updateMany({
         where: {
           id: old.runId,
@@ -137,6 +150,13 @@ export class ApprovalService {
             if (!proposal) throw new ChatError(404, "Proposal not found");
             if (proposal.status !== "pending")
               return { status: proposal.status, result: proposal.result };
+            if (proposal.expiresAt <= new Date()) {
+              await tx.chatActionProposal.update({
+                where: { id: proposalId },
+                data: { status: "expired", decidedAt: new Date() },
+              });
+              return { status: "expired", result: null };
+            }
             if (decision === "reject") {
               await tx.chatActionProposal.update({
                 where: { id: proposalId },
@@ -150,7 +170,7 @@ export class ApprovalService {
                   blocks: json([
                     {
                       type: "text",
-                      text: "The user rejected the proposed changes. Do not retry them without a new request.",
+                      text: `The user rejected the proposed changes (${(proposal.preview as any)?.title || proposal.kind}). Do not retry them without a new request.`,
                     },
                   ]),
                 },
@@ -162,13 +182,6 @@ export class ApprovalService {
             });
             if (run.cancelRequested)
               throw new ChatError(409, "This conversation run was stopped");
-            if (proposal.expiresAt <= new Date()) {
-              await tx.chatActionProposal.update({
-                where: { id: proposalId },
-                data: { status: "stale" },
-              });
-              return { status: "stale", result: null };
-            }
             let outcome;
             try {
               outcome = await this.handler.execute(
@@ -214,7 +227,10 @@ export class ApprovalService {
                 conversationId: proposal.conversationId,
                 role: "assistant",
                 blocks: json([
-                  { type: "text", text: "Changes applied." },
+                  {
+                    type: "text",
+                    text: `Changes applied: ${(proposal.preview as any)?.title || proposal.kind}.`,
+                  },
                   { type: "data", title: "Applied action", data: outcome },
                 ]),
               },
@@ -268,7 +284,7 @@ export class ApprovalService {
         await tx.chatRun.count({
           where: {
             userId,
-            status: { in: ["queued", "running", "awaiting_confirmation"] },
+            status: { in: ["queued", "running"] },
           },
         })
       )

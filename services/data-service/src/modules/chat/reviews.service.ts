@@ -4,6 +4,7 @@ import { HermesWorkflowService as workflow } from "../imports/hermes-workflow.se
 import { z } from "zod";
 import { ChatContext, ChatError, idSchema } from "./contracts";
 import { json } from "./tools/transactions";
+import { supersedeReviews } from "./pending";
 import { ReadTools } from "./tools/read";
 import { decorateDraftRows } from "../reimbursements/links.service";
 const amount = z.number().finite().min(0).max(9999999999.99).nullable();
@@ -263,6 +264,7 @@ export class ReviewService {
           rows: json(rows),
         },
       });
+      await supersedeReviews(tx, review);
       return { ...review, rows };
     });
     // Suggestions for staged rows are written into the draft itself, so the staged import

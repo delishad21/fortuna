@@ -39,6 +39,46 @@ export const parserActionSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
+/**
+ * retain_fixture for statements that are all kept already changes nothing, so it needs no
+ * approval: the statements' live fixture workspace is returned instead (a new one when the
+ * old one expired; keeping them was approved when they were first retained).
+ */
+export async function retainedWorkspace(
+  db: PrismaClient,
+  userId: string,
+  raw: unknown,
+) {
+  const parsed = parserActionSchema.safeParse(raw);
+  if (!parsed.success || parsed.data.kind !== "retain_fixture") return null;
+  const ids = [...new Set(parsed.data.statementFileIds)];
+  const files = await requireStatementFiles(db, userId, ids);
+  if (!files.every((f) => f.retained)) return null;
+  const live = await db.parserWorkspace.findMany({
+    where: {
+      userId,
+      fixtureConsentAt: { not: null },
+      expiresAt: { gt: new Date() },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  const workspace =
+    live.find((w) =>
+      ids.every((id) => ((w.statementFileIds as string[]) || []).includes(id)),
+    ) ||
+    (await db.parserWorkspace.create({
+      data: {
+        userId,
+        statementFileIds: ids,
+        fixtureConsentAt: new Date(),
+        expiresAt: new Date(Date.now() + 7 * 86400000),
+      },
+    }));
+  return {
+    files: files.map((f) => ({ statementFileId: f.id, filename: f.filename })),
+    workspace,
+  };
+}
 export class ParserActions implements ActionHandler {
   constructor(private db: PrismaClient) {}
   private async state(

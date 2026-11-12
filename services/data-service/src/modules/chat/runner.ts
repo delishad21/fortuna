@@ -2,6 +2,7 @@ import { ZodError } from "zod";
 import { compactBlocks } from "./tools/components";
 import { loadModelImages } from "./media";
 import { MemoryService } from "./memories.service";
+import { pendingForModel } from "./pending";
 import { ProviderMessage } from "./providers/provider";
 import { safeChatError } from "./errors";
 import { Prisma, PrismaClient } from "@prisma/client";
@@ -183,6 +184,18 @@ export async function executeRun(
         .filter(Boolean) as NonNullable<ProviderMessage["images"]>;
       if (attached.length) messages[i + (notes ? 1 : 0)].images = attached;
     });
+    // Approvals from earlier turns stay open; say so just before the newest message.
+    const waiting = await pendingForModel(
+      db,
+      run.userId,
+      run.conversationId,
+      run.id,
+    );
+    if (waiting && history.length)
+      messages.splice(messages.length - 1, 0, {
+        role: "user",
+        content: JSON.stringify(waiting),
+      });
     if (run.attempts > 1)
       await repo.appendEvent(run, {
         type: "reset",

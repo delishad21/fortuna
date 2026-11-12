@@ -17,6 +17,7 @@ import { executeMailTool, mailDefinitions, mailToolNames } from "./mail";
 import { ApprovalService } from "../approvals.service";
 import { toStatementFileIds } from "../../imports/statement-files";
 import { TransactionActions, json } from "./transactions";
+import { retainedWorkspace } from "./parsers";
 import { ReadTools } from "./read";
 import { documentDefinitions, executeDocumentTool } from "./documents";
 import { MemoryService, memoryDefinitions } from "../memories.service";
@@ -70,6 +71,7 @@ function proposalResult(proposal: {
   id: string;
   kind: string;
   preview: unknown;
+  replaced?: string[];
 }): ToolResult {
   const preview = (proposal.preview || {}) as {
     title?: string;
@@ -92,6 +94,13 @@ function proposalResult(proposal: {
       proposalId: proposal.id,
       status: "awaiting the user's approval in the interface",
       preview: proposal.preview,
+      ...(proposal.replaced?.length
+        ? {
+            replacedProposalIds: proposal.replaced,
+            replacedNote:
+              "Your earlier pending proposals for the same records were closed as replaced by this one.",
+          }
+        : {}),
     },
   };
 }
@@ -321,10 +330,21 @@ export function createToolRegistry(
         .object({ action: z.unknown() })
         .strict()
         .parse(input);
-      const proposal = await approvals.proposeAction(
-        context,
-        await withStatementFileIds(db, context, action),
-      );
+      const resolved = await withStatementFileIds(db, context, action);
+      const kept = await retainedWorkspace(db, context.userId, resolved);
+      if (kept)
+        return {
+          blocks: [],
+          model: json({
+            alreadyRetained: true,
+            message:
+              "These statements are already kept as parser fixtures, so there is nothing to approve and no proposal was made. Carry on with parser_step in this workspace.",
+            workspaceId: kept.workspace.id,
+            workspaceExpiresAt: kept.workspace.expiresAt,
+            statements: kept.files,
+          }),
+        };
+      const proposal = await approvals.proposeAction(context, resolved);
       return proposalResult(proposal);
     }
     if (name === "remember") {

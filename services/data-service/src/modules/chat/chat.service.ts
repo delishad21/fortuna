@@ -42,24 +42,17 @@ export class ChatService extends ChatRepository {
           409,
           "Review changed on another device. Reload before sending.",
         );
+      // A new message moves on without deciding anything: the waiting run is done, and its
+      // proposals and reviews stay pending until the user confirms, rejects or submits them.
       await tx.chatRun.updateMany({
         where: { userId, conversationId, status: "awaiting_confirmation" },
-        data: { status: "cancelled", cancelRequested: true },
-      });
-      await tx.chatActionProposal.updateMany({
-        where: {
-          userId,
-          conversationId,
-          status: "pending",
-          run: { status: "cancelled" },
-        },
-        data: { status: "rejected", decidedAt: new Date() },
+        data: { status: "completed" },
       });
       if (
         await tx.chatRun.count({
           where: {
             userId,
-            status: { in: ["queued", "running", "awaiting_confirmation"] },
+            status: { in: ["queued", "running"] },
           },
         })
       )
@@ -89,10 +82,6 @@ export class ChatService extends ChatRepository {
           400,
           "An attachment is missing or expired. Please upload it again.",
         );
-      await tx.chatTransactionReview.updateMany({
-        where: { userId, conversationId, status: "pending" },
-        data: { status: "superseded" },
-      });
       if (review)
         await tx.chatTransactionReview.update({
           where: { id: review.id },

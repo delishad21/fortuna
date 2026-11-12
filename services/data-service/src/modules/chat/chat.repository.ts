@@ -1,10 +1,12 @@
 import { PrismaClient } from "@prisma/client";
+import { cancelPending, expireProposals } from "./pending";
 export class ChatRepository {
   constructor(private db: PrismaClient) {}
   createConversation(userId: string) {
     return this.db.chatConversation.create({ data: { userId } });
   }
-  getConversation(userId: string, id: string) {
+  async getConversation(userId: string, id: string) {
+    await expireProposals(this.db, { userId, conversationId: id });
     return this.db.chatConversation.findFirst({
       where: { id, userId, deletedAt: null },
       include: {
@@ -19,7 +21,12 @@ export class ChatRepository {
         runs: {
           orderBy: { createdAt: "desc" },
           take: 50,
-          include: { proposals: true },
+          include: {
+            proposals: true,
+            reviews: {
+              select: { id: true, title: true, status: true, createdAt: true },
+            },
+          },
         },
       },
     });
@@ -36,10 +43,6 @@ export class ChatRepository {
     // Soft-delete until active workers observe cancellation; finance records are never cascaded.
     return this.db.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM users WHERE id=${userId} FOR UPDATE`;
-      await tx.chatTransactionReview.updateMany({
-        where: { userId, conversationId: id, status: "pending" },
-        data: { status: "superseded" },
-      });
       await tx.chatRun.updateMany({
         where: {
           userId,
@@ -48,10 +51,7 @@ export class ChatRepository {
         },
         data: { cancelRequested: true, status: "cancelled" },
       });
-      await tx.chatActionProposal.updateMany({
-        where: { userId, conversationId: id, status: "pending" },
-        data: { status: "rejected", decidedAt: new Date() },
-      });
+      await cancelPending(tx, { userId, conversationId: id });
       return tx.chatConversation.updateMany({
         where: { id, userId, deletedAt: null },
         data: { deletedAt: new Date() },

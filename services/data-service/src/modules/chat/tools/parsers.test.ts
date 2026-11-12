@@ -162,6 +162,38 @@ test("retain_fixture takes this conversation's attachment IDs and stores stateme
     ]);
   }));
 
+test("retain_fixture for statements already kept returns their workspace without a proposal", () =>
+  withChatDb(async (db) => {
+    const { user, conversation, context } = await setup(db, "retain-kept");
+    const kept = await attach(db, user.id, conversation.id, "kept.pdf");
+    await db.statementFile.update({
+      where: { id: kept.statementFileId },
+      data: { retained: true },
+    });
+    const workspace = await db.parserWorkspace.create({
+      data: {
+        userId: user.id,
+        statementFileIds: [kept.statementFileId],
+        fixtureConsentAt: new Date(),
+        expiresAt: new Date(Date.now() + 86400000),
+      },
+    });
+    const tools = createToolRegistry(db);
+    const result = await tools.execute(context, "propose_action", {
+      action: { kind: "retain_fixture", statementFileIds: [kept.id] },
+    });
+    assert.equal(await db.chatActionProposal.count(), 0);
+    assert.deepEqual(result.blocks, []);
+    assert.equal((result.model as any).alreadyRetained, true);
+    assert.equal((result.model as any).workspaceId, workspace.id);
+    // One statement not kept yet still needs the user's approval.
+    const fresh = await attach(db, user.id, conversation.id, "fresh.pdf");
+    await tools.execute(context, "propose_action", {
+      action: { kind: "retain_fixture", statementFileIds: [kept.id, fresh.id] },
+    });
+    assert.equal(await db.chatActionProposal.count(), 1);
+  }));
+
 test("statement ID errors say which ID is wrong and why", () =>
   withChatDb(async (db) => {
     const { user, conversation, context } = await setup(db, "retain-errors");

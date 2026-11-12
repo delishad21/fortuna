@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { withChatDb } from "./test-harness";
 import { ReviewService } from "./reviews.service";
 import { ChatService } from "./chat.service";
-test("review edits are owned, versioned, shared and superseded without changing the ledger", () =>
+test("review edits are owned, versioned, shared and replaced by a newer review without changing the ledger", () =>
   withChatDb(async (db) => {
     const a = await db.user.create({ data: { username: "review-a" } });
     const b = await db.user.create({ data: { username: "review-b" } });
@@ -91,15 +91,29 @@ test("review edits are owned, versioned, shared and superseded without changing 
       text: "Different task",
       idempotencyKey: "next",
     });
-    assert.equal((await service.get(a.id, review.id)).status, "superseded");
+    // A new message decides nothing: the review and the proposal stay open.
+    assert.equal((await service.get(a.id, review.id)).status, "pending");
     assert.equal(
       (
         await db.chatActionProposal.findUniqueOrThrow({
           where: { id: proposal.id },
         })
       ).status,
-      "rejected",
+      "pending",
     );
+    // A newer review of the same transaction replaces it.
+    const next = await db.chatRun.findFirstOrThrow({
+      where: { idempotencyKey: "next" },
+    });
+    await db.chatRun.update({
+      where: { id: next.id },
+      data: { status: "running" },
+    });
+    await service.create(
+      { ...context, runId: next.id },
+      { transactionIds: [transaction.id], title: "Review again" },
+    );
+    assert.equal((await service.get(a.id, review.id)).status, "superseded");
     await assert.rejects(
       service.update(a.id, review.id, {
         rowId: transaction.id,

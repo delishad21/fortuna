@@ -217,9 +217,9 @@ export const workflowDefinitions: ToolDefinition[] = [
   {
     name: "propose_action",
     description:
-      "Create a human approval preview. This never approves or executes the change. Fields per kind (no others are accepted): " +
+      "Create a human approval preview. This never approves or executes the change. A pending proposal stays open while the conversation goes on; a new proposal for the same records replaces it. Fields per kind (no others are accepted): " +
       "commit_drafts: draftIds (string[], staged import IDs). " +
-      "retain_fixture: statementFileIds (string[]: statement file IDs, upload_…, as inspect_statement returns them; this conversation's attachment IDs are accepted too). " +
+      "retain_fixture: statementFileIds (string[]: statement file IDs, upload_…, as inspect_statement returns them; this conversation's attachment IDs are accepted too; when every statement is already kept, no proposal is made and the result gives the workspaceId to use right away). " +
       "approve_parser: workspaceId, candidateId. " +
       "activate_parser | rollback_parser: definitionId, versionId. " +
       "create_account: accountIdentifier (string, what statements show), label (optional friendly name, e.g. 'UOB One credit card'), color (optional '#RRGGBB'). " +

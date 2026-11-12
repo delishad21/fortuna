@@ -1,3 +1,4 @@
+import { cancelPending } from "./pending";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { ChatError, connectionSchema, ProviderChoice } from "./contracts";
 import { sealCredential, openCredential, EncryptedSecret } from "./credentials";
@@ -37,7 +38,7 @@ export class ConnectionService {
         await tx.chatRun.count({
           where: {
             userId,
-            status: { in: ["queued", "running", "awaiting_confirmation"] },
+            status: { in: ["queued", "running"] },
           },
         })
       )
@@ -156,17 +157,22 @@ export class ConnectionService {
   async disconnect(userId: string, provider: ProviderChoice) {
     await this.db.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM users WHERE id=${userId} FOR UPDATE`;
+      // Runs on this provider stop; approvals they left from earlier turns stay decidable.
       await tx.chatRun.updateMany({
-        where: {
-          userId,
-          provider,
-          status: { in: ["queued", "running", "awaiting_confirmation"] },
-        },
+        where: { userId, provider, status: "awaiting_confirmation" },
+        data: { status: "completed" },
+      });
+      const active = await tx.chatRun.findMany({
+        where: { userId, provider, status: { in: ["queued", "running"] } },
+        select: { id: true },
+      });
+      await tx.chatRun.updateMany({
+        where: { id: { in: active.map((r) => r.id) } },
         data: { cancelRequested: true, status: "cancelled" },
       });
-      await tx.chatActionProposal.updateMany({
-        where: { userId, status: "pending", run: { provider } },
-        data: { status: "rejected", decidedAt: new Date() },
+      await cancelPending(tx, {
+        userId,
+        run: { id: { in: active.map((r) => r.id) } },
       });
       await tx.chatConnection.updateMany({
         where: { userId, provider },
