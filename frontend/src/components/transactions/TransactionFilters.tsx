@@ -8,6 +8,7 @@ import { NumberInput } from "@/components/ui/NumberInput";
 import { SearchBar } from "@/components/ui/SearchBar";
 import { Button } from "@/components/ui/Button";
 import { DatePicker } from "@/components/ui/DatePicker";
+import { monthOfRange, monthOptions, monthRange } from "@/lib/months";
 
 interface Category {
   id: string;
@@ -85,33 +86,41 @@ export function TransactionFilters({
   ) => {
     let nextFilters: FilterValues = { ...filters, [key]: value };
 
-    if (key === "month" || key === "year") {
-      const monthValue =
-        key === "month" ? (value as string) : nextFilters.month;
-      const yearValue = key === "year" ? (value as string) : nextFilters.year;
-
-      if (key === "month" && !monthValue) {
-        nextFilters = { ...nextFilters, year: "" };
-      }
-      if (key === "year" && !yearValue) {
-        nextFilters = { ...nextFilters, month: "" };
-      }
-
-      if (monthValue && yearValue) {
-        const year = Number(yearValue);
-        const monthIndex = Number(monthValue) - 1;
-        const start = new Date(Date.UTC(year, monthIndex, 1));
-        const end = new Date(Date.UTC(year, monthIndex + 1, 0));
-        nextFilters = {
-          ...nextFilters,
-          dateFrom: start.toISOString().slice(0, 10),
-          dateTo: end.toISOString().slice(0, 10),
-        };
-      } else {
-        nextFilters = { ...nextFilters, dateFrom: "", dateTo: "" };
-      }
+    // Picking dates by hand replaces the chosen month.
+    if (key === "dateFrom" || key === "dateTo") {
+      nextFilters = { ...nextFilters, month: "", year: "" };
     }
 
+    setFilters(nextFilters);
+    onFilterChange(nextFilters);
+  };
+
+  // "YYYY-MM" or "" (all time); older month/year filters still load.
+  const selectedMonth =
+    filters.month && filters.year
+      ? `${filters.year}-${filters.month}`
+      : monthOfRange(filters.dateFrom, filters.dateTo);
+  const monthSelectOptions = monthOptions(availableYears);
+  if (
+    selectedMonth &&
+    !monthSelectOptions.some((option) => option.value === selectedMonth)
+  ) {
+    monthSelectOptions.push(
+      ...monthOptions([Number(selectedMonth.slice(0, 4))]).filter(
+        (option) => option.value === selectedMonth,
+      ),
+    );
+  }
+
+  const selectMonth = (value: string) => {
+    const nextFilters: FilterValues = value
+      ? {
+          ...filters,
+          year: value.slice(0, 4),
+          month: value.slice(5, 7),
+          ...monthRange(value),
+        }
+      : { ...filters, month: "", year: "", dateFrom: "", dateTo: "" };
     setFilters(nextFilters);
     onFilterChange(nextFilters);
   };
@@ -265,46 +274,17 @@ export function TransactionFilters({
           </div>
         </div>
 
-        <div className="w-80">
+        <div className="w-56">
           <label className="text-xs font-medium text-dark-5 dark:text-dark-6">
-            Month / Year
+            Month
           </label>
-          <div className="mt-1 grid grid-cols-2 gap-2">
-            <Select
-              value={filters.month}
-              onChange={(value) => updateFilter("month", value)}
-              options={[
-                { value: "", label: "Month" },
-                { value: "01", label: "January" },
-                { value: "02", label: "February" },
-                { value: "03", label: "March" },
-                { value: "04", label: "April" },
-                { value: "05", label: "May" },
-                { value: "06", label: "June" },
-                { value: "07", label: "July" },
-                { value: "08", label: "August" },
-                { value: "09", label: "September" },
-                { value: "10", label: "October" },
-                { value: "11", label: "November" },
-                { value: "12", label: "December" },
-              ]}
-              className="w-full"
-              buttonClassName="w-full"
-            />
-            <Select
-              value={filters.year}
-              onChange={(value) => updateFilter("year", value)}
-              options={[
-                { value: "", label: "Year" },
-                ...availableYears.map((year) => ({
-                  value: String(year),
-                  label: String(year),
-                })),
-              ]}
-              className="w-full"
-              buttonClassName="w-full"
-            />
-          </div>
+          <Select
+            value={selectedMonth}
+            onChange={selectMonth}
+            options={[{ value: "", label: "All time" }, ...monthSelectOptions]}
+            className="mt-1 w-full"
+            buttonClassName="w-full"
+          />
         </div>
 
         <div className="ml-auto relative" ref={advancedRef}>

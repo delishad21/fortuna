@@ -1,5 +1,6 @@
 import prisma from "../../lib/prisma";
 import { toTransactionDate } from "./transaction-date";
+import { buildSearchWhere } from "./transaction-search";
 import { Prisma } from "@prisma/client";
 import {
   ImportTransactionInput,
@@ -231,7 +232,7 @@ export class TransactionRepository {
     });
   }
 
-  private static buildWhere(
+  static buildWhere(
     userId: string,
     filters?: {
       dateFrom?: Date;
@@ -266,11 +267,9 @@ export class TransactionRepository {
       where.accountIdentifier = filters.accountIdentifier;
     }
 
+    // Under AND so the amount-range OR below can't widen the search.
     if (filters?.search) {
-      where.OR = [
-        { description: { contains: filters.search, mode: "insensitive" } },
-        { label: { contains: filters.search, mode: "insensitive" } },
-      ];
+      where.AND = [buildSearchWhere(filters.search)];
     }
 
     if (filters?.transactionType) {

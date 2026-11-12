@@ -53,9 +53,8 @@ import {
 } from "./ui";
 import { shareCsv } from "./sharing";
 import { accountDisplay, accountName } from "../../frontend/shared/accounts";
+import { monthOfRange, monthOptions, monthRange } from "../../frontend/shared/months";
 
-const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const lastDay = (y: number, m: number) => new Date(y, m, 0).getDate();
 /** Filters as the transactions actions expect them (dates are revived on the server). */
 const toQuery = (filters: any, search: string) => {
   const q: any = { ...filters, search: search || undefined };
@@ -77,7 +76,6 @@ function FilterSheet({ visible, onClose, filters, onApply, categories, accounts 
     if (visible) setDraft(filters);
   }, [visible, filters]);
   const set = (patch: any) => setDraft((d: any) => ({ ...d, ...patch }));
-  const year = Number(String(draft.dateFrom || "").slice(0, 4)) || years.data?.[0] || new Date().getFullYear();
   return (
     <Sheet
       visible={visible}
@@ -113,39 +111,12 @@ function FilterSheet({ visible, onClose, filters, onApply, categories, accounts 
         </View>
       }
     >
-      <Section title="Quick month">
-        <Chips
-          values={(years.data?.length ? years.data : [year]).map(String)}
-          value={String(year)}
-          onChange={(y) => {
-            const m = Number(String(draft.dateFrom || "").slice(5, 7)) || 1;
-            set({
-              dateFrom: `${y}-${String(m).padStart(2, "0")}-01`,
-              dateTo: `${y}-${String(m).padStart(2, "0")}-${lastDay(Number(y), m)}`,
-            });
-          }}
-        />
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-          {MONTH_NAMES.map((name, i) => {
-            const mm = String(i + 1).padStart(2, "0");
-            const on =
-              draft.dateFrom === `${year}-${mm}-01` &&
-              draft.dateTo === `${year}-${mm}-${lastDay(year, i + 1)}`;
-            return (
-              <Button
-                key={name}
-                title={name}
-                compact
-                secondary={!on}
-                style={{ width: "22%" }}
-                onPress={() =>
-                  set({ dateFrom: `${year}-${mm}-01`, dateTo: `${year}-${mm}-${lastDay(year, i + 1)}` })
-                }
-              />
-            );
-          })}
-        </View>
-      </Section>
+      <Choice
+        label="Month"
+        value={monthOfRange(draft.dateFrom, draft.dateTo)}
+        options={[{ label: "All time", value: "" }, ...monthOptions(years.data || [])]}
+        onChange={(month) => set(month ? monthRange(month) : { dateFrom: undefined, dateTo: undefined })}
+      />
       <View style={[styles.row, { alignItems: "flex-start" }]}>
         <View style={{ flex: 1 }}>
           <DateField label="From" value={draft.dateFrom || ""} onChange={(dateFrom) => set({ dateFrom })} />
