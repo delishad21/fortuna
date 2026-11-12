@@ -33,7 +33,7 @@ import {
   stepLabel,
   proposalState,
   waitingForUser,
-  waitingText,
+  cancelReview,
 } from "./api";
 import { appendFile } from "../upload";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -44,6 +44,7 @@ import { ChatComponent } from "./Components";
 import { ActionCard } from "./ActionCard";
 import { AttachedImage } from "./AttachedImage";
 import { QueuedMessages } from "./QueuedMessages";
+import { ApprovalsBar } from "./ApprovalsBar";
 export function ChatConversationScreen({ route, navigation }: any) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [id, setId] = useState<string | undefined>(route.params?.id);
@@ -102,10 +103,6 @@ export function ChatConversationScreen({ route, navigation }: any) {
     .flatMap((r) => r.proposals)
     .filter((p) => proposalState(p).pending && !linked.has(p.id));
   const waiting = waitingForUser(conversation);
-  const waitingLabel = waitingText(
-    waiting.proposals.length,
-    waiting.reviews.length,
-  );
   function reject(proposalId: string) {
     void action(async () => {
       await api(`/proposals/${proposalId}/reject`, {
@@ -641,35 +638,18 @@ export function ChatConversationScreen({ route, navigation }: any) {
           </View>
         }
       />
-      {!!waitingLabel && (
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 8,
-            paddingHorizontal: 16,
-            paddingVertical: 8,
-            borderTopWidth: 1,
-            borderColor: colors.purple,
-            backgroundColor: colors.tint,
+      {!!id && conversation?.id === id && (
+        <ApprovalsBar
+          conversationId={id}
+          waiting={waiting}
+          busy={busy}
+          onReview={showWaiting}
+          onReject={(p) => reject(p.id)}
+          onCancelReview={async (r) => {
+            await cancelReview(api, { id: r.id, version: r.version ?? 1 });
+            await refresh();
           }}
-        >
-          <Ionicons name="alert-circle-outline" size={16} color={colors.purple} />
-          <Txt
-            size={13}
-            numberOfLines={2}
-            accessibilityLiveRegion="polite"
-            style={{ flex: 1, color: colors.purple }}
-          >
-            {waitingLabel}
-          </Txt>
-          <Button
-            title="Review"
-            label="Review waiting items"
-            compact
-            onPress={showWaiting}
-          />
-        </View>
+        />
       )}
       <View
         style={{

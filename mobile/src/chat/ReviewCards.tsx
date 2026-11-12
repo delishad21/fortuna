@@ -9,7 +9,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { Button, Input, Txt, Choice, useTheme } from "../ui";
+import { Button, Input, Txt, Choice, useTheme, confirm } from "../ui";
 import {
   useChatApi,
   TransactionReview,
@@ -18,6 +18,9 @@ import {
   isUnsure,
   REVIEW_STATES,
   SendResult,
+  CANCEL_REVIEW_CONFIRM,
+  cancelReview,
+  reviewStateLabel,
 } from "./api";
 import { NeedsBadge } from "./ActionCard";
 import { Expandable } from "./Details";
@@ -148,6 +151,27 @@ export function ChatReviewCards({
       setBusy(false);
     }
   }
+  /** Closes the review without applying its suggestions, after the user confirms. */
+  function cancel() {
+    if (!review || busy) return;
+    confirm(
+      "Cancel review?",
+      CANCEL_REVIEW_CONFIRM,
+      async () => {
+        setBusy(true);
+        setError("");
+        try {
+          setReview(await cancelReview(api, review));
+          await onSubmitted();
+        } catch (e) {
+          setError((e as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      },
+      "Cancel review",
+    );
+  }
   if (!review) return <Txt>{error || "Loading transaction review…"}</Txt>;
   const closed = review.status !== "pending";
   const suggestions = reviewSuggestionSummary(review.rows, review.categories);
@@ -183,7 +207,7 @@ export function ChatReviewCards({
       )}
       <Txt muted size={12}>
         {closed
-          ? REVIEW_STATES[review.status] || "Closed"
+          ? reviewStateLabel(review)
           : "Save each row to sync it"}
       </Txt>
       {!!error && (
@@ -285,6 +309,14 @@ export function ChatReviewCards({
           title="Send review to Fortuna"
           disabled={busy}
           onPress={() => void submit()}
+        />
+      )}
+      {["pending", "queued"].includes(review.status) && (
+        <Button
+          title="Cancel review"
+          secondary
+          disabled={busy}
+          onPress={cancel}
         />
       )}
       <Modal
