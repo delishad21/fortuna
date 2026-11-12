@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { withTransactionClient } from "../../lib/database-context";
-import { ChatContext, ChatError } from "./contracts";
+import { ChatContext, ChatError, CONVERSATION_BUSY } from "./contracts";
 import { ActionHandler, StaleAction, json } from "./tools/transactions";
 import { PROPOSAL_LIFETIME_MS, supersedeProposals } from "./pending";
 export class ApprovalService {
@@ -51,19 +51,18 @@ export class ApprovalService {
       });
       if (!["stale", "expired", "pending"].includes(current.status))
         throw new ChatError(409, "Proposal already decided");
+      // Only a reply running in this conversation is in the way; other conversations aren't.
       if (
         await tx.chatRun.count({
           where: {
             userId,
+            conversationId: old.conversationId,
             id: { not: old.runId },
             status: { in: ["queued", "running"] },
           },
         })
       )
-        throw new ChatError(
-          409,
-          "Finish or stop your active conversation first",
-        );
+        throw new ChatError(409, CONVERSATION_BUSY);
       const existing = await tx.chatActionProposal.findFirst({
         where: {
           userId,
@@ -280,10 +279,14 @@ export class ApprovalService {
         })
       )
         return;
+      // A reply already on its way in this conversation will see the outcome. Replies in
+      // other conversations don't matter, and the continuation isn't held to the per-user
+      // cap: it would be lost, not delayed, and the worker's concurrency still bounds it.
       if (
         await tx.chatRun.count({
           where: {
             userId,
+            conversationId: run.conversationId,
             status: { in: ["queued", "running"] },
           },
         })

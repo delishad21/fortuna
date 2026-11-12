@@ -13,7 +13,8 @@ export type RunStatus =
   | "failed"
   | "cancelled";
 export const CHAT_LIMITS = {
-  activeRunsPerUser: 1,
+  /** Runs one user may have queued or running at once, across conversations; one per conversation. */
+  activeRunsPerUser: 3,
   modelTurns: 12,
   toolCalls: 40,
   /** The last calls of the budget only go to write tools, so a run can still save what it found. */
@@ -32,6 +33,11 @@ export const CHAT_LIMITS = {
   modelImages: 8,
   bulkTargets: 100,
 } as const;
+/** Refusal when a conversation already has a reply queued or running. */
+export const CONVERSATION_BUSY =
+  "This conversation is still replying: wait or press Stop";
+/** Refusal when the user's conversations already hold every active run they may have. */
+export const TOO_MANY_RUNS = `${CHAT_LIMITS.activeRunsPerUser} conversations are already replying. Wait for one to finish, or press Stop on one.`;
 export const idSchema = z
   .string()
   .min(1)

@@ -86,9 +86,16 @@ export class RunRepository {
       orderBy: { sequence: "asc" },
       take: 100,
     });
+    // A queued run that other runs are ahead of waits for the worker; the UI says so.
+    const queued =
+      run.status === "queued" &&
+      (await this.db.chatRun.count({
+        where: { status: "running", id: { not: run.id } },
+      })) > 0;
     return {
       events,
       status: run.status,
+      queued,
       error: run.error,
       cursor: events.at(-1)?.sequence || after,
     };

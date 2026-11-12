@@ -17,7 +17,12 @@ export function codexUserDirectory(root: string, userId: string) {
 export type CodexSession = {
   rpc: JsonRpcClient;
   child: ChildProcessWithoutNullStreams;
-  busy: boolean;
+  /** Runs using this process; each has its own thread, so conversations run side by side. */
+  active: number;
+  /** Tool call handlers by thread, so each run only answers its own thread's calls. */
+  tools: Map<string, (params: any) => Promise<unknown>>;
+  /** Set when a run failed or was stopped: the process ends once no other run uses it. */
+  retired?: boolean;
   lastUsed: number;
   login?: {
     loginId: string;
@@ -38,7 +43,7 @@ export class CodexRuntime {
       for (const [id, promise] of this.sessions)
         void promise
           .then((session) => {
-            if (!session.busy && Date.now() - session.lastUsed > 600000)
+            if (!session.active && Date.now() - session.lastUsed > 600000)
               this.stop(id);
           })
           .catch(() => {});
@@ -57,8 +62,33 @@ export class CodexRuntime {
       });
     }
     const result = await session;
+    // A retired process still finishing other runs takes no new ones.
+    if (result.retired) {
+      if (this.sessions.get(userId) === session) this.sessions.delete(userId);
+      return this.getClient(userId);
+    }
     result.lastUsed = Date.now();
     return result;
+  }
+  /** A run starts using the user's process. */
+  acquire(session: CodexSession) {
+    session.active++;
+    session.lastUsed = Date.now();
+  }
+  /** A run is done with the process; retire it to restart it once no other run needs it. */
+  release(userId: string, session: CodexSession, retire = false) {
+    session.active = Math.max(0, session.active - 1);
+    session.lastUsed = Date.now();
+    if (retire) session.retired = true;
+    if (!session.retired || session.active) return;
+    void this.sessions.get(userId)?.then(
+      (current) => {
+        if (current === session) this.sessions.delete(userId);
+      },
+      () => {},
+    );
+    session.rpc.close();
+    session.child.kill();
   }
   private async start(userId: string): Promise<CodexSession> {
     const version = execFileSync(this.binary, ["--version"], {
@@ -94,8 +124,14 @@ export class CodexRuntime {
     const session: CodexSession = {
       rpc,
       child,
-      busy: false,
+      active: 0,
+      tools: new Map(),
       lastUsed: Date.now(),
+    };
+    rpc.onToolCall = async (params) => {
+      const handler = session.tools.get(params?.threadId);
+      if (!handler) throw new Error("Tool is unavailable");
+      return handler(params);
     };
     child.on("error", () => rpc.close());
     child.on("exit", () => {
@@ -130,7 +166,7 @@ export class CodexRuntime {
   }
   async startLogin(userId: string) {
     const session = await this.getClient(userId);
-    if (session.busy)
+    if (session.active)
       throw new Error("Finish the active conversation before reconnecting");
     if (
       session.login?.status === "pending" &&

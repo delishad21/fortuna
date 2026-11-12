@@ -81,9 +81,7 @@ export class CodexProvider implements ChatProvider {
     if (!status.connected || !status.modelAvailable)
       throw new Error(status.error || "Reconnect your Codex account");
     const session = await this.runtime.getClient(input.userId);
-    if (session.busy)
-      throw new Error("Codex is already running for this account");
-    session.busy = true;
+    this.runtime.acquire(session);
     const queue: ProviderEvent[] = [];
     let wake: () => void = () => {};
     let finished = false;
@@ -122,7 +120,7 @@ export class CodexProvider implements ChatProvider {
     session.rpc.on("notification", notification);
     session.rpc.on("closed", closed);
     signal.addEventListener("abort", abort, { once: true });
-    session.rpc.onToolCall = async (params) => {
+    const onToolCall = async (params: any) => {
       if (
         signal.aborted ||
         params.threadId !== threadId ||
@@ -147,6 +145,7 @@ export class CodexProvider implements ChatProvider {
         restrictedThreadParams(input.tools),
       );
       threadId = started.thread.id;
+      session.tools.set(threadId, onToolCall);
       signal.throwIfAborted();
       const turn = await session.rpc.call("turn/start", {
         threadId,
@@ -181,13 +180,13 @@ export class CodexProvider implements ChatProvider {
       if (failure) throw failure;
       yield { type: "completed" };
     } finally {
-      if (signal.aborted || failure) this.runtime.stop(input.userId);
       signal.removeEventListener("abort", abort);
       session.rpc.off("notification", notification);
       session.rpc.off("closed", closed);
-      session.rpc.onToolCall = undefined;
-      session.busy = false;
-      session.lastUsed = Date.now();
+      if (threadId) session.tools.delete(threadId);
+      // A stopped or failed run restarts the process, but only once the user's runs in
+      // other conversations are done with it.
+      this.runtime.release(input.userId, session, signal.aborted || !!failure);
     }
   }
 }

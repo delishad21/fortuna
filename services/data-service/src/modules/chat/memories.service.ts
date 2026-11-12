@@ -60,14 +60,18 @@ export class MemoryService {
         select: { id: true, content: true, updatedAt: true },
       });
     }
-    if ((await this.db.chatMemory.count({ where: { userId } })) >= MEMORY_LIMIT)
-      throw new ChatError(
-        400,
-        `You can keep up to ${MEMORY_LIMIT} notes. Delete some in Settings first.`,
-      );
-    return this.db.chatMemory.create({
-      data: { userId, content: input.content },
-      select: { id: true, content: true, updatedAt: true },
+    // Conversations run side by side; the lock keeps two of them from passing the limit.
+    return this.db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM users WHERE id=${userId} FOR UPDATE`;
+      if ((await tx.chatMemory.count({ where: { userId } })) >= MEMORY_LIMIT)
+        throw new ChatError(
+          400,
+          `You can keep up to ${MEMORY_LIMIT} notes. Delete some in Settings first.`,
+        );
+      return tx.chatMemory.create({
+        data: { userId, content: input.content },
+        select: { id: true, content: true, updatedAt: true },
+      });
     });
   }
   async remove(userId: string, id: string) {
@@ -76,7 +80,8 @@ export class MemoryService {
       select: { id: true, content: true },
     });
     if (!found) throw new ChatError(404, "Note not found");
-    await this.db.chatMemory.delete({ where: { id: found.id } });
+    // Another conversation may have just removed it; the note is gone either way.
+    await this.db.chatMemory.deleteMany({ where: { id: found.id, userId } });
     return found;
   }
   /** Notes as context for the model: clearly marked as the user's own, still data rather than instructions. */

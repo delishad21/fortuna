@@ -22,6 +22,9 @@ import {
   json,
 } from "./transactions";
 const actor = { actorType: "system" as const, actorId: "fortuna-chat" };
+/** Why a row edit was refused when the row changed after the model read it. */
+const STALE_ROW =
+  "Draft row is stale: it changed since you read it, possibly in another conversation. Read it again with inspect_staged_import and redo the edit only if it still applies; don't overwrite the other change.";
 /** update_staged_rows takes a whole statement's rows in one call; each row is saved on its own. */
 export const STAGED_EDIT_LIMIT = 500;
 export const commitDraftsSchema = z
@@ -330,15 +333,22 @@ export class ImportTools {
         draftId: input.draftId,
         draft: { userId: context.userId },
       },
-      select: { id: true, currentPayload: true },
+      select: { id: true, currentPayload: true, version: true },
     });
-    const current = new Map(rows.map((r) => [r.id, r.currentPayload]));
+    const current = new Map(rows.map((r) => [r.id, r]));
     const updated: Array<{ rowId: string; version: number }> = [];
     const failed: Array<{ rowId: string; error: string }> = [];
     for (const edit of input.rows) {
-      const payload = current.get(edit.rowId) as Record<string, unknown> | undefined;
-      if (!payload || typeof payload !== "object") {
+      const row = current.get(edit.rowId);
+      const payload = row?.currentPayload as Record<string, unknown> | undefined;
+      if (!row || !payload || typeof payload !== "object") {
         failed.push({ rowId: edit.rowId, error: "Row not found in this draft" });
+        continue;
+      }
+      // Never merge into a payload other than the one the caller saw: another conversation
+      // may have edited the row. updateRow checks the version again under a row lock.
+      if (row.version !== edit.version) {
+        failed.push({ rowId: edit.rowId, error: STALE_ROW });
         continue;
       }
       const next: Record<string, unknown> = { ...payload };
@@ -351,7 +361,7 @@ export class ImportTools {
           ...edit.metadata,
         };
       try {
-        const row = await workflow.updateRow(
+        const saved = await workflow.updateRow(
           context.userId,
           input.draftId,
           edit.rowId,
@@ -362,7 +372,7 @@ export class ImportTools {
           },
           actor,
         );
-        updated.push({ rowId: edit.rowId, version: row.version });
+        updated.push({ rowId: edit.rowId, version: saved.version });
       } catch (error) {
         const status = (error as { status?: number }).status;
         if (!status || status >= 500) throw error;
@@ -370,7 +380,9 @@ export class ImportTools {
           rowId: edit.rowId,
           error:
             status === 409
-              ? `${(error as Error).message}. Inspect the draft again for the current version.`
+              ? (error as Error).message === "Draft row is stale"
+                ? STALE_ROW
+                : `${(error as Error).message}. Inspect the draft again for the current version.`
               : (error as Error).message,
         });
       }

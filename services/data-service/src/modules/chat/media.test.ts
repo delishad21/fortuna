@@ -261,8 +261,9 @@ test("Codex receives images as labelled image input items", async () => {
     onToolCall: undefined,
   });
   const provider = new CodexProvider({
-    getClient: async () => ({ rpc, busy: false, lastUsed: 0 }),
-    stop: () => {},
+    getClient: async () => ({ rpc, active: 0, tools: new Map(), lastUsed: 0 }),
+    acquire: () => {},
+    release: () => {},
   } as any);
   for await (const _ of provider.run(
     {

@@ -47,6 +47,16 @@ const SEVEN_DAYS_MS = STATEMENT_FILE_LIFE_MS;
 export const ASSISTANT_ROWS_PARSER_ID = "assistant_rows";
 const COMMIT_TOKEN_TTL_MS = 10 * 60 * 1000;
 
+/** Serialises staging of one source for one user until the transaction ends. */
+async function lockDraftSource(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  sourceSha256: string,
+  mode: string,
+) {
+  await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${`import-draft:${userId}:${mode}:${sourceSha256}`}, 0))`;
+}
+
 function commitSecret() {
   const secret = process.env.COMMIT_TOKEN_SECRET;
   if (!secret)
@@ -339,6 +349,18 @@ export class HermesWorkflowService {
       input.rows,
     );
     return prisma.$transaction(async (tx) => {
+      // Checked again under a lock: another conversation may have staged the same rows.
+      await lockDraftSource(tx, userId, sourceSha256, "main");
+      const raced = await tx.importDraft.findFirst({
+        where: {
+          userId,
+          sourceSha256,
+          mode: "main",
+          status: { notIn: ["committed", "discarded", "failed"] },
+        },
+        include: { rows: { orderBy: { rowIndex: "asc" } } },
+      });
+      if (raced) return { ...raced, duplicate: true };
       const draft = await tx.importDraft.create({
         data: {
           userId,
@@ -536,18 +558,19 @@ export class HermesWorkflowService {
         });
     }
 
-    const duplicate = await prisma.importDraft.findFirst({
-      where: {
-        userId,
-        sourceSha256: file.sha256,
-        mode: input.mode,
-        status: { notIn: ["committed", "discarded", "failed"] },
-      },
-      include: { rows: { orderBy: { rowIndex: "asc" } } },
-    });
-    if (duplicate) return { ...duplicate, duplicate: true };
-
     const draft = await prisma.$transaction(async (tx) => {
+      // Two conversations can stage the same statement at once; one draft results.
+      await lockDraftSource(tx, userId, file.sha256, input.mode);
+      const duplicate = await tx.importDraft.findFirst({
+        where: {
+          userId,
+          sourceSha256: file.sha256,
+          mode: input.mode,
+          status: { notIn: ["committed", "discarded", "failed"] },
+        },
+        include: { rows: { orderBy: { rowIndex: "asc" } } },
+      });
+      if (duplicate) return { ...duplicate, duplicate: true as const };
       const next = await tx.importDraft.create({
         data: {
           userId,
@@ -570,9 +593,9 @@ export class HermesWorkflowService {
           fileRef: file.id,
         },
       });
-      return next;
+      return { ...next, rows: [], duplicate: false as const };
     });
-    return { ...draft, rows: [], duplicate: false };
+    return draft;
   }
 
   static async listDrafts(userId: string, status?: string) {

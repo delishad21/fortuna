@@ -2,9 +2,12 @@ import { withLiveStagedRows, ReviewRow } from "./reviews.service";
 import { PrismaClient } from "@prisma/client";
 import { ChatRepository } from "./chat.repository";
 import {
+  CHAT_LIMITS,
+  CONVERSATION_BUSY,
   ChatError,
   SUBMITTED_REVIEW_TITLE,
   submitMessageSchema,
+  TOO_MANY_RUNS,
 } from "./contracts";
 export class ChatService extends ChatRepository {
   constructor(private client: PrismaClient) {
@@ -48,18 +51,20 @@ export class ChatService extends ChatRepository {
         where: { userId, conversationId, status: "awaiting_confirmation" },
         data: { status: "completed" },
       });
+      // One reply at a time per conversation; other conversations can send, up to a per-user
+      // cap so one user can't flood the provider. Runs beyond the worker's capacity wait queued.
       if (
         await tx.chatRun.count({
-          where: {
-            userId,
-            status: { in: ["queued", "running"] },
-          },
+          where: { userId, conversationId, status: { in: ["queued", "running"] } },
         })
       )
-        throw new ChatError(
-          409,
-          "Finish or stop your current conversation run first",
-        );
+        throw new ChatError(409, CONVERSATION_BUSY);
+      if (
+        (await tx.chatRun.count({
+          where: { userId, status: { in: ["queued", "running"] } },
+        })) >= CHAT_LIMITS.activeRunsPerUser
+      )
+        throw new ChatError(409, TOO_MANY_RUNS);
       const connection = await tx.chatConnection.findFirst({
         where: { userId, selected: true, status: "connected" },
       });
