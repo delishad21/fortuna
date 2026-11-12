@@ -240,7 +240,19 @@ export type Stream = {
   steps: Array<{ name: string; done: boolean }>;
   blocks: Block[];
   pending: ChatEvent[];
+  /** The run is waiting for the assistant to finish replying in another conversation. */
+  queued?: boolean;
 };
+/** Shown while a run waits behind replies in other conversations. */
+export const QUEUED_TEXT = "Queued: waiting for another chat to finish";
+/** Applies one poll of a run's events, including whether it is still waiting its turn. */
+export const applyRunEvents = (
+  state: Stream,
+  result: { events: ChatEvent[]; queued?: boolean },
+): Stream => ({
+  ...mergeEvents(state, result.events),
+  queued: !!result.queued,
+});
 /** Plain-language names for the assistant's tool steps. */
 export const STEP_LABELS: Record<string, string> = {
   get_context: "Loaded accounts and categories",
@@ -266,6 +278,15 @@ export const STEP_LABELS: Record<string, string> = {
 export const stepLabel = (name: string) =>
   STEP_LABELS[name] ||
   name.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+/** What a running reply is doing now: its open tool step, writing, or thinking. */
+export function workingOn(stream: Stream) {
+  const current = [...stream.steps].reverse().find((s) => !s.done);
+  return current
+    ? stepLabel(current.name)
+    : stream.text
+      ? "Writing a reply"
+      : "Thinking";
+}
 export const emptyStream = (): Stream => ({
   cursor: 0,
   text: "",

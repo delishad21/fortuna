@@ -19,7 +19,9 @@ import {
   Block,
   Stream,
   emptyStream,
-  mergeEvents,
+  applyRunEvents,
+  QUEUED_TEXT,
+  workingOn,
   generatingRun,
   PendingAttachment,
   IMAGE_UPLOAD_TYPES,
@@ -152,7 +154,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
             `/runs/${run.id}/events?after=${cursor.current.cursor}`,
           );
           if (dead) return;
-          setStream((prev) => mergeEvents(prev, result.events));
+          setStream((prev) => applyRunEvents(prev, result));
           if (!["queued", "running"].includes(result.status)) await refresh();
         } else await refresh();
       } catch (e) {
@@ -541,18 +543,9 @@ export function ChatConversationScreen({ route, navigation }: any) {
             {run && ["queued", "running"].includes(run.status) && (
               <>
                 <Txt muted accessibilityLiveRegion="polite">
-                  Fortuna is working ·{" "}
-                  {(() => {
-                    const current = [...stream.steps]
-                      .reverse()
-                      .find((s) => !s.done);
-                    return current
-                      ? stepLabel(current.name)
-                      : stream.text
-                        ? "Writing a reply"
-                        : "Thinking";
-                  })()}
-                  …
+                  {stream.queued
+                    ? QUEUED_TEXT
+                    : `Fortuna is working · ${workingOn(stream)}…`}
                 </Txt>
                 <Txt selectable>{stream.text}</Txt>
                 {stream.blocks

@@ -25,9 +25,10 @@ import {
   Block,
   Stream,
   emptyStream,
-  mergeEvents,
+  applyRunEvents,
+  QUEUED_TEXT,
+  workingOn,
   generatingRun,
-  stepLabel,
   PendingAttachment,
   IMAGE_UPLOAD_TYPES,
   IMAGE_UPLOAD_BYTES,
@@ -162,7 +163,7 @@ export function ChatClient() {
             `/runs/${run.id}/events?after=${streamRef.current.cursor}`,
           );
           if (stopped) return;
-          setStream((prev) => mergeEvents(prev, result.events));
+          setStream((prev) => applyRunEvents(prev, result));
           if (!["queued", "running"].includes(result.status)) await refresh();
         } else await refresh();
       } catch (e) {
@@ -515,12 +516,6 @@ export function ChatClient() {
     waiting.proposals.length,
     waiting.reviews.length,
   );
-  const currentStep = [...stream.steps].reverse().find((s) => !s.done);
-  const workingOn = currentStep
-    ? stepLabel(currentStep.name)
-    : stream.text
-      ? "Writing a reply"
-      : "Thinking";
   const elapsed = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   const fileTypes = [".pdf", ".csv", ".txt", ...IMAGE_UPLOAD_TYPES].join(",");
   const dropProps = {
@@ -565,10 +560,16 @@ export function ChatClient() {
               className="shrink-0 animate-spin text-primary"
               aria-hidden
             />
-            <span className="font-medium">Fortuna is working</span>
-            <span className="min-w-0 truncate text-dark-5 dark:text-dark-6">
-              · {workingOn}
-            </span>
+            {stream.queued ? (
+              <span className="font-medium">{QUEUED_TEXT}</span>
+            ) : (
+              <>
+                <span className="font-medium">Fortuna is working</span>
+                <span className="min-w-0 truncate text-dark-5 dark:text-dark-6">
+                  · {workingOn(stream)}
+                </span>
+              </>
+            )}
             <span className="ml-auto shrink-0 tabular-nums text-xs text-dark-5 dark:text-dark-6">
               {elapsed}
             </span>
@@ -891,7 +892,14 @@ export function ChatClient() {
                 <article className="flex gap-3" aria-label="Assistant response">
                   <BrandMark className="mt-0.5 h-6 w-6 shrink-0 animate-pulse" />
                   <div className="min-w-0 flex-1 space-y-3">
-                    {stream.steps.length > 0 ? (
+                    {stream.queued ? (
+                      <p
+                        role="status"
+                        className="text-sm text-dark-5 dark:text-dark-6"
+                      >
+                        {QUEUED_TEXT}
+                      </p>
+                    ) : stream.steps.length > 0 ? (
                       <ActivitySteps steps={stream.steps} live />
                     ) : (
                       <p
