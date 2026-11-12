@@ -55,3 +55,29 @@ test("proxy allows editing and removing queued messages, and nothing else under 
     "DELETE /api/chat/conversations/c1/queue",
   ]);
 });
+test("proxy forwards cancelling a review, by POST only", async () => {
+  const forwarded: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: URL, init: RequestInit) => {
+    forwarded.push(`${init.method} ${url.pathname}`);
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  try {
+    const call = (method: string, path: string[]) =>
+      forwardChatRequest(
+        new Request("https://fortuna.test/api/chat", {
+          method,
+          ...(method === "GET" ? {} : { body: '{"version":1}' }),
+        }),
+        "alice",
+        path,
+        { url: "http://data.test", token: "test" },
+      );
+    await call("POST", ["reviews", "r1", "cancel"]);
+    await assert.rejects(call("GET", ["reviews", "r1", "cancel"]));
+    await assert.rejects(call("POST", ["reviews", "r1", "cancel", "x"]));
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.deepEqual(forwarded, ["POST /api/chat/reviews/r1/cancel"]);
+});

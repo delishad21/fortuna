@@ -8,6 +8,11 @@ import {
   proposalSummary,
   timeLeft,
   waitingText,
+  reviewStateLabel,
+  approvalsBarDismissed,
+  approvalsDismissedKey,
+  waitingForUser,
+  waitingIds,
 } from "../../../shared/chat";
 
 const stagedLink = {
@@ -106,4 +111,52 @@ test("closed proposals say why and only a user rejection reads as rejected", () 
   );
   assert.equal(waitingText(0, 1), "1 review waiting for you");
   assert.equal(waitingText(0, 0), "");
+});
+test("a review the user cancelled reads as cancelled by them; one closed by Stop doesn't", () => {
+  assert.equal(
+    reviewStateLabel({ status: "cancelled", decidedAt: "2026-11-12T08:00:00Z" }),
+    "Cancelled by you",
+  );
+  assert.equal(
+    reviewStateLabel({ status: "cancelled", decidedAt: null }),
+    "Closed when you stopped the reply",
+  );
+  assert.equal(reviewStateLabel({ status: "submitted" }), "Sent to Fortuna");
+  assert.equal(reviewStateLabel({ status: "unknown" }), "Closed");
+});
+test("the approvals bar stays hidden after ✕ until something new is waiting", () => {
+  const proposal = (id: string) => ({
+    id,
+    kind: "edit_transactions",
+    status: "pending",
+    preview: {},
+    expiresAt: new Date(Date.now() + 3600000).toISOString(),
+  });
+  const conversation = (proposals: string[], reviews: string[]) => ({
+    id: "c1",
+    title: "Chat",
+    messages: [],
+    attachments: [],
+    runs: [
+      {
+        id: "run",
+        status: "completed",
+        proposals: proposals.map(proposal),
+        reviews: reviews.map((id) => ({ id, title: id, status: "pending" })),
+      },
+    ],
+  });
+  const ids = (p: string[], r: string[]) =>
+    waitingIds(waitingForUser(conversation(p, r)));
+  assert.deepEqual(ids(["p1"], ["r1"]), ["p1", "r1"]);
+  // Never closed: shown.
+  assert.equal(approvalsBarDismissed(null, ids(["p1"], ["r1"])), false);
+  const dismissed = ids(["p1"], ["r1"]);
+  assert.equal(approvalsBarDismissed(dismissed, ids(["p1"], ["r1"])), true);
+  // Closing one of them doesn't bring it back.
+  assert.equal(approvalsBarDismissed(dismissed, ids([], ["r1"])), true);
+  // A new proposal or review does.
+  assert.equal(approvalsBarDismissed(dismissed, ids(["p1", "p2"], ["r1"])), false);
+  assert.equal(approvalsBarDismissed(dismissed, ids(["p1"], ["r1", "r2"])), false);
+  assert.notEqual(approvalsDismissedKey("c1"), approvalsDismissedKey("c2"));
 });

@@ -391,6 +391,28 @@ export const REVIEW_STATES: Record<string, string> = {
   cancelled: "Closed when you stopped the reply",
   closed: "Closed without a decision",
 };
+/** A review's state in words. Only a review the user cancelled has `decidedAt`. */
+export const reviewStateLabel = (review: {
+  status: string;
+  decidedAt?: string | null;
+}) =>
+  review.status === "cancelled" && review.decidedAt
+    ? "Cancelled by you"
+    : REVIEW_STATES[review.status] || "Closed";
+/** Asked before a review is cancelled. */
+export const CANCEL_REVIEW_CONFIRM =
+  "Close this review without applying its suggestions?";
+/**
+ * Whether the approvals bar stays hidden: the user closed it while `dismissed` were
+ * waiting, and nothing new has come since. Closing items doesn't bring it back.
+ */
+export const approvalsBarDismissed = (
+  dismissed: string[] | null | undefined,
+  waiting: string[],
+) => !!dismissed && waiting.every((id) => dismissed.includes(id));
+/** Where the approvals bar's dismissal is remembered, per conversation. */
+export const approvalsDismissedKey = (conversationId: string) =>
+  `fortuna.chat.approvals-dismissed.${conversationId}`;
 /** Pending proposals past their 24 hours read as expired before the server marks them. */
 export function proposalState(
   proposal: { status: string; expiresAt?: string },

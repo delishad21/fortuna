@@ -176,7 +176,14 @@ export type Proposal = {
   preview: any;
   expiresAt: string;
 };
-export type RunReview = { id: string; title: string; status: string };
+export type RunReview = {
+  id: string;
+  title: string;
+  status: string;
+  version?: number;
+  /** Set when the user cancelled it. */
+  decidedAt?: string | null;
+};
 export type Run = {
   id: string;
   status: string;
@@ -474,6 +481,7 @@ export type TransactionReview = {
   instructions: string;
   status: string;
   version: number;
+  decidedAt?: string | null;
   rows: ReviewRow[];
   categories: { id: string; name: string; color?: string }[];
   accounts: { id: string; accountIdentifier: string; color?: string }[];
@@ -493,6 +501,20 @@ export function waitingForUser(
       .filter((r) => r.status === "pending"),
   };
 }
+/** The ids of everything in `waitingForUser`, to tell when something new arrives. */
+export const waitingIds = (waiting: ReturnType<typeof waitingForUser>) => [
+  ...waiting.proposals.map((p) => p.id),
+  ...waiting.reviews.map((r) => r.id),
+];
+/** Closes a review without applying its suggestions; `version` must be current. */
+export const cancelReview = (
+  request: ChatRequest,
+  review: { id: string; version: number },
+) =>
+  request<TransactionReview>(
+    `/reviews/${encodeURIComponent(review.id)}/cancel`,
+    { method: "POST", body: { version: review.version } },
+  );
 export const generatingRun = (run?: Run) =>
   !!run && ["queued", "running"].includes(run.status);
 

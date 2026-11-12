@@ -14,7 +14,6 @@ import {
   X,
   Trash2,
   Bookmark,
-  CircleAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import {
@@ -38,8 +37,8 @@ import {
   IMAGE_UPLOAD_BYTES,
   attachmentContentPath,
   waitingForUser,
-  waitingText,
-  REVIEW_STATES,
+  reviewStateLabel,
+  cancelReview,
 } from "@/lib/chat/client";
 import { BrandMark } from "@/components/ui/Brand";
 import { TransactionReviewEditor } from "./TransactionReviewEditor";
@@ -51,6 +50,7 @@ import { ChatComponent } from "./ChatComponents";
 import { Markdown } from "./Markdown";
 import { ActivitySteps } from "./ActivitySteps";
 import { QueuedMessages } from "./QueuedMessages";
+import { ApprovalsBar } from "./ApprovalsBar";
 /** A sent image, fetched through the owner-scoped chat proxy. */
 function AttachedImage({ id, filename }: { id: string; filename: string }) {
   const [failed, setFailed] = useState(false);
@@ -304,10 +304,10 @@ export function ChatClient() {
   }
   function block(value: Block, index: number, role = "assistant") {
     if (value.type === "review") {
-      const status =
-        conversation?.runs
-          .flatMap((r) => r.reviews || [])
-          .find((r) => r.id === value.id)?.status || "pending";
+      const found = conversation?.runs
+        .flatMap((r) => r.reviews || [])
+        .find((r) => r.id === value.id);
+      const status = found?.status || "pending";
       return (
         <div
           key={value.id}
@@ -329,7 +329,7 @@ export function ChatClient() {
                   : ""
               }
             >
-              {REVIEW_STATES[status] || "Closed"}
+              {reviewStateLabel(found || { status })}
             </span>
           </p>
           {/* Remount when the status changes elsewhere, so the editor reloads it. */}
@@ -547,10 +547,6 @@ export function ChatClient() {
   );
   const waiting = waitingForUser(conversation);
   const unlinked = waiting.proposals.filter((p) => !linked.has(p.id));
-  const waitingLine = waitingText(
-    waiting.proposals.length,
-    waiting.reviews.length,
-  );
   const elapsed = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   const fileTypes = [".pdf", ".csv", ".txt", ...IMAGE_UPLOAD_TYPES].join(",");
   const dropProps = {
@@ -1051,25 +1047,25 @@ export function ChatClient() {
           </div>
         )}
         <div className="shrink-0 pt-2">
-          {id && waitingLine && (
-            <div className="mx-auto w-full max-w-6xl px-4 pb-2 md:px-6">
-              <button
-                type="button"
-                onClick={showWaiting}
-                className="flex w-full items-center gap-2 rounded-lg border border-primary bg-primary/10 px-3 py-2 text-left text-sm text-dark hover:bg-primary/15 dark:text-white"
-              >
-                <CircleAlert
-                  size={16}
-                  aria-hidden
-                  className="shrink-0 text-primary"
-                />
-                <span className="min-w-0 flex-1 font-medium">
-                  {waitingLine}
-                </span>
-                <span className="shrink-0 font-semibold text-primary">
-                  Review
-                </span>
-              </button>
+          {id && conversation?.id === id && (
+            <div className="mx-auto w-full max-w-6xl px-4 pb-2 empty:hidden md:px-6">
+              <ApprovalsBar
+                conversationId={id}
+                waiting={waiting}
+                disabled={busy}
+                onReview={showWaiting}
+                onReject={(p) => void action(() => reject(p))}
+                onCancelReview={(r) =>
+                  void action(async () => {
+                    await cancelReview(chatApi, {
+                      id: r.id,
+                      version: r.version ?? 1,
+                    });
+                    await refresh();
+                    setNotice("Review cancelled.");
+                  })
+                }
+              />
             </div>
           )}
           {composer}

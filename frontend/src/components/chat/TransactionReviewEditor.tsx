@@ -2,9 +2,12 @@
 import { useEffect, useRef, useState } from "react";
 import { TransactionTable } from "@/components/transaction-table/TransactionTable";
 import type { Transaction } from "@/components/transaction-table/types";
+import { Button } from "@/components/ui/Button";
 import {
+  CANCEL_REVIEW_CONFIRM,
+  cancelReview,
   chatApi,
-  REVIEW_STATES,
+  reviewStateLabel,
   SendResult,
   TransactionReview,
   reviewSuggestionSummary,
@@ -142,6 +145,26 @@ export function TransactionReviewEditor({
       setSaving(pending.current);
     }
   }
+  /** Closes the review without applying its suggestions, after the user confirms. */
+  async function cancel() {
+    if (!window.confirm(CANCEL_REVIEW_CONFIRM)) return;
+    await queue.current;
+    const v = current.current;
+    if (!v || !["pending", "queued"].includes(v.status) || pending.current)
+      return;
+    pending.current++;
+    setSaving(pending.current);
+    setError("");
+    try {
+      accept(await cancelReview(chatApi, v));
+      await onSubmitted();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      pending.current--;
+      setSaving(pending.current);
+    }
+  }
   if (!review)
     return <p role="status">{error || "Loading transaction review…"}</p>;
   const transactions: Transaction[] = review.rows.map(
@@ -167,6 +190,7 @@ export function TransactionReviewEditor({
       }) as Transaction,
   );
   const closed = review.status !== "pending";
+  const cancellable = ["pending", "queued"].includes(review.status);
   const suggestions = reviewSuggestionSummary(review.rows, review.categories);
   const unsure = review.rows.filter(isUnsure);
   return (
@@ -177,15 +201,28 @@ export function TransactionReviewEditor({
     >
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h3 className="font-semibold">{review.title}</h3>
-        <p role="status" className="text-xs text-dark-5 dark:text-dark-6">
-          {closed
-            ? review.status === "submitted" || review.status === "queued"
-              ? REVIEW_STATES[review.status]
-              : "Closed"
-            : saving
-              ? "Saving…"
-              : "Changes save automatically"}
-        </p>
+        <div className="flex items-center gap-3">
+          <p role="status" className="text-xs text-dark-5 dark:text-dark-6">
+            {closed
+              ? ["submitted", "queued"].includes(review.status) ||
+                review.decidedAt
+                ? reviewStateLabel(review)
+                : "Closed"
+              : saving
+                ? "Saving…"
+                : "Changes save automatically"}
+          </p>
+          {cancellable && (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={saving > 0}
+              onClick={() => void cancel()}
+            >
+              Cancel review
+            </Button>
+          )}
+        </div>
       </div>
       {unsure.length > 0 && !closed && (
         <div className="rounded-md border border-orange/40 bg-orange/5 px-3 py-2 text-sm">
