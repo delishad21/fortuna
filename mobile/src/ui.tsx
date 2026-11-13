@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -495,6 +496,57 @@ export function SearchBar({
     </View>
   );
 }
+/**
+ * Keeps its children above the on-screen keyboard by padding its bottom by
+ * however much the keyboard covers. Android draws edge-to-edge (Expo SDK 57)
+ * and no longer shrinks the window for the keyboard, so both platforms pad.
+ * The offset is this view's own top in the window (status bar and header),
+ * measured rather than guessed, so it holds under a tab or stack header.
+ */
+export function KeyboardAvoid({
+  style,
+  children,
+}: {
+  style?: any;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<View>(null);
+  const [offset, setOffset] = useState(0);
+  return (
+    <View
+      ref={ref}
+      style={{ flex: 1 }}
+      onLayout={() =>
+        ref.current?.measureInWindow((_x, y) => setOffset(Math.max(0, y)))
+      }
+    >
+      <KeyboardAvoidingView
+        style={[{ flex: 1 }, style]}
+        behavior={Platform.OS === "web" ? undefined : "padding"}
+        keyboardVerticalOffset={offset}
+      >
+        {children}
+      </KeyboardAvoidingView>
+    </View>
+  );
+}
+/** Whether the on-screen keyboard is open, for dropping bottom insets it covers. */
+export function useKeyboardShown() {
+  const [shown, setShown] = useState(() => Keyboard.isVisible());
+  useEffect(() => {
+    const ios = Platform.OS === "ios";
+    const subs = [
+      Keyboard.addListener(ios ? "keyboardWillShow" : "keyboardDidShow", () =>
+        setShown(true),
+      ),
+      Keyboard.addListener(ios ? "keyboardWillHide" : "keyboardDidHide", () =>
+        setShown(false),
+      ),
+    ];
+    return () => subs.forEach((sub) => sub.remove());
+  }, []);
+  return shown;
+}
 /** Bottom sheet presented over the current screen. */
 export function Sheet({
   visible,
@@ -515,6 +567,8 @@ export function Sheet({
 }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  // The keyboard covers the home indicator, so its inset would only leave a gap.
+  const bottomInset = useKeyboardShown() ? 0 : insets.bottom;
   const slide = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (visible) {
@@ -537,10 +591,7 @@ export function Sheet({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <KeyboardAvoidingView
-        style={{ flex: 1, justifyContent: "flex-end" }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
+      <KeyboardAvoid style={{ justifyContent: "flex-end" }}>
         <Pressable
           accessibilityLabel="Close"
           onPress={onClose}
@@ -552,7 +603,7 @@ export function Sheet({
             backgroundColor: colors.bg,
             borderTopLeftRadius: 16,
             borderTopRightRadius: 16,
-            paddingBottom: footer ? 0 : Math.max(insets.bottom, 12),
+            paddingBottom: footer ? 0 : Math.max(bottomInset, 12),
             overflow: "hidden",
             transform: [
               {
@@ -606,7 +657,7 @@ export function Sheet({
             <View
               style={{
                 padding: 16,
-                paddingBottom: Math.max(insets.bottom, 16),
+                paddingBottom: Math.max(bottomInset, 16),
                 gap: 10,
                 borderTopWidth: 1,
                 borderTopColor: colors.line,
@@ -617,7 +668,7 @@ export function Sheet({
             </View>
           )}
         </Animated.View>
-      </KeyboardAvoidingView>
+      </KeyboardAvoid>
     </Modal>
   );
 }
@@ -1043,11 +1094,7 @@ export function Screen({
 }: any) {
   const { colors } = useTheme();
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: colors.bg }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
-    >
+    <KeyboardAvoid style={{ backgroundColor: colors.bg }}>
       <ScrollView
         refreshControl={refreshControl}
         keyboardShouldPersistTaps="handled"
@@ -1056,16 +1103,18 @@ export function Screen({
         {children}
       </ScrollView>
       {footer && <Footer>{footer}</Footer>}
-    </KeyboardAvoidingView>
+    </KeyboardAvoid>
   );
 }
 /** Sticky bottom bar for a screen's primary action. */
 export function Footer({ children, inTab = false }: any) {
   const { colors } = useTheme();
+  const keyboard = useKeyboardShown();
   return (
     <SafeAreaView
-      // Above a tab bar, the tab bar already covers the home indicator.
-      edges={inTab ? [] : ["bottom"]}
+      // Above a tab bar, the tab bar already covers the home indicator;
+      // with the keyboard open, the footer sits on the keyboard instead.
+      edges={inTab || keyboard ? [] : ["bottom"]}
       style={{
         backgroundColor: colors.card,
         paddingHorizontal: 16,

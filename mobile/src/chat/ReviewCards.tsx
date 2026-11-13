@@ -9,7 +9,15 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { Button, Input, Txt, Choice, useTheme, confirm } from "../ui";
+import {
+  Button,
+  Input,
+  KeyboardAvoid,
+  Txt,
+  Choice,
+  useTheme,
+  confirm,
+} from "../ui";
 import {
   useChatApi,
   TransactionReview,
@@ -327,179 +335,181 @@ export function ChatReviewCards({
         }}
       >
         <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ padding: 20, gap: 16 }}
-          >
-            <Txt bold size={22}>
-              Edit transaction
-            </Txt>
-            {!!error && (
-              <Txt accessibilityRole="alert" style={{ color: colors.red }}>
-                {error}
+          <KeyboardAvoid>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ padding: 20, gap: 16 }}
+            >
+              <Txt bold size={22}>
+                Edit transaction
               </Txt>
-            )}
-            {[
-              "description",
-              "label",
-              "date",
-              "amountIn",
-              "amountOut",
-              "balance",
-              "currency",
-            ].map((field) => (
-              <View key={field} style={{ gap: 6 }}>
-                <Txt>
-                  {({ amountIn: "Amount in", amountOut: "Amount out" } as any)[
-                    field
-                  ] || field[0].toUpperCase() + field.slice(1)}
+              {!!error && (
+                <Txt accessibilityRole="alert" style={{ color: colors.red }}>
+                  {error}
                 </Txt>
-                <Input
-                  accessibilityLabel={field}
-                  value={form[field] || ""}
-                  editable={!busy && !closed}
-                  keyboardType={
-                    ["amountIn", "amountOut", "balance"].includes(field)
-                      ? "decimal-pad"
-                      : "default"
-                  }
-                  onChangeText={(v: string) =>
-                    setForm((f: any) => ({ ...f, [field]: v }))
-                  }
-                />
-              </View>
-            ))}
-            <Choice
-              label="Category"
-              value={form.categoryId}
-              options={[
-                { label: "Uncategorized", value: "" },
-                ...review.categories.map((c) => ({
-                  label: c.name,
-                  value: c.id,
-                })),
-              ]}
-              onChange={(v) => setForm((f: any) => ({ ...f, categoryId: v }))}
-            />
-            <Choice
-              label="Account"
-              value={form.accountIdentifier}
-              options={[
-                { label: "Unassigned", value: "" },
-                ...review.accounts.map((a) => ({
-                  label: accountDisplay(a),
-                  value: a.accountIdentifier,
-                })),
-              ]}
-              onChange={(v) =>
-                setForm((f: any) => ({ ...f, accountIdentifier: v }))
-              }
-            />
-            <Choice
-              label="Type"
-              value={form.type}
-              options={[
-                { label: "Standard", value: "" },
-                { label: "Internal", value: "internal" },
-                { label: "Reimbursement", value: "reimbursement" },
-              ]}
-              onChange={(v) => setForm((f: any) => ({ ...f, type: v }))}
-            />
-            {form.type === "reimbursement" && (
-              <View style={{ gap: 12 }}>
-                <Txt bold>Reimbursement allocations</Txt>
-                {(form.allocations || []).map(
-                  (allocation: any, index: number) => (
-                    <View key={index} style={{ gap: 6 }}>
-                      <Txt>
-                        {allocation.targetDescription ||
-                          review.rows.find(
-                            (r) =>
-                              r.id ===
-                              (allocation.transactionId ||
-                                allocation.stagedRowId),
-                          )?.value.description ||
-                          "Linked transaction"}
-                      </Txt>
-                      <Input
-                        accessibilityLabel={`Allocation ${index + 1} amount`}
-                        keyboardType="decimal-pad"
-                        value={String(allocation.amount)}
-                        onChangeText={(amount: string) =>
-                          setForm((f: any) => ({
-                            ...f,
-                            allocations: f.allocations.map(
-                              (a: any, i: number) =>
-                                i === index ? { ...a, amount } : a,
-                            ),
-                          }))
-                        }
-                      />
-                      <Button
-                        title="Remove allocation"
-                        secondary
-                        onPress={() =>
-                          setForm((f: any) => ({
-                            ...f,
-                            allocations: f.allocations.filter(
-                              (_: any, i: number) => i !== index,
-                            ),
-                          }))
-                        }
-                      />
-                    </View>
-                  ),
-                )}
-                <Choice
-                  label="Add target from this review"
-                  value=""
-                  options={review.rows
-                    .filter(
-                      (r) =>
-                        r.id !== editing?.id && Number(r.value.amountOut) > 0,
-                    )
-                    .map((r) => ({
-                      label: `${String(r.value.date).slice(0, 10)} · ${r.value.description}`,
-                      value: r.id,
-                    }))}
-                  onChange={(value) => {
-                    const target = review.rows.find((r) => r.id === value);
-                    if (target)
-                      setForm((f: any) => ({
-                        ...f,
-                        allocations: [
-                          ...f.allocations,
-                          {
-                            transactionId: target.source.transactionId,
-                            stagedDraftId: target.source.draftId,
-                            stagedRowId: target.source.rowId,
-                            amount: Math.min(
-                              Number(target.value.amountOut),
-                              Number(f.amountIn),
-                            ),
-                          },
-                        ],
-                      }));
-                  }}
-                />
-                <Txt muted size={12}>
-                  Unallocated portions remain untargeted. Ask Fortuna to include
-                  other targets in this review.
-                </Txt>
-              </View>
-            )}
-            <Button
-              title="Save transaction"
-              disabled={busy || closed}
-              onPress={() => void save()}
-            />
-            <Button
-              title="Cancel"
-              secondary
-              disabled={busy}
-              onPress={() => setEditing(null)}
-            />
-          </ScrollView>
+              )}
+              {[
+                "description",
+                "label",
+                "date",
+                "amountIn",
+                "amountOut",
+                "balance",
+                "currency",
+              ].map((field) => (
+                <View key={field} style={{ gap: 6 }}>
+                  <Txt>
+                    {({ amountIn: "Amount in", amountOut: "Amount out" } as any)[
+                      field
+                    ] || field[0].toUpperCase() + field.slice(1)}
+                  </Txt>
+                  <Input
+                    accessibilityLabel={field}
+                    value={form[field] || ""}
+                    editable={!busy && !closed}
+                    keyboardType={
+                      ["amountIn", "amountOut", "balance"].includes(field)
+                        ? "decimal-pad"
+                        : "default"
+                    }
+                    onChangeText={(v: string) =>
+                      setForm((f: any) => ({ ...f, [field]: v }))
+                    }
+                  />
+                </View>
+              ))}
+              <Choice
+                label="Category"
+                value={form.categoryId}
+                options={[
+                  { label: "Uncategorized", value: "" },
+                  ...review.categories.map((c) => ({
+                    label: c.name,
+                    value: c.id,
+                  })),
+                ]}
+                onChange={(v) => setForm((f: any) => ({ ...f, categoryId: v }))}
+              />
+              <Choice
+                label="Account"
+                value={form.accountIdentifier}
+                options={[
+                  { label: "Unassigned", value: "" },
+                  ...review.accounts.map((a) => ({
+                    label: accountDisplay(a),
+                    value: a.accountIdentifier,
+                  })),
+                ]}
+                onChange={(v) =>
+                  setForm((f: any) => ({ ...f, accountIdentifier: v }))
+                }
+              />
+              <Choice
+                label="Type"
+                value={form.type}
+                options={[
+                  { label: "Standard", value: "" },
+                  { label: "Internal", value: "internal" },
+                  { label: "Reimbursement", value: "reimbursement" },
+                ]}
+                onChange={(v) => setForm((f: any) => ({ ...f, type: v }))}
+              />
+              {form.type === "reimbursement" && (
+                <View style={{ gap: 12 }}>
+                  <Txt bold>Reimbursement allocations</Txt>
+                  {(form.allocations || []).map(
+                    (allocation: any, index: number) => (
+                      <View key={index} style={{ gap: 6 }}>
+                        <Txt>
+                          {allocation.targetDescription ||
+                            review.rows.find(
+                              (r) =>
+                                r.id ===
+                                (allocation.transactionId ||
+                                  allocation.stagedRowId),
+                            )?.value.description ||
+                            "Linked transaction"}
+                        </Txt>
+                        <Input
+                          accessibilityLabel={`Allocation ${index + 1} amount`}
+                          keyboardType="decimal-pad"
+                          value={String(allocation.amount)}
+                          onChangeText={(amount: string) =>
+                            setForm((f: any) => ({
+                              ...f,
+                              allocations: f.allocations.map(
+                                (a: any, i: number) =>
+                                  i === index ? { ...a, amount } : a,
+                              ),
+                            }))
+                          }
+                        />
+                        <Button
+                          title="Remove allocation"
+                          secondary
+                          onPress={() =>
+                            setForm((f: any) => ({
+                              ...f,
+                              allocations: f.allocations.filter(
+                                (_: any, i: number) => i !== index,
+                              ),
+                            }))
+                          }
+                        />
+                      </View>
+                    ),
+                  )}
+                  <Choice
+                    label="Add target from this review"
+                    value=""
+                    options={review.rows
+                      .filter(
+                        (r) =>
+                          r.id !== editing?.id && Number(r.value.amountOut) > 0,
+                      )
+                      .map((r) => ({
+                        label: `${String(r.value.date).slice(0, 10)} · ${r.value.description}`,
+                        value: r.id,
+                      }))}
+                    onChange={(value) => {
+                      const target = review.rows.find((r) => r.id === value);
+                      if (target)
+                        setForm((f: any) => ({
+                          ...f,
+                          allocations: [
+                            ...f.allocations,
+                            {
+                              transactionId: target.source.transactionId,
+                              stagedDraftId: target.source.draftId,
+                              stagedRowId: target.source.rowId,
+                              amount: Math.min(
+                                Number(target.value.amountOut),
+                                Number(f.amountIn),
+                              ),
+                            },
+                          ],
+                        }));
+                    }}
+                  />
+                  <Txt muted size={12}>
+                    Unallocated portions remain untargeted. Ask Fortuna to include
+                    other targets in this review.
+                  </Txt>
+                </View>
+              )}
+              <Button
+                title="Save transaction"
+                disabled={busy || closed}
+                onPress={() => void save()}
+              />
+              <Button
+                title="Cancel"
+                secondary
+                disabled={busy}
+                onPress={() => setEditing(null)}
+              />
+            </ScrollView>
+          </KeyboardAvoid>
         </SafeAreaView>
       </Modal>
     </View>

@@ -4,7 +4,6 @@ import {
   Image,
   Pressable,
   FlatList,
-  KeyboardAvoidingView,
   Platform,
   View,
 } from "react-native";
@@ -12,7 +11,16 @@ import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
-import { Button, IconButton, Input, Txt, useTheme, confirm } from "../ui";
+import {
+  Button,
+  IconButton,
+  Input,
+  KeyboardAvoid,
+  Txt,
+  useKeyboardShown,
+  useTheme,
+  confirm,
+} from "../ui";
 import {
   useChatApi,
   Conversation,
@@ -52,6 +60,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
   const api = useChatApi(),
     { colors } = useTheme(),
     insets = useSafeAreaInsets(),
+    keyboard = useKeyboardShown(),
     focused = useIsFocused();
   const [conversation, setConversation] = useState<Conversation | null>(null),
     [text, setText] = useState(""),
@@ -64,6 +73,8 @@ export function ChatConversationScreen({ route, navigation }: any) {
     inFlight = useRef(false),
     sendKey = useRef<string | null>(null),
     list = useRef<FlatList>(null),
+    /** Scroll position and height of the list, to keep its bottom in view when it shrinks. */
+    listScroll = useRef({ y: 0, height: 0 }),
     /** Where each approval card or review sits inside its message, by block id. */
     blockOffsets = useRef<Record<string, number>>({});
   const selected = useRef(id);
@@ -452,11 +463,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
     );
   }
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={95}
-    >
+    <KeyboardAvoid>
       <View
         style={{
           paddingHorizontal: 20,
@@ -520,6 +527,22 @@ export function ChatConversationScreen({ route, navigation }: any) {
         data={conversation?.messages || []}
         keyExtractor={(m) => m.id}
         keyboardShouldPersistTaps="handled"
+        scrollEventThrottle={16}
+        onScroll={(e) => {
+          listScroll.current.y = e.nativeEvent.contentOffset.y;
+        }}
+        onLayout={(e) => {
+          // The keyboard opening shrinks the list from the bottom: scroll by as
+          // much so the latest messages stay in view instead of going under it.
+          const height = e.nativeEvent.layout.height;
+          const shrunk = listScroll.current.height - height;
+          listScroll.current.height = height;
+          if (shrunk > 0)
+            list.current?.scrollToOffset({
+              offset: listScroll.current.y + shrunk,
+              animated: false,
+            });
+        }}
         onScrollToIndexFailed={({ index, averageItemLength }) => {
           // Rows not measured yet: jump near the row, then aim again once it renders.
           list.current?.scrollToOffset({ offset: index * averageItemLength });
@@ -659,7 +682,8 @@ export function ChatConversationScreen({ route, navigation }: any) {
       <View
         style={{
           padding: 16,
-          paddingBottom: Math.max(16, insets.bottom),
+          // The keyboard covers the home indicator, so skip its inset then.
+          paddingBottom: keyboard ? 16 : Math.max(16, insets.bottom),
           gap: 10,
           borderTopWidth: 1,
           borderColor: colors.line,
@@ -817,6 +841,6 @@ export function ChatConversationScreen({ route, navigation }: any) {
           </View>
         </View>
       </View>
-    </KeyboardAvoidingView>
+    </KeyboardAvoid>
   );
 }
