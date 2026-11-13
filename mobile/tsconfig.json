@@ -5,6 +5,7 @@
     "types": [
       "react",
       "node"
-    ]
+    ],
+    "allowImportingTsExtensions": true
   }
 }

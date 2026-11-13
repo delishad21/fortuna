@@ -45,6 +45,7 @@ import { ActionCard } from "./ActionCard";
 import { AttachedImage } from "./AttachedImage";
 import { QueuedMessages } from "./QueuedMessages";
 import { ApprovalsBar } from "./ApprovalsBar";
+import { Markdown } from "./Markdown";
 export function ChatConversationScreen({ route, navigation }: any) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [id, setId] = useState<string | undefined>(route.params?.id);
@@ -308,7 +309,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
         size: a.fileSize,
       }));
     });
-  function renderBlock(block: Block, index: number) {
+  function renderBlock(block: Block, index: number, role?: string) {
     if (block.type === "review")
       return (
         <View
@@ -321,7 +322,9 @@ export function ChatConversationScreen({ route, navigation }: any) {
         </View>
       );
     if (block.type === "text")
-      return (
+      return role === "assistant" ? (
+        <Markdown key={index} text={block.text} />
+      ) : (
         <Txt key={index} selectable>
           {block.text}
         </Txt>
@@ -578,7 +581,9 @@ export function ChatConversationScreen({ route, navigation }: any) {
                 {item.role === "user" ? "You" : "Fortuna"}
               </Txt>
             </View>
-            {item.blocks.map(renderBlock)}
+            {item.blocks.map((block: Block, index: number) =>
+              renderBlock(block, index, item.role),
+            )}
           </View>
         )}
         ListEmptyComponent={
@@ -595,7 +600,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
                     ? QUEUED_TEXT
                     : `Fortuna is working · ${workingOn(stream)}…`}
                 </Txt>
-                <Txt selectable>{stream.text}</Txt>
+                {!!stream.text && <Markdown text={stream.text} />}
                 {stream.blocks
                   .filter(
                     (b) =>
@@ -603,7 +608,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
                       b.type === "component" ||
                       b.type === "memory",
                   )
-                  .map(renderBlock)}
+                  .map((block, index) => renderBlock(block, index))}
               </>
             )}
             {conversation && (

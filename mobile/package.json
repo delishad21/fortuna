@@ -44,6 +44,7 @@
     "ios": "expo start --go --ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
+    "test": "node --test \"src/**/*.test.ts\"",
     "check": "expo install --check",
     "export": "expo export --platform all",
     "test:e2e": "playwright test",
