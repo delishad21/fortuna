@@ -363,6 +363,7 @@ export function Input({
   hint,
   icon,
   error,
+  style,
   ...props
 }: any) {
   const { colors } = useTheme();
@@ -399,17 +400,21 @@ export function Input({
           placeholderTextColor={colors.faint}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
-          style={{
-            flex: 1,
-            color: colors.text,
-            fontSize: 16,
-            fontFamily: "DMSans_400Regular",
-            paddingVertical: 10,
-            minHeight: props.multiline ? 88 : undefined,
-            textAlignVertical: props.multiline ? "top" : "center",
-            ...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {}),
-          }}
           {...props}
+          // Merge last so a caller's style adds to the base (text colour, font) instead of replacing it.
+          style={[
+            {
+              flex: 1,
+              color: colors.text,
+              fontSize: 16,
+              fontFamily: "DMSans_400Regular",
+              paddingVertical: 10,
+              minHeight: props.multiline ? 88 : undefined,
+              textAlignVertical: props.multiline ? "top" : "center",
+              ...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {}),
+            },
+            style,
+          ]}
         />
       </View>
       {!!hint && (
