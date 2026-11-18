@@ -187,7 +187,9 @@ test("stage_rows stages extracted rows with rules, keeps identical journeys and 
 test("add_staged_rows adds a missed credit to an open staged import for review", () =>
   withChatDb(async (db) => {
     const { user, context } = await setup(db, "add-rows");
-    const other = await db.user.create({ data: { username: "add-rows-other" } });
+    const other = await db.user.create({
+      data: { username: "add-rows-other" },
+    });
     const card = "532392****2124";
     const charge = {
       date: "2026-09-16",
@@ -270,11 +272,10 @@ test("add_staged_rows adds a missed credit to an open staged import for review",
       /exactly one of amountIn or amountOut/,
     );
     await assert.rejects(
-      tools.execute(
-        { ...context, userId: other.id },
-        "add_staged_rows",
-        { ...input, expectedVersion: 4 },
-      ),
+      tools.execute({ ...context, userId: other.id }, "add_staged_rows", {
+        ...input,
+        expectedVersion: 4,
+      }),
       /Import draft not found/,
     );
     await db.importDraft.update({
@@ -282,10 +283,16 @@ test("add_staged_rows adds a missed credit to an open staged import for review",
       data: { status: "committed" },
     });
     await assert.rejects(
-      tools.execute(context, "add_staged_rows", { ...input, expectedVersion: 4 }),
+      tools.execute(context, "add_staged_rows", {
+        ...input,
+        expectedVersion: 4,
+      }),
       /Cannot add rows to a committed draft/,
     );
-    assert.equal(await db.importDraftRow.count({ where: { draftId: draft.id } }), 2);
+    assert.equal(
+      await db.importDraftRow.count({ where: { draftId: draft.id } }),
+      2,
+    );
   }));
 
 test("read_attachment pages through documents and refuses images", () =>
@@ -597,6 +604,16 @@ test("memories are owned, capped, editable and given to every run", () =>
     assert.equal(seen.length, 2);
     const notes = JSON.parse(seen[0].content);
     assert.equal(notes.type, "saved_notes");
+    // A note scoped to one task must not rescope a general question.
+    assert.match(
+      notes.note,
+      /only when the current request is about what it covers/,
+    );
+    assert.match(
+      notes.note,
+      /never narrows, filters or rescopes a general question/,
+    );
+    assert.match(notes.note, /mention the note that might be relevant/);
     assert.deepEqual(notes.notes, [
       { id, content: "Townsville journeys are hers" },
     ]);
