@@ -50,6 +50,7 @@ const SCOPES = [
   "parser:approve",
   "accounts:read",
   "accounts:write",
+  "analytics:read",
 ];
 const DEFAULT_SCOPES = [
   "statements:write",

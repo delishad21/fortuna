@@ -12,6 +12,7 @@ export const API_TOKEN_SCOPES = [
   "parser:approve",
   "accounts:read",
   "accounts:write",
+  "analytics:read",
 ] as const;
 
 export type ApiTokenScope = (typeof API_TOKEN_SCOPES)[number];

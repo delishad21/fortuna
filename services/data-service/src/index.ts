@@ -5,6 +5,7 @@ import cors from "cors";
 import { transactionRouter } from "./modules/transactions/transactions.controller";
 import { reimbursementRouter } from "./modules/reimbursements/links.controller";
 import { analyticsRouter } from "./modules/analytics/analytics.controller";
+import { agentAnalyticsRouter } from "./modules/analytics/agent-analytics.controller";
 import { tripInvitationsRouter, tripsRouter, walletAccountsRouter } from "./modules/trips/trips.controller";
 import { apiAuthRouter } from "./modules/auth/auth.controller";
 import { hermesWorkflowRouter } from "./modules/imports/hermes-workflow.controller";
@@ -40,6 +41,7 @@ app.use("/api/agent/context", hermesContextRouter);
 app.use("/api/agent/parser-factory", parserFactoryRouter);
 app.use("/api/parser-runtime", parserRuntimeRouter);
 app.use("/api/agent/accounts", accountsRouter);
+app.use("/api/agent/analytics", agentAnalyticsRouter);
 
 // Error handling
 app.use(
