@@ -144,4 +144,8 @@ export interface TransactionTableProps {
   ) => ReactNode;
   reviewActionLeft?: ReactNode;
   primaryActionLabel?: string;
+  /** Shows the primary action as unavailable; the caller ignores clicks on it. */
+  primaryActionDisabled?: boolean;
+  /** Hide the toolbar when the surrounding page shows its actions. */
+  showToolbar?: boolean;
 }

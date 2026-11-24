@@ -277,8 +277,16 @@ export function CategorySelect({
     }
   }, [isOpen, dropdownPlacement]);
 
+  // Back to the trigger without reopening it, so Tab goes on from this cell.
+  const focusTrigger = () => {
+    pointerFocusRef.current = true;
+    triggerRef.current?.focus({ preventScroll: true });
+    pointerFocusRef.current = false;
+  };
+
   const handleSelect = (categoryId: string) => {
     cancelTypeahead();
+    focusTrigger();
     if (categoryId !== (value ?? "")) holdChoice(categoryId);
     onChange(categoryId);
     setIsOpen(false);
@@ -353,6 +361,8 @@ export function CategorySelect({
           triggerOnKeyDown?.(event);
           if (event.defaultPrevented) return;
           if (event.key === "Escape") {
+            // This Escape closes the picker, not the dialog around it.
+            if (isOpen || pendingIdRef.current !== null) event.preventDefault();
             cancelTypeahead();
             setIsOpen(false);
             return;
@@ -465,7 +475,22 @@ export function CategorySelect({
                   if (event.key === "Escape") {
                     event.preventDefault();
                     setIsOpen(false);
-                    requestAnimationFrame(() => triggerRef.current?.focus());
+                    focusTrigger();
+                    return;
+                  }
+                  if (event.key === "Tab") {
+                    // Tab as from the trigger, where the table decides what comes next.
+                    setIsOpen(false);
+                    focusTrigger();
+                    const handled = !triggerRef.current?.dispatchEvent(
+                      new KeyboardEvent("keydown", {
+                        key: "Tab",
+                        shiftKey: event.shiftKey,
+                        bubbles: true,
+                        cancelable: true,
+                      }),
+                    );
+                    if (handled) event.preventDefault();
                     return;
                   }
                   if (event.key === "Enter" && visibleCategories[0]) {

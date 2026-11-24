@@ -55,6 +55,7 @@ import type {
 import { DuplicateWarningBanner } from "./DuplicateWarningBanner";
 import { TransactionRowExpanded } from "./TransactionRowExpanded";
 import { DuplicateMatchList } from "./DuplicateMatchList";
+import { useCellDraft } from "./hooks/useCellDraft";
 import { useColumnResize } from "./hooks/useColumnResize";
 import { DEFAULT_COLUMN_WIDTHS, MIN_COLUMN_WIDTHS } from "./config/columns";
 import { areTransactionTablePropsEqual } from "./memo";
@@ -83,20 +84,14 @@ const DeferredTextInput = memo(function DeferredTextInput({
   dataCol,
   onCommit,
 }: DeferredTextInputProps) {
-  const [draft, setDraft] = useState(value);
-
-  useEffect(() => {
-    setDraft(value);
-  }, [value]);
+  const { draft, setDraft, commit } = useCellDraft(value, onCommit);
 
   return (
     <input
       type="text"
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => {
-        if (draft !== value) onCommit(draft);
-      }}
+      onBlur={commit}
       placeholder={placeholder}
       disabled={disabled}
       data-row={dataRow}
@@ -127,11 +122,9 @@ const DeferredDecimalInput = memo(function DeferredDecimalInput({
 }: DeferredDecimalInputProps) {
   const valueString =
     value === null || value === undefined ? "" : String(value);
-  const [draft, setDraft] = useState(valueString);
-
-  useEffect(() => {
-    setDraft(valueString);
-  }, [valueString]);
+  const { draft, setDraft, commit } = useCellDraft(valueString, (text) =>
+    onCommit(text ? parseFloat(text) || 0 : undefined),
+  );
 
   return (
     <input
@@ -139,11 +132,7 @@ const DeferredDecimalInput = memo(function DeferredDecimalInput({
       inputMode="decimal"
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => {
-        if (draft === valueString) return;
-        const parsed = draft ? parseFloat(draft) || 0 : undefined;
-        onCommit(parsed);
-      }}
+      onBlur={commit}
       placeholder={placeholder}
       disabled={disabled}
       data-row={dataRow}
@@ -174,19 +163,13 @@ const DeferredTextarea = memo(function DeferredTextarea({
   onInput,
   onCommit,
 }: DeferredTextareaProps) {
-  const [draft, setDraft] = useState(value);
-
-  useEffect(() => {
-    setDraft(value);
-  }, [value]);
+  const { draft, setDraft, commit } = useCellDraft(value, onCommit);
 
   return (
     <textarea
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => {
-        if (draft !== value) onCommit(draft);
-      }}
+      onBlur={commit}
       onInput={onInput}
       disabled={disabled}
       rows={1}
@@ -242,6 +225,8 @@ function TransactionTableComponent({
   renderExpandedActions,
   reviewActionLeft,
   primaryActionLabel,
+  primaryActionDisabled = false,
+  showToolbar = true,
 }: TransactionTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   // Column filters, sorts, search and toggles. Lives here so it resets when
@@ -612,6 +597,33 @@ function TransactionTableComponent({
   const partiallyVisibleSelected =
     selectedVisibleCount > 0 && selectedVisibleCount < visibleIndices.length;
 
+  const findCell = (row: number, column: string) =>
+    tableContainerRef.current?.querySelector<HTMLElement>(
+      `[data-row="${row}"][data-col="${column}"]`,
+    );
+
+  /** Focuses the column's first enabled cell from `row` on, rendering its row if needed. */
+  const focusCell = (row: number, column: string, direction: 1 | -1) => {
+    for (
+      let next = row;
+      next >= 0 && next < visibleRows.length;
+      next += direction
+    ) {
+      const element = findCell(next, column);
+      if (!element) {
+        rowVirtualizer.scrollToIndex(next);
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => findCell(next, column)?.focus()),
+        );
+        return;
+      }
+      if (!element.matches(":disabled")) {
+        element.focus();
+        return;
+      }
+    }
+  };
+
   const handleTableKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Tab") return;
     const target = event.target as HTMLElement;
@@ -622,40 +634,21 @@ function TransactionTableComponent({
     event.preventDefault();
     const currentRow = Number(rowAttr);
     if (!event.shiftKey && colAttr === "label") {
-      const nextEl = tableContainerRef.current?.querySelector<HTMLElement>(
-        `[data-row="${currentRow}"][data-col="category"]`,
-      );
-      nextEl?.focus();
+      const category = findCell(currentRow, "category");
+      if (category && !category.matches(":disabled")) {
+        category.focus();
+        return;
+      }
+      // A locked category can't take focus; go on as if it had been passed.
+      focusCell(currentRow + 1, "label", 1);
       return;
     }
     if (!event.shiftKey && colAttr === "category") {
-      const nextEl = tableContainerRef.current?.querySelector<HTMLElement>(
-        `[data-row="${currentRow + 1}"][data-col="label"]`,
-      );
-      nextEl?.focus();
+      focusCell(currentRow + 1, "label", 1);
       return;
     }
-
     const direction = event.shiftKey ? -1 : 1;
-
-    let nextRow = currentRow + direction;
-    while (nextRow >= 0 && nextRow < visibleRows.length) {
-      const nextEl = tableContainerRef.current?.querySelector<HTMLElement>(
-        `[data-row="${nextRow}"][data-col="${colAttr}"]`,
-      );
-      if (nextEl) {
-        const isDisabled =
-          nextEl instanceof HTMLInputElement ||
-          nextEl instanceof HTMLButtonElement
-            ? nextEl.disabled
-            : nextEl.getAttribute("aria-disabled") === "true";
-        if (!isDisabled) {
-          nextEl.focus();
-          break;
-        }
-      }
-      nextRow += direction;
-    }
+    focusCell(currentRow + direction, colAttr, direction);
   };
 
   useEffect(() => {
@@ -666,28 +659,31 @@ function TransactionTableComponent({
 
   return (
     <div className="h-full flex-1 flex flex-col min-h-0 overflow-hidden">
-      <TransactionTableToolbar
-        parsedData={parsedData}
-        accountIdentifier={accountIdentifier}
-        accountColor={accountColor}
-        accountIdentifiers={accountIdentifiers}
-        isNewAccount={isNewAccount}
-        selectedCount={selectedIndices?.size || 0}
-        totalCount={transactions.length}
-        duplicateCount={duplicates?.size || 0}
-        showDuplicatesOnly={showDuplicatesOnly}
-        showAccountSelector={showAccountSelector}
-        isCheckingDuplicates={isCheckingDuplicates || false}
-        isImporting={isImporting || false}
-        onBack={onBack}
-        onImport={onImport}
-        onConfirmImport={onConfirmImport}
-        onAccountIdentifierChange={onAccountIdentifierChange}
-        onAccountColorChange={onAccountColorChange}
-        onAddAccountIdentifier={onAddAccountIdentifier}
-        reviewActionLeft={reviewActionLeft}
-        primaryActionLabel={primaryActionLabel}
-      />
+      {showToolbar && (
+        <TransactionTableToolbar
+          parsedData={parsedData}
+          accountIdentifier={accountIdentifier}
+          accountColor={accountColor}
+          accountIdentifiers={accountIdentifiers}
+          isNewAccount={isNewAccount}
+          selectedCount={selectedIndices?.size || 0}
+          totalCount={transactions.length}
+          duplicateCount={duplicates?.size || 0}
+          showDuplicatesOnly={showDuplicatesOnly}
+          showAccountSelector={showAccountSelector}
+          isCheckingDuplicates={isCheckingDuplicates || false}
+          isImporting={isImporting || false}
+          onBack={onBack}
+          onImport={onImport}
+          onConfirmImport={onConfirmImport}
+          onAccountIdentifierChange={onAccountIdentifierChange}
+          onAccountColorChange={onAccountColorChange}
+          onAddAccountIdentifier={onAddAccountIdentifier}
+          reviewActionLeft={reviewActionLeft}
+          primaryActionLabel={primaryActionLabel}
+          primaryActionDisabled={primaryActionDisabled}
+        />
+      )}
 
       <TransactionTableFilterBar
         search={tableView.search}
@@ -719,7 +715,7 @@ function TransactionTableComponent({
       <div
         ref={tableContainerRef}
         onKeyDown={handleTableKeyDown}
-        className="relative flex-1 min-h-0 overflow-auto bg-white dark:bg-dark-2 rounded-lg border border-stroke dark:border-dark-3"
+        className="relative flex-1 min-h-0 scroll-pt-14 overflow-auto overscroll-contain bg-white dark:bg-dark-2 rounded-lg border border-stroke dark:border-dark-3"
       >
         {showPreparingState && (
           <div className="sticky top-0 z-20 border-b border-primary/20 bg-primary/10 px-4 py-2 backdrop-blur-sm">

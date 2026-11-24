@@ -31,6 +31,8 @@ interface TransactionTableToolbarProps {
   onAddAccountIdentifier?: () => void;
   reviewActionLeft?: ReactNode;
   primaryActionLabel?: string;
+  /** Shows the action as unavailable; it stays focusable and the caller ignores clicks. */
+  primaryActionDisabled?: boolean;
 }
 
 export function TransactionTableToolbar({
@@ -54,6 +56,7 @@ export function TransactionTableToolbar({
   onAddAccountIdentifier,
   reviewActionLeft,
   primaryActionLabel,
+  primaryActionDisabled = false,
 }: TransactionTableToolbarProps) {
   return (
     <div className="shrink-0 py-3 mb-3">
@@ -119,6 +122,8 @@ export function TransactionTableToolbar({
                 variant="success"
                 onClick={onImport}
                 disabled={isCheckingDuplicates || selectedCount === 0}
+                aria-disabled={primaryActionDisabled || undefined}
+                className={primaryActionDisabled ? "opacity-70" : ""}
                 leftIcon={<CheckCircle className="h-4 w-4" />}
               >
                 {isCheckingDuplicates

@@ -92,7 +92,16 @@ export function AccountIdentifierSelect({
       window.addEventListener("scroll", handleScroll, true);
       window.addEventListener("resize", handleScroll);
 
+      // Escape closes the open menu, not the dialog around it.
+      function handleEscape(event: KeyboardEvent) {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        setIsOpen(false);
+      }
+      document.addEventListener("keydown", handleEscape);
+
       return () => {
+        document.removeEventListener("keydown", handleEscape);
         window.removeEventListener("scroll", handleScroll, true);
         window.removeEventListener("resize", handleScroll);
       };
