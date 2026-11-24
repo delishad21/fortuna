@@ -214,7 +214,7 @@ function Breakdown({
                             style={{
                               backgroundColor: item.other
                                 ? OTHER
-                                : item.color || PRIMARY,
+                                : item.color || OTHER,
                             }}
                           />
                         )}
@@ -235,7 +235,7 @@ function Breakdown({
                           backgroundColor: item.other
                             ? OTHER
                             : block.groupBy === "category"
-                              ? item.color || PRIMARY
+                              ? item.color || OTHER
                               : PRIMARY,
                         }}
                       />

@@ -474,6 +474,7 @@ export const isUnsure = (row: ReviewRow) =>
   row.suggestion?.confidence !== undefined &&
   row.suggestion.confidence < UNSURE_CONFIDENCE;
 export type ChatMemory = { id: string; content: string; updatedAt: string };
+export type ReviewCategory = { id: string; name: string; color?: string | null };
 export type TransactionReview = {
   id: string;
   conversationId: string;
@@ -483,8 +484,13 @@ export type TransactionReview = {
   version: number;
   decidedAt?: string | null;
   rows: ReviewRow[];
-  categories: { id: string; name: string; color?: string }[];
-  accounts: { id: string; accountIdentifier: string; color?: string }[];
+  categories: ReviewCategory[];
+  accounts: {
+    id: string;
+    accountIdentifier: string;
+    label?: string | null;
+    color?: string | null;
+  }[];
 };
 /** What in this conversation still waits for the user, oldest first. */
 export function waitingForUser(

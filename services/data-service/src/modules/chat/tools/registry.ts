@@ -129,7 +129,7 @@ export function createToolRegistry(
     {
       name: "propose_transaction_edits",
       description:
-        "Preview changes to saved transactions. Returns a proposal that ONLY the user can approve in the interface. Never assume approval. This includes reimbursement links: a saved money-in transaction (linkage type 'reimbursement') can pay back saved transactions (transactionId) or staged rows of any staged import (stagedDraftId + stagedRowId), and the preview shows every link it adds, removes or re-allocates. Only saved transactions can be edited here; when the reimbursement itself is a staged row, or the user must decide row by row, use request_transaction_review. If the edit would change nothing, no proposal is made and you get an error: tell the user instead.",
+        "Preview changes to saved transactions. Returns a proposal that ONLY the user can approve in the interface. Never assume approval. This includes reimbursement links: a saved money-in transaction (linkage type 'reimbursement') can pay back saved transactions (transactionId) or staged rows of any staged import (stagedDraftId + stagedRowId), and the preview shows every link it adds, removes or re-allocates. Only saved transactions can be edited here; when the reimbursement itself is a staged row, or the user must decide row by row, use request_transaction_review. Setting a category other than Internal also clears an automatic internal mark, and setting Internal adds the mark, unless you pass linkage; a mark the user set stays until you pass linkage null (when applying a submitted review, copy each changed row's linkage from its value, including null), and reimbursement links are kept. If the edit would change nothing, no proposal is made and you get an error: tell the user instead.",
       inputSchema: objectSchema(
         {
           edits: {
@@ -203,7 +203,7 @@ export function createToolRegistry(
           type: "array",
           maxItems: 100,
           description:
-            "Pre-filled edits per row. Fields: label, description, date, categoryId (from get_context), accountIdentifier, amountIn, amountOut, currency, linkage ({type:'internal'} | {type:'reimbursement', reimbursesAllocations:[{transactionId | stagedDraftId+stagedRowId, amount}]} | null). A reimbursement row may pay back saved transactions or staged rows in any staged import; links are checked when saved (money in pays money out, no over-allocation), and imports linked to each other must be committed together with commit_drafts.",
+            "Pre-filled edits per row. Fields: label, description, date, categoryId (from get_context), accountIdentifier, amountIn, amountOut, currency, linkage ({type:'internal'} | {type:'reimbursement', reimbursesAllocations:[{transactionId | stagedDraftId+stagedRowId, amount}]} | null). Setting a category other than Internal also clears an automatic internal mark, and setting Internal adds it, unless you pass linkage; a mark the user set stays. A reimbursement row may pay back saved transactions or staged rows in any staged import; links are checked when saved (money in pays money out, no over-allocation), and imports linked to each other must be committed together with commit_drafts.",
           items: {
             type: "object",
             properties: {

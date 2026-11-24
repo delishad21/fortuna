@@ -6,6 +6,12 @@ import { ChatContext, ChatError, idSchema } from "./contracts";
 import { json } from "./tools/transactions";
 import { supersedeReviews } from "./pending";
 import { ReadTools } from "./tools/read";
+import {
+  alignReviewRows,
+  internalCategoryIds,
+  withChosenLinkage,
+  withSuggestedLinkage,
+} from "./internal-mark";
 import { decorateDraftRows } from "../reimbursements/links.service";
 const amount = z.number().finite().min(0).max(9999999999.99).nullable();
 export const reviewPatch = z
@@ -121,6 +127,17 @@ export async function withLiveStagedRows(
       : row;
   });
 }
+/** An open review's rows as the editor shows them and as they are submitted. */
+export async function openReviewRows(
+  db: PrismaClient | Prisma.TransactionClient,
+  userId: string,
+  rows: ReviewRow[],
+) {
+  return withLiveStagedRows(
+    db,
+    alignReviewRows(rows, await internalCategoryIds(db, userId)),
+  );
+}
 const stale = (error: unknown) =>
   (error as { status?: number }).status === 409
     ? new ChatError(
@@ -217,9 +234,41 @@ export class ReviewService {
           404,
           "A suggested category or account was not found",
         );
+      const internalIds = await internalCategoryIds(tx, context.userId);
+      const suggestedIds = [...suggested.keys()];
+      // Links to staged rows aren't in the cached linkage, so read the link table.
+      const links = await tx.reimbursementLink.findMany({
+        where: {
+          userId: context.userId,
+          OR: [
+            { reimbursementTransactionId: { in: suggestedIds } },
+            { expenseTransactionId: { in: suggestedIds } },
+            { reimbursementDraftRowId: { in: suggestedIds } },
+            { expenseDraftRowId: { in: suggestedIds } },
+          ],
+        },
+      });
+      const linked = new Set(
+        links.flatMap((l) => [
+          l.reimbursementTransactionId,
+          l.expenseTransactionId,
+          l.reimbursementDraftRowId,
+          l.expenseDraftRowId,
+        ]),
+      );
       const withSuggestion = (id: string, original: any) => ({
         ...original,
-        ...(suggested.get(id) || {}),
+        ...withSuggestedLinkage(
+          original,
+          suggested.get(id) || {},
+          internalIds,
+          {
+            type: "internal",
+            autoDetected: true,
+            detectionReason: "Suggested category is Internal",
+          },
+          linked.has(id),
+        ),
       });
       const rows: ReviewRow[] = [
         ...saved.map((t) => {
@@ -309,13 +358,13 @@ export class ReviewService {
       where: { id, userId, run: { conversation: { deletedAt: null } } },
     });
     if (!review) throw new ChatError(404, "Review not found");
-    const choices = await new ReadTools(this.db).context(userId);
+    const choices = await new ReadTools(this.db).reviewChoices(userId);
+    const rows = review.rows as unknown as ReviewRow[];
     return {
       ...review,
-      rows: await withLiveStagedRows(
-        this.db,
-        review.rows as unknown as ReviewRow[],
-      ),
+      rows: ["pending", "queued"].includes(review.status)
+        ? await openReviewRows(this.db, userId, rows)
+        : await withLiveStagedRows(this.db, rows),
       categories: choices.categories,
       accounts: choices.accounts,
     };
@@ -340,7 +389,11 @@ export class ReviewService {
           409,
           "This review is closed. Ask Fortuna for a new review.",
         );
-      const rows = review.rows as unknown as ReviewRow[];
+      const internalIds = await internalCategoryIds(tx, userId);
+      const rows = alignReviewRows(
+        review.rows as unknown as ReviewRow[],
+        internalIds,
+      );
       const stored = rows.find((r) => r.id === input.rowId);
       if (!stored) throw new ChatError(404, "Review row not found");
       const [row] = await withLiveStagedRows(tx, [stored]);
@@ -363,14 +416,15 @@ export class ReviewService {
         }))
       )
         throw new ChatError(404, "Account not found");
-      if (row.source.rowId) return { staged: row };
-      stored.value = { ...stored.value, ...input.patch };
+      const patch = withChosenLinkage(row.value, input.patch, internalIds);
+      if (row.source.rowId) return { staged: row, patch };
+      stored.value = { ...stored.value, ...patch };
       stored.version++;
       await tx.chatTransactionReview.update({
         where: { id },
         data: { rows: json(rows), version: { increment: 1 } },
       });
-      return { staged: null };
+      return { staged: null, patch };
     });
     if (result.staged) {
       const row = result.staged;
@@ -381,7 +435,7 @@ export class ReviewService {
           row.source.rowId!,
           {
             expectedVersion: input.version,
-            currentPayload: { ...row.value, ...input.patch },
+            currentPayload: { ...row.value, ...result.patch },
             reviewStatus: "edited",
           },
           actor,

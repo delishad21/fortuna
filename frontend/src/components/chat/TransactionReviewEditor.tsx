@@ -12,6 +12,7 @@ import {
   TransactionReview,
   reviewSuggestionSummary,
   isUnsure,
+  NEUTRAL_COLOR,
 } from "@/lib/chat/client";
 type ReviewAllocation = {
   transactionId?: string;
@@ -295,11 +296,11 @@ export function TransactionReviewEditor({
           transactions={transactions}
           categories={review.categories.map((c) => ({
             ...c,
-            color: c.color || "#5750F1",
+            color: c.color || NEUTRAL_COLOR,
           }))}
           accountIdentifiers={review.accounts.map((a) => ({
             ...a,
-            color: a.color || "#5750F1",
+            color: a.color || NEUTRAL_COLOR,
           }))}
           accountIdentifier=""
           showAccountSelector={false}

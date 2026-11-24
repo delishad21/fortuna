@@ -1,5 +1,7 @@
 /** Display logic for approval previews, shared by web and mobile. No server or UI dependencies. */
 
+/** Shown for a category or account whose saved colour is missing. */
+export const NEUTRAL_COLOR = "#9ca3af";
 export type CategoryChip = { name: string; color: string | null };
 export type LinkedSummary = {
   id: string;
@@ -257,6 +259,34 @@ export const summaryValue = (value: unknown): string =>
               .map(([k, v]) => `${summaryLabel(k)}: ${summaryValue(v)}`)
               .join(" · ")
           : String(value);
+
+/** The Internal category among a review's categories. */
+export const internalCategory = <T extends { name: string }>(categories: T[]) =>
+  categories.find((c) => c.name === "Internal") ||
+  categories.find((c) => c.name.toLowerCase() === "internal");
+/** The category a review row shows: its internal or reimbursement mark wins, as on the table. */
+export function reviewCategory(
+  value: Record<string, any>,
+  categories: Array<{ id: string; name: string; color?: string | null }>,
+): CategoryChip {
+  const type = value.linkage?.type;
+  const reserved =
+    type === "internal"
+      ? "Internal"
+      : type === "reimbursement"
+        ? "Reimbursement"
+        : null;
+  const found =
+    type === "internal"
+      ? internalCategory(categories)
+      : reserved
+        ? categories.find((c) => c.name === reserved)
+        : categories.find((c) => c.id === value.categoryId);
+  return {
+    name: found?.name || reserved || "Uncategorized",
+    color: found?.color || NEUTRAL_COLOR,
+  };
+}
 
 /** What a review's pre-filled suggestions change, e.g. "Category → Internal". */
 export function reviewSuggestionSummary(

@@ -1,6 +1,6 @@
 import { ChatQueuedMessage, Prisma, PrismaClient } from "@prisma/client";
 import { CHAT_LIMITS, SUBMITTED_REVIEW_TITLE } from "./contracts";
-import { ReviewRow, withLiveStagedRows } from "./reviews.service";
+import { openReviewRows, ReviewRow, withLiveStagedRows } from "./reviews.service";
 import { json } from "./tools/transactions";
 /**
  * Each conversation has a first-in, first-out queue of messages sent while it was replying.
@@ -192,7 +192,11 @@ async function startQueued(
     }
     let reviewBlock: Record<string, unknown> | null = null;
     if (review) {
-      const rows = review.rows as unknown as ReviewRow[];
+      const rows = await openReviewRows(
+        tx,
+        item.userId,
+        review.rows as unknown as ReviewRow[],
+      );
       const changed = await changedReviewRows(
         tx,
         item.userId,
@@ -205,7 +209,7 @@ async function startQueued(
         data: {
           reviewId: review.id,
           title: review.title,
-          rows: await withLiveStagedRows(tx, rows),
+          rows,
           ...(changed.length
             ? { changedSinceQueued: changed, note: CHANGED_REVIEW_NOTE }
             : {}),
@@ -213,7 +217,7 @@ async function startQueued(
       };
       await tx.chatTransactionReview.update({
         where: { id: review.id },
-        data: { status: "submitted" },
+        data: { status: "submitted", rows: json(rows) },
       });
     }
     await tx.chatMessage.create({

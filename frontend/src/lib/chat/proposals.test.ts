@@ -13,6 +13,8 @@ import {
   approvalsDismissedKey,
   waitingForUser,
   waitingIds,
+  reviewCategory,
+  NEUTRAL_COLOR,
 } from "../../../shared/chat";
 
 const stagedLink = {
@@ -159,4 +161,19 @@ test("the approvals bar stays hidden after ✕ until something new is waiting", 
   assert.equal(approvalsBarDismissed(dismissed, ids(["p1", "p2"], ["r1"])), false);
   assert.equal(approvalsBarDismissed(dismissed, ids(["p1"], ["r1", "r2"])), false);
   assert.notEqual(approvalsDismissedKey("c1"), approvalsDismissedKey("c2"));
+});
+
+test("a review row shows its mark's category, with a neutral dot for a missing colour", () => {
+  const categories = [
+    { id: "int", name: "Internal", color: "#9ca3af" },
+    { id: "snacks", name: "Snacks", color: "#ff9800" },
+    { id: "plain", name: "Plain", color: null },
+  ];
+  const show = (categoryId: string | null, linkage: unknown = null) =>
+    reviewCategory({ categoryId, linkage }, categories);
+  assert.deepEqual(show("snacks"), { name: "Snacks", color: "#ff9800" });
+  assert.deepEqual(show("plain"), { name: "Plain", color: NEUTRAL_COLOR });
+  assert.deepEqual(show(null), { name: "Uncategorized", color: NEUTRAL_COLOR });
+  assert.equal(show("snacks", { type: "internal" }).name, "Internal");
+  assert.equal(show("snacks", { type: "reimbursed" }).name, "Snacks");
 });

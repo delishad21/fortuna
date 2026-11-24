@@ -194,7 +194,7 @@ function Breakdown({ block }: { block: Of<"breakdown"> }) {
               const color = item.other
                 ? OTHER
                 : block.groupBy === "category"
-                  ? item.color || colors.purple
+                  ? item.color || OTHER
                   : colors.purple;
               return (
                 <View

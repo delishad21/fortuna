@@ -206,4 +206,20 @@ export class ReadTools {
     ]);
     return { categories, accounts, currentDate: new Date().toISOString() };
   }
+  /** What a review's editor offers: the same lists with their colours, for display only. */
+  async reviewChoices(userId: string) {
+    const [categories, accounts] = await Promise.all([
+      this.db.category.findMany({
+        where: { userId },
+        select: { id: true, name: true, color: true },
+        take: 300,
+      }),
+      this.db.accountIdentifier.findMany({
+        where: { userId },
+        select: { id: true, accountIdentifier: true, label: true, color: true },
+        take: 100,
+      }),
+    ]);
+    return { categories, accounts };
+  }
 }

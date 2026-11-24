@@ -15,6 +15,7 @@ import {
   KeyboardAvoid,
   Txt,
   Choice,
+  Dot,
   useTheme,
   confirm,
 } from "../ui";
@@ -29,10 +30,21 @@ import {
   CANCEL_REVIEW_CONFIRM,
   cancelReview,
   reviewStateLabel,
+  reviewCategory,
+  internalCategory,
+  NEUTRAL_COLOR,
 } from "./api";
 import { NeedsBadge } from "./ActionCard";
 import { Expandable } from "./Details";
 import { accountDisplay } from "../../../frontend/shared/accounts";
+function CategoryLine({ value }: { value: { name: string; color: string | null } }) {
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+      <Dot color={value.color || NEUTRAL_COLOR} />
+      <Txt>{value.name}</Txt>
+    </View>
+  );
+}
 export function ChatReviewCards({
   id,
   onSubmitted,
@@ -182,6 +194,7 @@ export function ChatReviewCards({
   }
   if (!review) return <Txt>{error || "Loading transaction review…"}</Txt>;
   const closed = review.status !== "pending";
+  const internal = internalCategory(review.categories);
   const suggestions = reviewSuggestionSummary(review.rows, review.categories);
   return (
     <View
@@ -301,10 +314,7 @@ export function ChatReviewCards({
               ? `−${Number(row.value.amountOut).toFixed(2)}`
               : `+${Number(row.value.amountIn || 0).toFixed(2)}`}
           </Txt>
-          <Txt>
-            {review.categories.find((c) => c.id === row.value.categoryId)
-              ?.name || "Uncategorized"}
-          </Txt>
+          <CategoryLine value={reviewCategory(row.value, review.categories)} />
           <Expandable title="More details">
             <Txt>{row.value.description}</Txt>
             <Txt muted>Balance: {row.value.balance ?? "—"}</Txt>
@@ -386,9 +396,22 @@ export function ChatReviewCards({
                   ...review.categories.map((c) => ({
                     label: c.name,
                     value: c.id,
+                    color: c.color || NEUTRAL_COLOR,
                   })),
                 ]}
-                onChange={(v) => setForm((f: any) => ({ ...f, categoryId: v }))}
+                onChange={(v) =>
+                  setForm((f: any) => ({
+                    ...f,
+                    categoryId: v,
+                    // Keeps the internal mark in step; reimbursements keep their type.
+                    type:
+                      v && v === internal?.id
+                        ? f.type || "internal"
+                        : f.type === "internal"
+                          ? ""
+                          : f.type,
+                  }))
+                }
               />
               <Choice
                 label="Account"
@@ -398,6 +421,7 @@ export function ChatReviewCards({
                   ...review.accounts.map((a) => ({
                     label: accountDisplay(a),
                     value: a.accountIdentifier,
+                    color: a.color || NEUTRAL_COLOR,
                   })),
                 ]}
                 onChange={(v) =>
@@ -412,7 +436,18 @@ export function ChatReviewCards({
                   { label: "Internal", value: "internal" },
                   { label: "Reimbursement", value: "reimbursement" },
                 ]}
-                onChange={(v) => setForm((f: any) => ({ ...f, type: v }))}
+                onChange={(v) =>
+                  setForm((f: any) => ({
+                    ...f,
+                    type: v,
+                    categoryId:
+                      v === "internal"
+                        ? internal?.id || f.categoryId
+                        : f.type === "internal" && f.categoryId === internal?.id
+                          ? ""
+                          : f.categoryId,
+                  }))
+                }
               />
               {form.type === "reimbursement" && (
                 <View style={{ gap: 12 }}>

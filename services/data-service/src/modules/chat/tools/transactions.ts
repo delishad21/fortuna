@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { withTransactionClient } from "../../../lib/database-context";
 import { TransactionService } from "../../transactions/transactions.service";
 import { ChatError, idSchema } from "../contracts";
+import { internalCategoryIds, withSuggestedLinkage } from "../internal-mark";
 const amount = z
   .union([
     z.string().regex(/^\d{1,10}(\.\d{1,2})?$/),
@@ -537,15 +538,42 @@ export class TransactionActions implements ActionHandler {
       ),
     });
   }
+  /** Category edits with the internal mark they clear or set, explicit in the proposal. */
+  private async withLinkage(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    input: z.infer<typeof editSchema>,
+    before: Awaited<ReturnType<TransactionActions["snapshot"]>>,
+  ): Promise<z.infer<typeof editSchema>> {
+    const internalIds = await internalCategoryIds(tx, userId);
+    const saved = new Map(before.transactions.map((t) => [t.id, t]));
+    const linked = new Set(
+      before.links.flatMap((l) => [l.reimbursement, l.expense]),
+    );
+    return {
+      ...input,
+      edits: input.edits.map((edit) => ({
+        ...edit,
+        patch: withSuggestedLinkage(
+          saved.get(edit.id) || {},
+          edit.patch,
+          internalIds,
+          { type: "internal" },
+          linked.has(`t:${edit.id}`),
+        ),
+      })),
+    };
+  }
   async prepare(userId: string, raw: unknown): Promise<PreparedAction> {
-    const input = editSchema.parse(raw);
+    const parsed = editSchema.parse(raw);
     try {
       await this.db.$transaction(
         async (tx) =>
           withTransactionClient(tx, async () => {
             await tx.$queryRaw`SELECT id FROM transactions WHERE user_id=${userId} ORDER BY id FOR UPDATE`;
-            await this.lockTargets(tx, userId, input);
-            const before = await this.snapshot(tx, userId, input);
+            await this.lockTargets(tx, userId, parsed);
+            const before = await this.snapshot(tx, userId, parsed);
+            const input = await this.withLinkage(tx, userId, parsed, before);
             await this.apply(tx, userId, input);
             const after = await this.snapshot(tx, userId, input);
             const categories = new Map(

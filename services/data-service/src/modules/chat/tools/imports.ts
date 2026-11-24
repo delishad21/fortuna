@@ -3,6 +3,7 @@ import { currentParserVersions, staleParserNote } from "../../imports/parser-ver
 import { IMAGE_NOT_STATEMENT, isImageType } from "../media";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
+import { internalCategoryIds, withSuggestedLinkage } from "../internal-mark";
 import { withDatabase } from "../../../lib/database-context";
 import { HermesWorkflowService as workflow } from "../../imports/hermes-workflow.service";
 import { ChatError, idSchema, ChatContext } from "../contracts";
@@ -274,7 +275,8 @@ export class ImportTools {
   }
   /**
    * Edit staged rows through the same path as the staged import page, writing each row's
-   * full current payload with only description, label, category and metadata changed.
+   * full current payload with only description, label, category and metadata changed
+   * (a category other than Internal also clears an automatic internal mark).
    * Amounts, dates, accounts and links stay as the bank row has them. Nothing is committed.
    */
   async editRows(context: ChatContext, raw: unknown) {
@@ -334,6 +336,7 @@ export class ImportTools {
       select: { id: true, currentPayload: true, version: true },
     });
     const current = new Map(rows.map((r) => [r.id, r]));
+    const internalIds = await internalCategoryIds(this.db, context.userId);
     const updated: Array<{ rowId: string; version: number }> = [];
     const failed: Array<{ rowId: string; error: string }> = [];
     for (const edit of input.rows) {
@@ -352,7 +355,18 @@ export class ImportTools {
       const next: Record<string, unknown> = { ...payload };
       if (edit.description !== undefined) next.description = edit.description;
       if (edit.label !== undefined) next.label = edit.label;
-      if (edit.categoryId !== undefined) next.categoryId = edit.categoryId;
+      if (edit.categoryId !== undefined)
+        Object.assign(
+          next,
+          // Committing marks an Internal row by itself; here the mark is only cleared.
+          withSuggestedLinkage(
+            payload,
+            { categoryId: edit.categoryId },
+            internalIds,
+            {},
+            true,
+          ),
+        );
       if (edit.metadata)
         next.metadata = {
           ...((payload.metadata as Record<string, unknown> | null) || {}),
