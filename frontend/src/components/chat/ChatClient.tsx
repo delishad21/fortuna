@@ -332,10 +332,9 @@ export function ChatClient() {
               {reviewStateLabel(found || { status })}
             </span>
           </p>
-          {/* Remount when the status changes elsewhere, so the editor reloads it. */}
           <TransactionReviewEditor
-            key={status}
             id={value.id}
+            status={status}
             onSubmitted={refresh}
           />
         </div>
