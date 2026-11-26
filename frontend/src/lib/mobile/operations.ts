@@ -92,6 +92,13 @@ import {
   setTransactionImage,
 } from "@/app/actions/accounts";
 import {
+  getSources,
+  getSourceSuggestions,
+  createSource,
+  updateSource,
+  deleteSource,
+} from "@/app/actions/sources";
+import {
   bootstrapDefaultImportRules,
   getImportRules,
   createImportRule,
@@ -284,6 +291,11 @@ export const mobileOperations = {
   setAccountImage,
   setCardImage,
   setTransactionImage,
+  getSources,
+  getSourceSuggestions,
+  createSource,
+  updateSource,
+  deleteSource,
   bootstrapDefaultImportRules,
   getImportRules,
   createImportRule,

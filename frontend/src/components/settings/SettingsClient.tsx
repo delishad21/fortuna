@@ -15,6 +15,7 @@ import {
   User,
   Tags,
   WalletCards,
+  BellRing,
   Settings2,
   WandSparkles,
   EyeOff,
@@ -22,6 +23,7 @@ import {
 import { CategoryIcon } from "@/components/ui/CategoryIcon";
 import { ManageCategoriesModal } from "@/components/settings/ManageCategoriesModal";
 import { ManageAccountsModal } from "@/components/settings/ManageAccountsModal";
+import { ManageSourcesModal } from "@/components/settings/ManageSourcesModal";
 import { ChangePasswordModal } from "@/components/settings/ChangePasswordModal";
 import { ManageImportRulesModal } from "@/components/settings/ManageImportRulesModal";
 import {
@@ -44,6 +46,8 @@ import {
 } from "@/app/actions/accountNumbers";
 import { getAccounts } from "@/app/actions/accounts";
 import type { Account } from "@/lib/accountTypes";
+import { getSources } from "@/app/actions/sources";
+import { sourceTitle, type TransactionSource } from "@/lib/sourceTypes";
 import {
   createImportRule,
   updateImportRule,
@@ -67,6 +71,7 @@ interface SettingsClientProps {
   initialCategories: Category[];
   initialAccountIdentifiers: AccountIdentifier[];
   initialAccounts: Account[];
+  initialSources: TransactionSource[];
   initialImportRules: ImportRule[];
   parserOptions: ParserOption[];
   initialClassificationPatterns: ClassificationPattern[];
@@ -79,6 +84,7 @@ export function SettingsClient({
   initialCategories,
   initialAccountIdentifiers,
   initialAccounts,
+  initialSources,
   initialImportRules,
   parserOptions,
   initialClassificationPatterns,
@@ -94,6 +100,7 @@ export function SettingsClient({
     initialAccountIdentifiers,
   );
   const [accounts, setAccounts] = useState<Account[]>(initialAccounts);
+  const [sources, setSources] = useState<TransactionSource[]>(initialSources);
   const [importRules, setImportRules] = useState<ImportRule[]>(initialImportRules);
   const [classificationPatterns, setClassificationPatterns] = useState<
     ClassificationPattern[]
@@ -135,6 +142,7 @@ export function SettingsClient({
 
   const [manageCategoriesOpen, setManageCategoriesOpen] = useState(false);
   const [manageAccountsOpen, setManageAccountsOpen] = useState(false);
+  const [manageSourcesOpen, setManageSourcesOpen] = useState(false);
   const [manageRulesOpen, setManageRulesOpen] = useState(false);
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [newCategory, setNewCategory] = useState({
@@ -267,6 +275,12 @@ export function SettingsClient({
     ]);
     setAccounts(nextAccounts);
     setAccountIdentifiers(nextIdentifiers);
+    // Merged accounts and moved cards take their sources along.
+    setSources(await getSources());
+  };
+
+  const reloadSources = async () => {
+    setSources(await getSources());
   };
 
   const handleSaveAllCategories = async () => {
@@ -480,6 +494,9 @@ export function SettingsClient({
   const accountsToReview = openAccounts.filter((account) => account.autoCreated);
   const accountPreview = openAccounts.slice(0, PREVIEW_CHIP_LIMIT);
   const accountRemaining = Math.max(openAccounts.length - PREVIEW_CHIP_LIMIT, 0);
+  const enabledSources = sources.filter((source) => source.enabled);
+  const sourcePreview = sources.slice(0, PREVIEW_CHIP_LIMIT);
+  const sourceRemaining = Math.max(sources.length - PREVIEW_CHIP_LIMIT, 0);
   const rulePreview = importRules.slice(0, PREVIEW_CHIP_LIMIT);
   const ruleRemaining = Math.max(importRules.length - PREVIEW_CHIP_LIMIT, 0);
   const learnedPatterns = classificationPatterns.filter(
@@ -746,6 +763,55 @@ export function SettingsClient({
               {accountRemaining > 0 && (
                 <span className="inline-flex items-center rounded-full border border-stroke px-3 py-1 dark:border-dark-3">
                   +{accountRemaining} more
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-stroke dark:border-dark-3 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex items-center gap-3 min-w-0">
+                <BellRing className="h-6 w-6 shrink-0 text-primary" />
+                <div className="min-w-0">
+                  <h4 className="text-base font-semibold text-dark dark:text-white">
+                    Sources
+                  </h4>
+                  <p className="text-sm text-dark-5 dark:text-dark-6 mt-1">
+                    Bank app notifications and alert emails the assistant
+                    watches.
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => setManageSourcesOpen(true)}
+              >
+                Manage
+              </Button>
+            </div>
+            {sources.length > 0 && (
+              <p className="mt-3 text-sm text-dark-5 dark:text-dark-6">
+                {enabledSources.length} of {sources.length} enabled.
+              </p>
+            )}
+            <div className="mt-4 flex max-h-[68px] flex-wrap gap-2 overflow-hidden text-sm text-dark-5 dark:text-dark-6">
+              {sourcePreview.map((source) => (
+                <span
+                  key={source.id}
+                  className="inline-flex max-w-full items-center gap-2 rounded-full border border-stroke px-3 py-1 dark:border-dark-3"
+                >
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: source.enabled ? source.account.color : "transparent", border: `1px solid ${source.account.color}` }}
+                  />
+                  <span className="truncate">{sourceTitle(source)}</span>
+                </span>
+              ))}
+              {sources.length === 0 && <span>No sources yet.</span>}
+              {sourceRemaining > 0 && (
+                <span className="inline-flex items-center rounded-full border border-stroke px-3 py-1 dark:border-dark-3">
+                  +{sourceRemaining} more
                 </span>
               )}
             </div>
@@ -1081,6 +1147,18 @@ export function SettingsClient({
         accounts={accounts}
         onClose={() => setManageAccountsOpen(false)}
         onChanged={reloadAccounts}
+        onError={(title, message) => showModal("error", title, message)}
+        onConfirm={(title, message, action) =>
+          showModal("warning", title, message, () => void action())
+        }
+      />
+
+      <ManageSourcesModal
+        isOpen={manageSourcesOpen}
+        sources={sources}
+        accounts={accounts}
+        onClose={() => setManageSourcesOpen(false)}
+        onChanged={reloadSources}
         onError={(title, message) => showModal("error", title, message)}
         onConfirm={(title, message, action) =>
           showModal("warning", title, message, () => void action())
