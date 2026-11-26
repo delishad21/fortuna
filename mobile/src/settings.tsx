@@ -52,6 +52,7 @@ const SCOPES = [
   "accounts:write",
   "analytics:read",
   "transactions:write",
+  "transactions:review",
 ];
 const DEFAULT_SCOPES = [
   "statements:write",

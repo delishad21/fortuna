@@ -2177,6 +2177,7 @@ export function TransactionRow({
   if (item.linkage?.type === "reimbursement" && !tripEntry) badges.push({ label: "Reimbursement", tone: "green" });
   if (item.linkage?.reimbursedByAllocations?.length) badges.push({ label: "Reimbursed", tone: "green" });
   if (item.metadata?.sourceDetached) badges.push({ label: "Bank row removed", tone: "red" });
+  if (!tripEntry && item.reviewStatus === "to_review") badges.unshift({ label: "To review", tone: "amber" });
   // Where a ledger row came from, ticked once a statement has confirmed it.
   const source = !tripEntry && item.entrySource ? entrySourceLabel(item.entrySource) : null;
   const amount = tripEntry ? item.localAmount : income ? item.amountIn : item.amountOut;

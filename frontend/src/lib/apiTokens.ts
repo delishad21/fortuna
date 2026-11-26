@@ -14,6 +14,7 @@ export const API_TOKEN_SCOPES = [
   "accounts:write",
   "analytics:read",
   "transactions:write",
+  "transactions:review",
 ] as const;
 
 export type ApiTokenScope = (typeof API_TOKEN_SCOPES)[number];

@@ -14,6 +14,7 @@ import {
   exportTransactionsCsv,
   searchTransactionsForReimbursement,
   getLinkedTransactions,
+  setTransactionsReviewStatus,
 } from "@/app/actions/transactions";
 import {
   getTrips,
@@ -203,6 +204,7 @@ export const mobileOperations = {
   exportTransactionsCsv,
   searchTransactionsForReimbursement,
   getLinkedTransactions,
+  setTransactionsReviewStatus,
   getTrips,
   createTrip,
   getTrip,

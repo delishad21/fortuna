@@ -61,6 +61,9 @@ import {
   entrySourceLabel,
   reconciledLabel,
   reconciledParam,
+  reviewStatusParam,
+  reviewReasonsText,
+  classificationLabel,
 } from "../../frontend/shared/entrySource";
 
 /** Filters as the transactions actions expect them (dates are revived on the server). */
@@ -71,12 +74,13 @@ const toQuery = (filters: any, search: string) => {
   if (!q.categoryIds?.length) delete q.categoryIds;
   q.entrySource = q.entrySource ? [q.entrySource] : undefined;
   q.reconciled = reconciledParam(q.reconciled);
+  q.reviewStatus = reviewStatusParam(q.reviewStatus);
   return Object.fromEntries(
     Object.entries(q).filter(([, v]) => v !== "" && v != null),
   );
 };
 const filterCount = (f: any) =>
-  ["dateFrom", "dateTo", "minAmount", "maxAmount", "accountIdentifier", "entrySource", "reconciled"].filter((k) => f[k] != null && f[k] !== "")
+  ["dateFrom", "dateTo", "minAmount", "maxAmount", "accountIdentifier", "entrySource", "reconciled", "reviewStatus"].filter((k) => f[k] != null && f[k] !== "")
     .length + (f.categoryIds?.length ? 1 : 0) + (f.dateOrder === "asc" ? 1 : 0);
 
 function FilterSheet({ visible, onClose, filters, onApply, categories, accounts }: any) {
@@ -189,6 +193,14 @@ function FilterSheet({ visible, onClose, filters, onApply, categories, accounts 
           labels={{ "": "All", reconciled: "Reconciled", unreconciled: "Not yet" }}
           value={draft.reconciled || ""}
           onChange={(reconciled) => set({ reconciled: reconciled || undefined })}
+        />
+      </Section>
+      <Section title="Review">
+        <Segmented
+          values={["", "to_review", "reviewed"]}
+          labels={{ "": "All", to_review: "To review", reviewed: "Reviewed" }}
+          value={draft.reviewStatus || ""}
+          onChange={(reviewStatus) => set({ reviewStatus: reviewStatus || undefined })}
         />
       </Section>
       <Section title="Order">
@@ -399,7 +411,8 @@ export function TransactionsScreen({ navigation, route }: any) {
               filters.categoryIds?.length ||
               filters.accountIdentifier ||
               filters.entrySource ||
-              filters.reconciled) && (
+              filters.reconciled ||
+              filters.reviewStatus) && (
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
                 {(filters.dateFrom || filters.dateTo) && (
                   <Pill icon="calendar-outline" tone="purple" label={`${fmtDate(filters.dateFrom) || "Start"} – ${fmtDate(filters.dateTo) || "now"}`} />
@@ -418,6 +431,13 @@ export function TransactionsScreen({ navigation, route }: any) {
                     icon="checkmark-circle-outline"
                     tone="purple"
                     label={filters.reconciled === "reconciled" ? "Reconciled" : "Not reconciled"}
+                  />
+                )}
+                {filters.reviewStatus && (
+                  <Pill
+                    icon="eye-outline"
+                    tone="purple"
+                    label={filters.reviewStatus === "to_review" ? "To review" : "Reviewed"}
                   />
                 )}
                 <Pressable accessibilityRole="button" accessibilityLabel="Clear filters" onPress={() => setFilters({})}>
@@ -630,9 +650,22 @@ export function TransactionScreen({ navigation, route }: any) {
           {reimbursedBy.length > 0 && <Pill tone="green" label="Reimbursed" />}
           {t.metadata?.splitFromTransactionId && <Pill tone="amber" label="Split" />}
           {!!t.entrySource && <EntrySourcePill entrySource={t.entrySource} reconciled={t.reconciled} />}
+          {t.reviewStatus === "to_review" && <Pill tone="amber" label="To review" />}
         </View>
       </Card>
       <View style={[styles.row, { gap: 8, flexWrap: "wrap" }]}>
+        {t.reviewStatus === "to_review" && (
+          <Button
+            title="Mark reviewed"
+            compact
+            icon="checkmark-done-outline"
+            onPress={async () => {
+              await call("setTransactionsReviewStatus", [t.id], "reviewed");
+              toast("Marked reviewed");
+              await reload();
+            }}
+          />
+        )}
         <Button title="Edit" compact secondary icon="create-outline" onPress={() => setEditing(true)} />
         <Button
           title="Split"
@@ -683,6 +716,15 @@ export function TransactionScreen({ navigation, route }: any) {
           {t.balance != null && <KeyValue label="Balance" mono value={money(t.balance, t.currency)} />}
           {!!t.currency && <KeyValue label="Currency" value={t.currency} />}
           {!!t.entrySource && <KeyValue label="Source" value={entrySourceLabel(t.entrySource)} />}
+          {!!classificationLabel(t.metadata?.classification) && (
+            <KeyValue label="Category from" value={classificationLabel(t.metadata?.classification)!} />
+          )}
+          {t.reviewStatus === "to_review" && (
+            <KeyValue
+              label="Review"
+              value={t.reviewReasons?.length ? `To review · ${reviewReasonsText(t.reviewReasons)}` : "To review"}
+            />
+          )}
           {!!t.entrySource && (
             <KeyValue
               label="Reconciled"

@@ -161,6 +161,7 @@ export async function getTransactions(filters?: {
   accountIdentifier?: string;
   entrySource?: string[];
   reconciled?: boolean;
+  reviewStatus?: "to_review" | "reviewed";
   limit?: number;
   offset?: number;
 }) {
@@ -194,6 +195,7 @@ export async function getTransactions(filters?: {
     ...(filters?.reconciled !== undefined && {
       reconciled: String(filters.reconciled),
     }),
+    ...(filters?.reviewStatus && { reviewStatus: filters.reviewStatus }),
     ...(filters?.limit && { limit: filters.limit.toString() }),
     ...(filters?.offset && { offset: filters.offset.toString() }),
   });
@@ -355,6 +357,33 @@ export interface TransactionFilterPayload {
   accountIdentifier?: string;
   entrySource?: string[];
   reconciled?: boolean;
+  reviewStatus?: "to_review" | "reviewed";
+}
+
+/** Marks transactions reviewed, or puts them back in the review queue. */
+export async function setTransactionsReviewStatus(
+  ids: string[],
+  status: "to_review" | "reviewed" = "reviewed",
+) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    throw new Error("Unauthorized");
+  }
+
+  const response = await fetch(`${DATA_SERVICE_URL}/api/transactions/review-status`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ userId: session.user.id, ids, status }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || "Failed to update the review status");
+  }
+
+  return response.json();
 }
 
 export async function bulkUpdateTransactionsByIds(

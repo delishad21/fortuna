@@ -15,7 +15,13 @@ import {
 import { Checkbox } from "@/components/ui/Checkbox";
 import Link from "next/link";
 import { EntrySourceBadge } from "@/components/transactions/EntrySourceBadge";
-import { reconciledLabel, entrySourceLabel } from "@/lib/entrySource";
+import { ReviewBadge } from "@/components/transactions/ReviewBadge";
+import {
+  reconciledLabel,
+  entrySourceLabel,
+  reviewReasonsText,
+  classificationLabel,
+} from "@/lib/entrySource";
 
 export interface TransactionLinkage {
   type: "internal" | "reimbursement" | "reimbursed";
@@ -57,6 +63,9 @@ export interface TransactionCardTransaction {
   entrySource?: string | null;
   reconciled?: boolean | null;
   reconciledAt?: string | null;
+  /** to_review while an assistant entry waits for review. */
+  reviewStatus?: string | null;
+  reviewReasons?: string[] | null;
   category?: {
     id: string;
     name: string;
@@ -98,6 +107,8 @@ interface TransactionCardProps {
   wrapText?: boolean;
   onEdit?: (transaction: TransactionCardTransaction) => void;
   onDelete?: (id: string) => void;
+  /** Shown on rows waiting for review. */
+  onMarkReviewed?: (id: string) => void;
   selected?: boolean;
   selectionTone?: "primary" | "success";
   onToggleSelect?: () => void;
@@ -150,6 +161,7 @@ export function TransactionCard({
   wrapText = false,
   onEdit,
   onDelete,
+  onMarkReviewed,
   selected = false,
   selectionTone = "primary",
   onToggleSelect,
@@ -165,6 +177,7 @@ export function TransactionCard({
   });
 
   const tripBadges = getTripBadges(transaction);
+  const toReview = transaction.reviewStatus === "to_review";
 
   const linkageType = transaction.linkage?.type;
   const isInternal = linkageType === "internal";
@@ -297,7 +310,7 @@ export function TransactionCard({
                 ))}
               </div>
             )}
-            {(transaction.category || transaction.entrySource) && (
+            {(transaction.category || transaction.entrySource || toReview) && (
               <div
                 className={`mt-1 flex items-center gap-2 text-xs text-dark-5 dark:text-dark-6 ${
                   wrapText ? "whitespace-normal break-words" : "truncate"
@@ -318,6 +331,7 @@ export function TransactionCard({
                     reconciled={transaction.reconciled}
                   />
                 )}
+                {toReview && <ReviewBadge reasons={transaction.reviewReasons} />}
               </div>
             )}
           </div>
@@ -517,6 +531,41 @@ export function TransactionCard({
               </div>
             )}
 
+            {classificationLabel(transaction.metadata?.classification) && (
+              <div>
+                <div className="text-dark-5 dark:text-dark-6">Category from</div>
+                <div className="font-medium text-dark dark:text-white mt-0.5">
+                  {classificationLabel(transaction.metadata?.classification)}
+                </div>
+              </div>
+            )}
+
+            {toReview && (
+              <div className="col-span-2">
+                <div className="text-dark-5 dark:text-dark-6">Review</div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-2 font-medium text-dark dark:text-white">
+                  <span>
+                    To review
+                    {transaction.reviewReasons?.length
+                      ? ` · ${reviewReasonsText(transaction.reviewReasons)}`
+                      : ""}
+                  </span>
+                  {onMarkReviewed && (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onMarkReviewed(transaction.id);
+                      }}
+                      className="rounded border border-stroke px-2 py-0.5 text-xs text-dark hover:bg-gray-2 dark:border-dark-3 dark:text-white dark:hover:bg-dark-3"
+                    >
+                      Mark reviewed
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {transaction.balance !== null && (
               <div>
                 <div className="text-dark-5 dark:text-dark-6">Balance</div>
@@ -585,7 +634,9 @@ export function TransactionCard({
                   </div>
                   <div className="bg-white dark:bg-dark-2 rounded border border-stroke dark:border-dark-3 p-3">
                     <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
-                      {Object.entries(transaction.metadata).map(
+                      {Object.entries(transaction.metadata)
+                        .filter(([key]) => key !== "classification")
+                        .map(
                         ([key, value]) => (
                           <div key={key} className="flex gap-2">
                             <dt className="text-dark-5 dark:text-dark-6">

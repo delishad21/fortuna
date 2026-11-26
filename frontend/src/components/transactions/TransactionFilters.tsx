@@ -13,6 +13,7 @@ import {
   ENTRY_SOURCES,
   ENTRY_SOURCE_LABELS,
   type ReconciledFilter,
+  type ReviewFilter,
 } from "@/lib/entrySource";
 
 interface Category {
@@ -35,6 +36,7 @@ interface FilterValues {
   dateOrder: "desc" | "asc";
   entrySource: string;
   reconciled: ReconciledFilter;
+  reviewStatus: ReviewFilter;
 }
 
 interface TransactionFiltersProps {
@@ -87,6 +89,7 @@ export function TransactionFilters({
     dateOrder: initialFilters.dateOrder || "desc",
     entrySource: initialFilters.entrySource || "",
     reconciled: initialFilters.reconciled || "all",
+    reviewStatus: initialFilters.reviewStatus || "all",
   });
 
   const updateFilter = <K extends keyof FilterValues>(
@@ -149,6 +152,7 @@ export function TransactionFilters({
       dateOrder: "desc",
       entrySource: "",
       reconciled: "all",
+      reviewStatus: "all",
     };
     setFilters(clearedFilters);
     onFilterChange(clearedFilters);
@@ -167,7 +171,8 @@ export function TransactionFilters({
     filters.transactionType !== "all" ||
     filters.dateOrder !== "desc" ||
     filters.entrySource ||
-    filters.reconciled !== "all";
+    filters.reconciled !== "all" ||
+    filters.reviewStatus !== "all";
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -401,6 +406,25 @@ export function TransactionFilters({
                       buttonClassName="w-full"
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-dark-5 dark:text-dark-6">
+                    Review
+                  </label>
+                  <Select
+                    value={filters.reviewStatus}
+                    onChange={(value) =>
+                      updateFilter("reviewStatus", value as ReviewFilter)
+                    }
+                    options={[
+                      { value: "all", label: "All" },
+                      { value: "to_review", label: "To Review" },
+                      { value: "reviewed", label: "Reviewed" },
+                    ]}
+                    className="mt-1 w-full"
+                    buttonClassName="w-full"
+                  />
                 </div>
 
                 <div>

@@ -29,11 +29,17 @@ import {
   deleteTransaction,
   exportTransactionsCsv,
   getTransactions,
+  setTransactionsReviewStatus,
   splitTransaction,
   updateTransaction,
 } from "@/app/actions/transactions";
 import { createCategory } from "@/app/actions/categories";
-import { reconciledParam, type ReconciledFilter } from "@/lib/entrySource";
+import {
+  reconciledParam,
+  reviewStatusParam,
+  type ReconciledFilter,
+  type ReviewFilter,
+} from "@/lib/entrySource";
 
 interface Transaction {
   id: string;
@@ -48,6 +54,8 @@ interface Transaction {
   entrySource?: string | null;
   reconciled?: boolean | null;
   reconciledAt?: string | null;
+  reviewStatus?: string | null;
+  reviewReasons?: string[] | null;
   category?: {
     id: string;
     name: string;
@@ -125,6 +133,7 @@ interface FilterValues {
   dateOrder: "desc" | "asc";
   entrySource: string;
   reconciled: ReconciledFilter;
+  reviewStatus: ReviewFilter;
 }
 
 interface TransactionsClientProps {
@@ -181,6 +190,7 @@ export function TransactionsClient({
     dateOrder: "desc",
     entrySource: "",
     reconciled: "all",
+    reviewStatus: "all",
   });
 
   // Bulk selection
@@ -265,6 +275,7 @@ export function TransactionsClient({
     accountIdentifier: filters.accountIdentifier || undefined,
     entrySource: filters.entrySource ? [filters.entrySource] : undefined,
     reconciled: reconciledParam(filters.reconciled),
+    reviewStatus: reviewStatusParam(filters.reviewStatus),
   });
 
   const fetchTransactions = async (
@@ -304,6 +315,7 @@ export function TransactionsClient({
           ? [currentFilters.entrySource]
           : undefined,
         reconciled: reconciledParam(currentFilters.reconciled),
+        reviewStatus: reviewStatusParam(currentFilters.reviewStatus),
         limit: itemsPerPage,
         offset,
       });
@@ -443,6 +455,20 @@ export function TransactionsClient({
       title: "Add Account",
       message: "Account creation feature coming soon!",
     });
+  };
+
+  const handleMarkReviewed = async (id: string) => {
+    try {
+      await setTransactionsReviewStatus([id], "reviewed");
+      await fetchTransactions(currentPage, filters);
+    } catch (err) {
+      setModalState({
+        isOpen: true,
+        type: "error",
+        title: "Error",
+        message: err instanceof Error ? err.message : "Failed to mark the transaction reviewed.",
+      });
+    }
   };
 
   const handleDelete = (id: string) => {
@@ -827,6 +853,7 @@ export function TransactionsClient({
                 onToggleSelect={toggleSelection}
                 onEdit={handleEdit}
                 onDelete={handleDelete}
+                onMarkReviewed={handleMarkReviewed}
                 linkedTransactionsById={Object.fromEntries(
                   transactions.map((tx) => [
                     tx.id,

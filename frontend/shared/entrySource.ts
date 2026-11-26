@@ -20,3 +20,48 @@ export const reconciledParam = (filter: ReconciledFilter | undefined) =>
 
 export const reconciledLabel = (reconciled: boolean | null | undefined) =>
   reconciled ? "Reconciled" : "Not reconciled";
+
+/** Assistant entries wait for review; everything else is saved as reviewed. */
+export const REVIEW_STATUSES = ["to_review", "reviewed"] as const;
+export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
+
+/** Filter values for the review state; "all" sends no filter. */
+export type ReviewFilter = "all" | ReviewStatus;
+
+export const reviewStatusParam = (filter: string | undefined): ReviewStatus | undefined =>
+  filter === "to_review" || filter === "reviewed" ? filter : undefined;
+
+export const REVIEW_REASON_LABELS: Record<string, string> = {
+  no_rule_matched: "No rule matched",
+  assistant_category: "Assistant's category",
+  new_account: "New account",
+  possible_duplicate: "Possible duplicate",
+};
+
+export const reviewReasonLabel = (reason: string) => REVIEW_REASON_LABELS[reason] ?? reason;
+
+export const reviewReasonsText = (reasons: string[] | null | undefined) =>
+  (reasons ?? []).map(reviewReasonLabel).join(" · ");
+
+/** Who chose an assistant entry's category, from metadata.classification. */
+export function classificationLabel(classification: unknown): string | null {
+  const value = classification as { decidedBy?: string; ruleName?: string } | null | undefined;
+  switch (value?.decidedBy) {
+    case "rule":
+      return value.ruleName ? `Rule “${value.ruleName}”` : "A rule";
+    case "learned_pattern":
+      return "A learned pattern";
+    case "history":
+      return "Past transactions";
+    case "heuristic":
+      return "Fortuna's guess";
+    case "assistant":
+      return "The assistant's suggestion";
+    case "correction":
+      return "A review correction";
+    case "none":
+      return "Nothing matched";
+    default:
+      return null;
+  }
+}

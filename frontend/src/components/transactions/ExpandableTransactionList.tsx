@@ -13,6 +13,7 @@ interface ExpandableTransactionListProps {
   onEdit?: (transaction: TransactionCardTransaction) => void;
   canEdit?: (transaction: TransactionCardTransaction) => boolean;
   onDelete?: (id: string) => void;
+  onMarkReviewed?: (id: string) => void;
   linkedTransactionsById?: Record<
     string,
     {
@@ -39,6 +40,7 @@ export function ExpandableTransactionList({
   onEdit,
   canEdit,
   onDelete,
+  onMarkReviewed,
   linkedTransactionsById,
 }: ExpandableTransactionListProps) {
   const groupedTransactions = transactions.reduce(
@@ -92,6 +94,7 @@ export function ExpandableTransactionList({
                       : undefined
                   }
                   onDelete={onDelete}
+                  onMarkReviewed={onMarkReviewed}
                   selected={selectedIds ? selectedIds.has(transaction.id) : false}
                   onToggleSelect={
                     onToggleSelect ? () => onToggleSelect(transaction.id) : undefined
