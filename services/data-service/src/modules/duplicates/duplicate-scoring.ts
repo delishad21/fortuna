@@ -95,9 +95,11 @@ export function descriptionSimilarity(left: string, right: string) {
   return (2 * shared) / (firstPairs.length + secondPairs.length);
 }
 
+/** The pair's score when it reaches `threshold` (DUPLICATE_THRESHOLD by default), else null. */
 export function scoreDuplicatePair(
   left: DuplicateCandidate,
   right: DuplicateCandidate,
+  threshold = DUPLICATE_THRESHOLD,
 ): DuplicateScore | null {
   const sameCredit =
     left.amountIn != null && left.amountIn > 0 && left.amountIn === right.amountIn;
@@ -160,5 +162,5 @@ export function scoreDuplicatePair(
     score += 0.1;
     reasons.push("Somewhat similar description");
   }
-  return score >= DUPLICATE_THRESHOLD ? { score, reasons } : null;
+  return score >= threshold ? { score, reasons } : null;
 }

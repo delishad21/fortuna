@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import prisma from "../../lib/prisma";
 import { deleteImageIfUnused, imageBytesFromInput, saveImage } from "../images/image-store";
+import { moveAccountSources, moveCardSources } from "../sources/sources.service";
 
 /**
  * Accounts (FinancialAccount), the statement identifiers that map to them and
@@ -235,7 +236,7 @@ export async function deleteAccount(db: Db, userId: string, accountId: string) {
 }
 
 /**
- * Moves everything on one account (identifiers, cards, transactions, its image
+ * Moves everything on one account (identifiers, cards, sources, transactions, its image
  * when the target has none) onto another, then deletes it. Cards with the same
  * last 4 digits become one card.
  */
@@ -262,6 +263,14 @@ export async function mergeAccount(db: Db, userId: string, sourceId: string, tar
   // Moving identifiers moves the transactions that carry them (trigger).
   await db.accountIdentifier.updateMany({ where: { userId, accountId: source.id }, data: { accountId: target.id } });
   await db.transaction.updateMany({ where: { userId, accountId: source.id }, data: { accountId: target.id } });
+  // Sources too, before twin cards are deleted (their sources would go with them).
+  await moveAccountSources(
+    db,
+    userId,
+    source.id,
+    target.id,
+    twins.map(({ source: card, twin }) => ({ from: card.id, to: twin.id })),
+  );
   for (const { source: card, twin, transactionIds } of twins) {
     await db.transaction.updateMany({ where: { userId, id: { in: transactionIds } }, data: { cardId: twin.id } });
     if (!twin.imageId && card.imageId) await db.card.update({ where: { id: twin.id }, data: { imageId: card.imageId } });
@@ -331,8 +340,10 @@ export async function updateCard(db: Db, userId: string, cardId: string, input: 
     },
   });
   // The card's transactions go with it to the new account.
-  if (accountId !== card.accountId)
+  if (accountId !== card.accountId) {
     await db.transaction.updateMany({ where: { userId, cardId: card.id }, data: { accountId, cardId: card.id } });
+    await moveCardSources(db, userId, card.id, accountId);
+  }
   return publicCard(saved, account);
 }
 

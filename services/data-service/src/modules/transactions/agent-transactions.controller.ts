@@ -16,6 +16,7 @@ import {
   ReviewStatusSchema,
 } from "./entry-review";
 import { TransactionReview } from "./transaction-review.service";
+import { sourceWatchList } from "../sources/sources.service";
 
 /**
  * Transactions written by the outside assistant. With transactions:write,
@@ -24,7 +25,8 @@ import { TransactionReview } from "./transaction-review.service";
  * queues them for review. The same externalId updates instead of adding a
  * row, and possible duplicates come back with each write rather than refused.
  * With transactions:review, /review lists the queue and corrects entries.
- * /guide and /context/* are open to either scope.
+ * /guide and /context/* are open to either scope; /context/sources (what to
+ * watch) also to accounts:read.
  */
 export function createAgentTransactionsRouter(db: PrismaClient = prisma) {
   const router = Router();
@@ -32,6 +34,8 @@ export function createAgentTransactionsRouter(db: PrismaClient = prisma) {
   const write = requireApiToken(["transactions:write"]);
   const review = requireApiToken(["transactions:review"]);
   const either = requireApiTokenAnyOf(["transactions:write", "transactions:review"]);
+  // What to watch is also open to accounts:read, for a job that only reads.
+  const watching = requireApiTokenAnyOf(["transactions:write", "transactions:review", "accounts:read"]);
 
   const actor = (request: Request): EntryActor => ({
     actorType: request.apiAuth?.actorType || "api_token",
@@ -61,13 +65,15 @@ export function createAgentTransactionsRouter(db: PrismaClient = prisma) {
       ? { externalId: ExternalIdSchema.parse(request.params.externalId) }
       : { id: request.params.id };
 
-  router.get("/guide", either, (_request, response) => {
-    response.setHeader("Cache-Control", "no-store");
-    response.json(assistantEntryGuide());
-  });
+  router.get("/guide", either, handle(async (request, response) => {
+    response.json(assistantEntryGuide(await sourceWatchList(prisma, authenticatedUserId(request))));
+  }));
 
   router.get("/context/accounts", either, handle(async (request, response) => {
     response.json(await EntryContext.accounts(authenticatedUserId(request)));
+  }));
+  router.get("/context/sources", watching, handle(async (request, response) => {
+    response.json(await sourceWatchList(prisma, authenticatedUserId(request)));
   }));
   router.get("/context/categories", either, handle(async (request, response) => {
     response.json(await EntryContext.categories(authenticatedUserId(request)));

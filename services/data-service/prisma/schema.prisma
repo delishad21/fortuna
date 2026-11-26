@@ -66,6 +66,8 @@ model User {
   accountIdentifiers     AccountIdentifier[]
   financialAccounts      FinancialAccount[]
   cards                  Card[]
+  transactionSources     TransactionSource[]
+  sourceReports          TransactionSourceReport[]
   images                 StoredImage[]
   transactions           Transaction[]
   importBatches          ImportBatch[]
@@ -433,6 +435,7 @@ model FinancialAccount {
   identifiers  AccountIdentifier[]
   cards        Card[]
   transactions Transaction[]
+  sources      TransactionSource[]
 
   @@index([userId])
   @@index([userId, autoCreated])
@@ -456,10 +459,87 @@ model Card {
   account      FinancialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
   image        StoredImage?     @relation("CardImage", fields: [imageId], references: [id], onDelete: SetNull)
   transactions Transaction[]
+  sources      TransactionSource[]
 
   @@unique([accountId, last4])
   @@index([userId, last4])
   @@map("cards")
+}
+
+// How an account's or one card's transactions reach the assistant: a bank
+// app's phone notifications (twee's listener allows these packages) or alert
+// emails (Hermes's mail job searches these senders). Served to the assistant
+// by /api/agent/transactions/context/sources, so adding a bank is a settings
+// change. A card with a main and a backup channel gets one transaction per
+// purchase: the backup's report merges into the main one.
+model TransactionSource {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  /// The account; for a card's source, the card's account.
+  accountId       String   @map("account_id")
+  /// Set when the source reports one card only.
+  cardId          String?  @map("card_id")
+  /// notification | email
+  kind            String
+  name            String?
+  /// App packages (notification) or sender addresses (email).
+  senders         String[] @default([])
+  /// Text the email subject contains (any of them, case-insensitive).
+  subjectPatterns String[] @default([]) @map("subject_patterns")
+  /// Text the notification or email body contains (any of them, case-insensitive).
+  textPatterns    String[] @default([]) @map("text_patterns")
+  /// What ties a message to this account or card, e.g. "card ending 1234".
+  identifiers     String[] @default([])
+  /// main | backup
+  channel         String   @default("main")
+  enabled         Boolean  @default(false)
+  notes           String?
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user    User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account FinancialAccount          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  card    Card?                     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  reports TransactionSourceReport[]
+
+  @@index([userId, kind, enabled])
+  @@index([accountId])
+  @@index([cardId])
+  @@map("transaction_sources")
+}
+
+// One message (email or notification) that reported a transaction. Every
+// externalId the assistant sent maps to exactly one transaction here, so
+// re-sending a message updates instead of adding a row, and a backup
+// channel's report of a purchase points at the main channel's transaction.
+// When the transaction is deleted the report stays without it, so a job
+// re-reading the message doesn't bring it back.
+model TransactionSourceReport {
+  id            String   @id @default(cuid())
+  userId        String   @map("user_id")
+  /// Null once the transaction was deleted.
+  transactionId String?  @map("transaction_id")
+  sourceId      String?  @map("source_id")
+  externalId    String   @map("external_id")
+  /// email | notification | other (an id outside the two schemes)
+  kind          String
+  /// main | backup, as the source was when the report came in; null without a source.
+  channel       String?
+  /// The transaction's own externalId came from this report.
+  primary       Boolean  @default(true)
+  /// What the message said: date, time, description, amounts, evidence.
+  facts         Json?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transaction Transaction?       @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  source      TransactionSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, externalId])
+  @@index([transactionId])
+  @@index([sourceId])
+  @@map("transaction_source_reports")
 }
 
 // An image file kept in IMAGE_STORAGE_DIR (not in Postgres), one row per
@@ -574,6 +654,7 @@ model Transaction {
   tripEntries  TripEntry[]   @relation("TripEntrySourceTransaction")
   reimbursementLinksAsReimbursement ReimbursementLink[] @relation("ReimbursementLinkReimbursementTransaction")
   reimbursementLinksAsExpense       ReimbursementLink[] @relation("ReimbursementLinkExpenseTransaction")
+  sourceReports                     TransactionSourceReport[]
 
   @@index([userId, date])
   @@unique([userId, externalId])

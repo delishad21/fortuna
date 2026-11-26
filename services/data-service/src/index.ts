@@ -14,6 +14,7 @@ import { parserFactoryRouter } from "./modules/imports/parser-factory.controller
 import { parserRuntimeRouter } from "./modules/imports/parser-runtime.controller";
 import { HermesWorkflowService } from "./modules/imports/hermes-workflow.service";
 import { accountsRouter } from "./modules/accounts/accounts.controller";
+import { sourcesRouter } from "./modules/sources/sources.controller";
 import { createAgentTransactionsRouter } from "./modules/transactions/agent-transactions.controller";
 import { imagesRouter, transactionImagesRouter } from "./modules/images/images.controller";
 import { cleanupUnusedImages } from "./modules/images/image-store";
@@ -44,6 +45,7 @@ app.use("/api/agent/context", hermesContextRouter);
 app.use("/api/agent/parser-factory", parserFactoryRouter);
 app.use("/api/parser-runtime", parserRuntimeRouter);
 app.use("/api/agent/accounts", accountsRouter);
+app.use("/api/agent/sources", sourcesRouter);
 app.use("/api/agent/transactions", transactionImagesRouter);
 app.use("/api/images", imagesRouter);
 app.use("/api/agent/analytics", agentAnalyticsRouter);

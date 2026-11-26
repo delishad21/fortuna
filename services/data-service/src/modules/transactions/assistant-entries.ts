@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ExternalIdError, normalizeExternalId } from "../sources/sources";
 
 /**
  * Input rules for transactions the outside assistant writes through
@@ -76,10 +77,35 @@ const EntryFields = {
   metadata: z.record(z.string(), z.unknown()).nullish(),
 };
 
-export const ExternalIdSchema = z.string().trim().min(1).max(200);
+/**
+ * An externalId in its canonical form. email: and notif: ids must follow
+ * their scheme (see EXTERNAL_ID_SCHEMES in modules/sources/sources.ts); other
+ * ids pass as sent.
+ */
+export const ExternalIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(300)
+  .transform((value, context) => {
+    try {
+      return normalizeExternalId(value);
+    } catch (error) {
+      if (!(error instanceof ExternalIdError)) throw error;
+      context.addIssue({ code: "custom", message: error.message });
+      return z.NEVER;
+    }
+  });
 
 export const CreateEntrySchema = z
-  .object({ externalId: ExternalIdSchema, ...EntryFields })
+  .object({
+    externalId: ExternalIdSchema,
+    ...EntryFields,
+    /** The source (Settings → Sources) the message came from, from get_entry_sources. */
+    sourceId: z.string().trim().min(1).max(120).nullish(),
+    /** An email's From address; finds the source when sourceId is left out. */
+    sender: z.string().trim().min(1).max(320).nullish(),
+  })
   .strict()
   .superRefine((value, context) => {
     const hasIn = value.amountIn != null;

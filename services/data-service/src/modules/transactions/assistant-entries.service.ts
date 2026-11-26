@@ -17,6 +17,15 @@ import {
   type ReviewReason,
 } from "./entry-review";
 import { TransactionService } from "./transactions.service";
+import { parseExternalId, type ParsedExternalId, type SourceRow } from "../sources/sources";
+import {
+  findChannelCounterpart,
+  resolveEntrySource,
+  sourceEntry,
+  withoutSourceEntry,
+  withSourceEntry,
+  type ChannelMatch,
+} from "./entry-sources.service";
 
 export class EntryError extends Error {
   constructor(
@@ -404,6 +413,8 @@ export function publicEntry(transaction: Stored) {
     reviewReasons: transaction.reviewReasons,
     reviewedAt: transaction.reviewedAt,
     classification: metadata.classification ?? null,
+    /** The messages behind it (metadata.sources): the primary one, and backups merged into it. */
+    sources: Array.isArray(metadata.sources) ? metadata.sources : [],
     metadata: metadata.assistant ?? null,
     createdAt: transaction.createdAt,
     updatedAt: transaction.updatedAt,
@@ -461,12 +472,18 @@ async function load(userId: string, id: string) {
   return prisma.transaction.findFirst({ where: { id, userId }, include: { category: true } });
 }
 
-/** An assistant entry by Fortuna id or by external id. Others can't be changed here. */
+/**
+ * An assistant entry by Fortuna id or by external id: its own, or one of a
+ * backup channel's messages merged into it. Others can't be changed here.
+ */
 export async function findEntry(userId: string, ref: { id?: string; externalId?: string }) {
   const found = ref.id
     ? await load(userId, ref.id)
     : await prisma.transaction.findFirst({
-        where: { userId, externalId: ref.externalId },
+        where: {
+          userId,
+          OR: [{ externalId: ref.externalId }, { sourceReports: { some: { userId, externalId: ref.externalId } } }],
+        },
         include: { category: true },
       });
   if (!found) throw new EntryError(404, "Transaction not found");
@@ -520,35 +537,192 @@ function assertAssistantEntry(transaction: Stored) {
     throw new EntryError(409, "Only transactions the assistant created can be changed through this API");
 }
 
+/** What a message said, kept on its report (a merged backup's message changes nothing else). */
+function reportFacts(input: CreateEntryInput) {
+  return {
+    date: input.date,
+    ...(input.time ? { time: input.time } : {}),
+    description: input.description,
+    amountIn: input.amountIn ?? null,
+    amountOut: input.amountOut ?? null,
+    ...(input.currency ? { currency: input.currency } : {}),
+    ...(input.card ? { card: input.card } : {}),
+    ...(input.sender ? { sender: input.sender } : {}),
+    ...(input.metadata ? { evidence: input.metadata } : {}),
+  } as Prisma.InputJsonValue;
+}
+
+type WriteResult = Awaited<ReturnType<typeof withReview>>;
+export type UpsertResult =
+  | ({ created: boolean; merged?: { into: string; as: string; matchScore?: number; matchReasons?: string[] } } & WriteResult)
+  | {
+      created: false;
+      merged: { into: string; as: string };
+      transaction: ReturnType<typeof publicEntry>;
+      possibleDuplicates: never[];
+    }
+  | { created: false; skipped: "deleted"; message: string; transaction: null; possibleDuplicates: never[] };
+
+/**
+ * Two channels of one card reported the same purchase. A backup's message is
+ * recorded on the main channel's entry and changes nothing else. A main
+ * channel's message takes over the entry its backup created: the entry gets
+ * the main message's externalId and facts, and the backup's message stays
+ * linked to it.
+ */
+async function mergeChannels(
+  userId: string,
+  input: CreateEntryInput,
+  parsed: ParsedExternalId,
+  source: SourceRow,
+  match: ChannelMatch,
+  actor: EntryActor,
+  warnings: string[],
+): Promise<UpsertResult> {
+  const target = match.transaction;
+  const merged = { into: target.id, as: source.channel, matchScore: match.matchScore, matchReasons: match.matchReasons };
+  const report = {
+    userId,
+    transactionId: target.id,
+    sourceId: source.id,
+    externalId: input.externalId,
+    kind: parsed.kind,
+    channel: source.channel,
+    facts: reportFacts(input),
+  };
+  if (match.existing === "main") {
+    const updated = await runInTransaction(async () => {
+      await prisma.transactionSourceReport.create({ data: { ...report, primary: false } });
+      const saved = await prisma.transaction.update({
+        where: { id: target.id },
+        data: { metadata: withSourceEntry(target.metadata, sourceEntry(input.externalId, parsed.kind, source, false)) },
+        include: { category: true },
+      });
+      await audit(userId, actor, "merge_transaction_report", target.id, {
+        afterValue: { externalId: input.externalId, sourceId: source.id, channel: source.channel, matchScore: match.matchScore },
+      });
+      return saved;
+    });
+    return {
+      created: false,
+      merged,
+      transaction: publicEntry(updated),
+      possibleDuplicates: [],
+      ...(warnings.length ? { warnings } : {}),
+    } as UpsertResult;
+  }
+  await runInTransaction(async () => {
+    await prisma.transactionSourceReport.updateMany({ where: { userId, transactionId: target.id }, data: { primary: false } });
+    await prisma.transactionSourceReport.create({ data: { ...report, primary: true } });
+    await prisma.transaction.update({
+      where: { id: target.id },
+      data: {
+        externalId: input.externalId,
+        metadata: withSourceEntry(target.metadata, sourceEntry(input.externalId, parsed.kind, source, true)),
+      },
+    });
+    await audit(userId, actor, "merge_transaction_report", target.id, {
+      beforeValue: { externalId: target.externalId },
+      afterValue: { externalId: input.externalId, sourceId: source.id, channel: source.channel, matchScore: match.matchScore },
+    });
+  });
+  const { externalId: _externalId, sourceId: _sourceId, sender: _sender, ...changes } = input;
+  const result = await AssistantEntries.update(userId, { id: target.id }, changes, actor);
+  return {
+    created: false,
+    merged,
+    ...result,
+    ...(warnings.length || result.warnings ? { warnings: [...warnings, ...(result.warnings ?? [])] } : {}),
+  };
+}
+
 export const AssistantEntries = {
   /**
    * Creates the entry, or updates it when one with this externalId exists, so a
-   * retried request never adds a second row.
+   * retried request or a re-read message never adds a second row. A message
+   * from a card's backup channel about a purchase its main channel already
+   * reported is merged into that entry instead (and a main channel's message
+   * takes over an entry only its backup had reported). An entry that was
+   * deleted stays deleted when its message comes again.
    */
-  async upsert(userId: string, input: CreateEntryInput, actor: EntryActor) {
-    const existing = await prisma.transaction.findFirst({
-      where: { userId, externalId: input.externalId },
-      select: { id: true },
+  async upsert(userId: string, input: CreateEntryInput, actor: EntryActor, retried = false): Promise<UpsertResult> {
+    const { externalId } = input;
+    const report = await prisma.transactionSourceReport.findUnique({
+      where: { userId_externalId: { userId, externalId } },
+      include: { transaction: { select: { id: true, externalId: true } } },
     });
+    if (report && !report.transaction)
+      return {
+        created: false,
+        skipped: "deleted",
+        message: "The transaction from this message was deleted; it isn't added again",
+        transaction: null,
+        possibleDuplicates: [],
+      };
+    if (report?.transaction && report.transaction.externalId !== externalId) {
+      // A backup's message merged into another entry: keep what it said, leave the entry alone.
+      await prisma.transactionSourceReport.update({ where: { id: report.id }, data: { facts: reportFacts(input) } });
+      const transaction = (await load(userId, report.transaction.id))!;
+      return {
+        created: false,
+        merged: { into: transaction.id, as: report.channel ?? "backup" },
+        transaction: publicEntry(transaction),
+        possibleDuplicates: [],
+      };
+    }
+    const existing =
+      report?.transaction ??
+      (await prisma.transaction.findFirst({ where: { userId, externalId }, select: { id: true, externalId: true } }));
     if (existing) {
-      const { externalId: _externalId, ...changes } = input;
-      return { created: false, ...(await AssistantEntries.update(userId, { id: existing.id }, changes, actor)) };
+      const { externalId: _externalId, sourceId: _sourceId, sender: _sender, ...changes } = input;
+      const result = await AssistantEntries.update(userId, { id: existing.id }, changes, actor);
+      if (report) await prisma.transactionSourceReport.update({ where: { id: report.id }, data: { facts: reportFacts(input) } });
+      else
+        await prisma.transactionSourceReport.create({
+          data: { userId, transactionId: existing.id, externalId, kind: parseExternalId(externalId).kind, primary: true, facts: reportFacts(input) },
+        });
+      return { created: false, ...result };
     }
     try {
-      return { created: true, ...(await AssistantEntries.create(userId, input, actor)) };
+      return await AssistantEntries.create(userId, input, actor);
     } catch (error) {
-      // Two requests with the same externalId raced: the other one created it.
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-        const { externalId, ...changes } = input;
-        return { created: false, ...(await AssistantEntries.update(userId, { externalId }, changes, actor)) };
-      }
+      // Two requests with the same externalId raced: the other one saved it.
+      if (!retried && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002")
+        return AssistantEntries.upsert(userId, input, actor, true);
       throw error;
     }
   },
 
-  async create(userId: string, input: CreateEntryInput, actor: EntryActor) {
+  /**
+   * A new message. Finds its source, books the account (the source's card or
+   * account when the message names none), then merges it with the other
+   * channel's report of the same purchase, or adds the entry.
+   */
+  async create(userId: string, input: CreateEntryInput, actor: EntryActor): Promise<UpsertResult> {
     const parts = entryDateParts(input.date, input.time);
-    const account = await resolveAccount(userId, input);
+    const parsed = parseExternalId(input.externalId);
+    const sourced = await resolveEntrySource(userId, input, parsed);
+    if (sourced.error) throw new EntryError(sourced.error.status, sourced.error.message);
+    const source = sourced.source;
+    const namesAccount = Boolean(input.account || input.accountName || input.card);
+    const account = await resolveAccount(
+      userId,
+      !namesAccount && source
+        ? { ...input, ...(source.cardId ? { card: { id: source.cardId } } : { account: source.accountId }) }
+        : input,
+    );
+    if (source) {
+      const counterpart = await findChannelCounterpart(userId, source, {
+        accountId: account.accountId,
+        cardId: account.cardId,
+        date: parts.date,
+        time: parts.time,
+        description: input.description,
+        amountIn: input.amountIn ?? null,
+        amountOut: input.amountOut ?? null,
+      });
+      if (counterpart) return mergeChannels(userId, input, parsed, source, counterpart, actor, sourced.warnings);
+    }
     const settings = await prisma.userSettings.findUnique({ where: { userId }, select: { currency: true } });
     const classified = await classifyEntry(userId, {
       date: parts.date,
@@ -576,20 +750,38 @@ export const AssistantEntries = {
           accountIdentifier: account.accountIdentifier,
           accountId: account.accountId,
           cardId: account.cardId,
-          metadata: entryMetadata({}, parts, account.card ?? null, input.metadata ?? null, classified.decision),
+          metadata: withSourceEntry(
+            entryMetadata({}, parts, account.card ?? null, input.metadata ?? null, classified.decision),
+            sourceEntry(input.externalId, parsed.kind, source, true),
+          ),
           linkage: classified.linkage ? (classified.linkage as Prisma.InputJsonValue) : Prisma.DbNull,
         },
         include: { category: true },
       });
+      await prisma.transactionSourceReport.create({
+        data: {
+          userId,
+          transactionId: created.id,
+          sourceId: source?.id ?? null,
+          externalId: input.externalId,
+          kind: parsed.kind,
+          channel: source?.channel ?? null,
+          primary: true,
+          facts: reportFacts(input),
+        },
+      });
       await audit(userId, actor, "create_transaction", created.id, { afterValue: publicEntry(created) });
       return created;
     });
-    return withReview(userId, transaction, {
-      decision: classified.decision,
-      accountAutoCreated: account.autoCreated,
-      accountCreated: account.created,
-      warnings: classified.warnings,
-    });
+    return {
+      created: true,
+      ...(await withReview(userId, transaction, {
+        decision: classified.decision,
+        accountAutoCreated: account.autoCreated,
+        accountCreated: account.created,
+        warnings: [...sourced.warnings, ...classified.warnings],
+      })),
+    };
   },
 
   async update(
@@ -716,9 +908,24 @@ export const AssistantEntries = {
     });
   },
 
+  /**
+   * Deletes the entry. By the externalId of a backup's message merged into it,
+   * only that message is unlinked: the entry is the main channel's.
+   */
   async remove(userId: string, ref: { id?: string; externalId?: string }, actor: EntryActor) {
     const existing = await findEntry(userId, ref);
     assertAssistantEntry(existing);
+    if (ref.externalId && existing.externalId !== ref.externalId) {
+      await runInTransaction(async () => {
+        await prisma.transactionSourceReport.delete({ where: { userId_externalId: { userId, externalId: ref.externalId! } } });
+        await prisma.transaction.update({
+          where: { id: existing.id },
+          data: { metadata: withoutSourceEntry(existing.metadata, ref.externalId!) },
+        });
+        await audit(userId, actor, "unlink_transaction_report", existing.id, { beforeValue: { externalId: ref.externalId } });
+      });
+      return { deleted: false, unlinked: true, id: existing.id, externalId: ref.externalId };
+    }
     await runInTransaction(async () => {
       await TransactionService.deleteTransaction(existing.id, userId);
       await audit(userId, actor, "delete_transaction", existing.id, { beforeValue: publicEntry(existing) });
