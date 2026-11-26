@@ -185,8 +185,8 @@ Scopes (Settings → API Tokens, web or phone):
   `create_transaction`, `get_transaction` and `update_transaction` come with
   `instructions` and, per entry, `instructionIds`: only what applies.
 - Review (`transactions:review`): `list_review_queue` (with `newRules`),
-  `answer_question`, `correct_transactions` (category, account or label on up
-  to 200 rows; `createRule { matchValue, origin, reason }` also saves a rule),
+  `answer_question`, `correct_transactions` (category, account, label, merchant
+  or `transactionType` on up to 200 rows; `createRule { matchValue, origin, reason }` also saves a rule),
   `set_review_status`, `undo_rule`, `confirm_account`, `merge_account`
   (`confirmed: true`).
 - Rules (`rules:write`): `list_rules`, `create_rule`, `update_rule`,

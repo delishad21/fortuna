@@ -205,6 +205,10 @@ export const CorrectionSchema = z
     category: z.string().trim().min(1).max(120).optional(),
     account: z.string().trim().min(1).max(120).optional(),
     label: z.string().trim().max(200).nullable().optional(),
+    /** The merchant's clean name (metadata.merchant); null or "" clears it. */
+    merchant: z.string().trim().max(200).nullable().optional(),
+    /** The kind of entry (metadata.transactionType); internal and reimbursement also set their reserved category. */
+    transactionType: z.enum(TRANSACTION_TYPES).optional(),
     /** Corrected entries are reviewed unless this is false. */
     markReviewed: z.boolean().default(true),
     /** Also save a classification rule so future entries come out this way. */
@@ -229,11 +233,21 @@ export const CorrectionSchema = z
   })
   .strict()
   .refine(
-    (value) => value.category !== undefined || value.account !== undefined || value.label !== undefined,
-    "Give category, account or label",
+    (value) =>
+      value.category !== undefined ||
+      value.account !== undefined ||
+      value.label !== undefined ||
+      value.merchant !== undefined ||
+      value.transactionType !== undefined,
+    "Give category, account, label, merchant or transactionType",
   )
   .refine(
-    (value) => !value.createRule || value.category !== undefined || (value.label ?? null) !== null,
+    (value) =>
+      !value.createRule ||
+      value.category !== undefined ||
+      value.transactionType === "internal" ||
+      value.transactionType === "reimbursement" ||
+      (value.label ?? null) !== null,
     "A rule needs a category or label to set",
   );
 

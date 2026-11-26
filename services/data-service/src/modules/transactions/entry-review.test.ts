@@ -210,6 +210,10 @@ describe("review inputs", () => {
   it("needs something to correct, and a value for a rule", () => {
     assert.equal(CorrectionSchema.safeParse({ ids: ["a"] }).success, false);
     assert.equal(CorrectionSchema.safeParse({ ids: ["a"], category: "Food" }).data?.markReviewed, true);
+    assert.equal(CorrectionSchema.safeParse({ ids: ["a"], merchant: "Kopitiam" }).success, true);
+    assert.equal(CorrectionSchema.safeParse({ ids: ["a"], merchant: null }).success, true);
+    assert.equal(CorrectionSchema.safeParse({ ids: ["a"], transactionType: "refund" }).success, true);
+    assert.equal(CorrectionSchema.safeParse({ ids: ["a"], transactionType: "gift" }).success, false);
     // Rules from the assistant don't need confirmed: true any more.
     assert.equal(
       CorrectionSchema.safeParse({ ids: ["a"], category: "Food", createRule: { matchValue: "KOPI" } }).data?.createRule?.origin,

@@ -294,7 +294,7 @@ export function createFinanceMcpServer(identity: AccountIdentity) {
     "update_transaction",
     {
       title: "Change an assistant transaction",
-      description: "Change fields of a transaction the assistant created; only the fields given change, Fortuna classifies it again unless a review corrected it, and it goes back into the review queue. Statement and manual rows can't be changed here; use correct_transactions to fix a category, account or label.",
+      description: "Change fields of a transaction the assistant created; only the fields given change, Fortuna classifies it again unless a review corrected it, and it goes back into the review queue. Statement and manual rows can't be changed here; use correct_transactions to fix a category, account, label, merchant or type.",
       inputSchema: z.object({
         ...refFields,
         date: entryFields.date.optional(),
@@ -529,12 +529,14 @@ export function createFinanceMcpServer(identity: AccountIdentity) {
     "correct_transactions",
     {
       title: "Correct transactions",
-      description: "Set the category, account (an existing one) or label on up to 200 transactions, including statement-imported ones. Corrected entries are marked reviewed unless markReviewed is false, and Fortuna won't reclassify a corrected category. createRule also saves an enabled rule (matchValue must appear in every corrected description): origin assistant_on_request when the user asked for it, with their words as reason; assistant_detected needs 3 consistent reviewed examples (the corrected entries count). Needs transactions:review.",
+      description: "Set the category, account (an existing one), label, merchant or transactionType on up to 200 transactions, including statement-imported ones. transactionType internal or reimbursement also sets its reserved category (Internal or Reimbursement; leave category out). Corrected entries are marked reviewed unless markReviewed is false, and Fortuna won't reclassify a corrected category. createRule also saves an enabled rule (matchValue must appear in every corrected description): origin assistant_on_request when the user asked for it, with their words as reason; assistant_detected needs 3 consistent reviewed examples (the corrected entries count). Needs transactions:review.",
       inputSchema: z.object({
         ids: z.array(z.string()).min(1).max(200).describe("Fortuna transaction ids"),
         category: z.string().optional().describe("Category name or id from get_entry_categories"),
         account: z.string().optional().describe("Existing account identifier, id or label"),
         label: z.string().max(200).nullable().optional(),
+        merchant: z.string().max(200).nullable().optional().describe("The merchant's clean name, e.g. 'Kopitiam'; null clears it"),
+        transactionType: z.enum(TRANSACTION_TYPES).optional(),
         markReviewed: z.boolean().default(true),
         createRule: z
           .object({

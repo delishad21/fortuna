@@ -41,8 +41,8 @@ import { answerReimbursable, proposeRepayments } from "../reimbursements/reimbur
 
 /**
  * The review queue behind /api/agent/transactions/review (scope
- * transactions:review): list what waits, correct category, account or label on
- * any transaction (statement rows too), mark entries reviewed, and confirm or
+ * transactions:review): list what waits, correct category, account, label,
+ * merchant or type on any transaction (statement rows too), mark entries reviewed, and confirm or
  * merge the accounts Fortuna created for assistant entries.
  */
 
@@ -187,6 +187,13 @@ async function applyAccountAnswer(userId: string, asked: EntryQuestion, option: 
 
 const done = (rows: Array<{ reviewStatus: string }>) => rows.every((row) => row.reviewStatus === "reviewed");
 
+/** metadata with merchant set (a name), cleared (null or ""), or left as it was (undefined). */
+function withMerchant(metadata: Record<string, unknown>, merchant: string | null | undefined) {
+  if (merchant === undefined) return metadata;
+  const { merchant: _previous, ...rest } = metadata;
+  return merchant ? { ...rest, merchant } : rest;
+}
+
 export const TransactionReview = {
   async queue(userId: string, query: ReviewQueueQuery) {
     const where = queueWhere(userId, query);
@@ -258,7 +265,17 @@ export const TransactionReview = {
   },
 
   async correct(userId: string, input: CorrectionInput, actor: EntryActor) {
-    const category = input.category ? await resolveCategory(userId, input.category) : null;
+    // internal and reimbursement are told by their reserved category, as answer() sets them.
+    const reserved =
+      input.transactionType === "internal"
+        ? RESERVED.internal
+        : input.transactionType === "reimbursement"
+          ? RESERVED.reimbursement
+          : null;
+    if (reserved && input.category && input.category.toLowerCase() !== reserved.toLowerCase())
+      throw new EntryError(400, `A ${input.transactionType} entry goes in ${reserved}; leave category out or give ${reserved}`);
+    const categoryName = input.category ?? reserved;
+    const category = categoryName ? await resolveCategory(userId, categoryName) : null;
     const account = input.account ? await findAccount(userId, input.account) : null;
     if (input.account && !account)
       throw new EntryError(400, `Unknown account "${input.account}"; corrections only use existing accounts`, {
@@ -302,6 +319,8 @@ export const TransactionReview = {
           (item) =>
             !(category && (item.field === "category" || item.field === "transactionType" || item.field === "rule")) &&
             !(input.label !== undefined && item.field === "label") &&
+            !(input.merchant !== undefined && item.field === "merchant") &&
+            !(input.transactionType !== undefined && item.field === "transactionType") &&
             !(account && item.field === "account"),
         );
         const reasons = existing.reviewReasons.filter(
@@ -315,7 +334,8 @@ export const TransactionReview = {
           where: { id: existing.id },
           data: {
             metadata: {
-              ...metadata,
+              ...withMerchant(metadata, input.merchant),
+              ...(input.transactionType !== undefined ? { transactionType: input.transactionType } : {}),
               ...(category
                 ? {
                     classification: {

@@ -273,6 +273,50 @@ test("the review queue: list, correct (statement rows too), mark reviewed, and r
     }
   }));
 
+test("a correction sets the merchant and the transaction type; internal sets its reserved category", () =>
+  withChatDb(async (db) => {
+    const { user } = await setup(db, "review-merchant-type");
+    const writer = await token(db, user.id, "mwriter01", ["transactions:write"]);
+    const reviewer = await token(db, user.id, "mreview01", ["transactions:review"]);
+    const { server, call } = await serve(db);
+    try {
+      const a = (await call("POST", "", writer, entry("m-1", { description: "KOPITIAM BEDOK 0423" }))).body.transaction;
+      const b = (await call("POST", "", writer, entry("m-2", { description: "TRANSFER TO OWN ACCOUNT" }))).body.transaction;
+
+      const named = await call("POST", "/review/correct", reviewer, {
+        ids: [a.id],
+        merchant: "Kopitiam",
+        transactionType: "purchase",
+        markReviewed: false,
+      });
+      assert.equal(named.status, 200, JSON.stringify(named.body));
+      assert.equal(named.body.transactions[0].merchant, "Kopitiam");
+      assert.equal(named.body.transactions[0].transactionType, "purchase");
+      assert.equal(named.body.transactions[0].category?.id, a.category?.id, "a plain type leaves the category alone");
+      assert.equal(named.body.transactions[0].reviewStatus, "to_review");
+
+      const cleared = await call("POST", "/review/correct", reviewer, { ids: [a.id], merchant: null, markReviewed: false });
+      assert.equal(cleared.status, 200);
+      assert.equal(cleared.body.transactions[0].merchant, null);
+      assert.equal(cleared.body.transactions[0].transactionType, "purchase");
+
+      const internal = await call("POST", "/review/correct", reviewer, { ids: [b.id], transactionType: "internal" });
+      assert.equal(internal.status, 200, JSON.stringify(internal.body));
+      assert.equal(internal.body.transactions[0].category.name, "Internal");
+      assert.equal(internal.body.transactions[0].transactionType, "internal");
+      assert.equal(internal.body.transactions[0].reviewStatus, "reviewed");
+
+      const clash = await call("POST", "/review/correct", reviewer, { ids: [b.id], transactionType: "internal", category: "Food" });
+      assert.equal(clash.status, 400);
+      const reimbursementOut = await call("POST", "/review/correct", reviewer, { ids: [a.id], transactionType: "reimbursement" });
+      assert.equal(reimbursementOut.status, 400, "only money in can be a Reimbursement");
+      const bogus = await call("POST", "/review/correct", reviewer, { ids: [a.id], transactionType: "gift" });
+      assert.equal(bogus.status, 400);
+    } finally {
+      server.close();
+    }
+  }));
+
 test("review needs transactions:review, writing needs transactions:write, context takes either", () =>
   withChatDb(async (db) => {
     const { user } = await setup(db, "review-scopes");
