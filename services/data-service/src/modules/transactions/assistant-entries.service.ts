@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import prisma from "../../lib/prisma";
 import { DuplicateDetector } from "../duplicates/duplicate-detector";
+import { classifyRows } from "../imports/import-enrichment";
 import { runInTransaction } from "../reimbursements/links.service";
 import {
   accountsForLast4,
@@ -8,6 +9,12 @@ import {
   type CreateEntryInput,
   type UpdateEntryInput,
 } from "./assistant-entries";
+import {
+  classificationDecision,
+  reviewReasonsFor,
+  type ClassificationDecision,
+  type ReviewReason,
+} from "./entry-review";
 import { TransactionService } from "./transactions.service";
 
 export class EntryError extends Error {
@@ -36,48 +43,120 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
-const RESERVED = { internal: "Internal", reimbursement: "Reimbursement" } as const;
+export const RESERVED = { internal: "Internal", reimbursement: "Reimbursement" } as const;
+
+type AccountRow = {
+  id: string;
+  accountIdentifier: string;
+  label: string | null;
+  autoCreated: boolean;
+};
+
+export type ResolvedAccount = {
+  accountIdentifier: string;
+  card: Card | null | undefined;
+  /** The account was created by Fortuna and nobody has confirmed it yet. */
+  autoCreated: boolean;
+  /** This request created it. */
+  created: AccountRow | null;
+};
+
+const ACCOUNT_SELECT = { id: true, accountIdentifier: true, label: true, autoCreated: true } as const;
+
+/** An existing account by identifier, id or label (case-insensitive). */
+export async function findAccount(userId: string, ref: string) {
+  const accounts = await prisma.accountIdentifier.findMany({ where: { userId }, select: ACCOUNT_SELECT });
+  const wanted = ref.trim();
+  const lower = wanted.toLowerCase();
+  return (
+    accounts.find((item) => item.accountIdentifier === wanted || item.id === wanted) ??
+    accounts.find((item) => item.label?.trim().toLowerCase() === lower) ??
+    null
+  );
+}
 
 /**
  * The account the entry is booked to, and the card it was paid with.
  *
+ * An account the assistant names (identifier, id or label) wins, then a card
+ * whose last 4 digits end exactly one account identifier. When nothing
+ * matches, Fortuna creates the account itself, marked autoCreated with what
+ * created it, and the entry is queued with reason new_account until the user
+ * confirms or merges it. The assistant never has to invent one.
+ *
  * Seam for Accounts and Cards (task fortu-6489): today an account is an
- * AccountIdentifier (matched by identifier, id or label) and a card is only
- * recorded in metadata.card; a card's last 4 digits find the account when no
- * account is given. Once Card rows exist, resolve card.id / card.last4 to a
- * Card here, take its account from it, and store the card's id on the row.
+ * AccountIdentifier and a card is only recorded in metadata.card. Once Card
+ * rows exist, resolve card.id / card.last4 to a Card here, take its account
+ * from it, create a Card under an auto-created account, and store the card's
+ * id on the row; autoCreated / autoCreatedFrom move to the Account.
  */
-async function resolveAccount(userId: string, account: string | null | undefined, card: Card | null | undefined) {
-  const accounts = await prisma.accountIdentifier.findMany({
-    where: { userId },
-    select: { id: true, accountIdentifier: true, label: true },
+export async function resolveAccount(
+  userId: string,
+  input: { account?: string | null; accountName?: string | null; card?: Card | null; externalId?: string | null },
+): Promise<ResolvedAccount> {
+  const { account, accountName, card } = input;
+  const accounts = await prisma.accountIdentifier.findMany({ where: { userId }, select: ACCOUNT_SELECT });
+  const found = (row: AccountRow): ResolvedAccount => ({
+    accountIdentifier: row.accountIdentifier,
+    card,
+    autoCreated: row.autoCreated,
+    created: null,
   });
-  const known = accounts.map((item) => item.accountIdentifier);
+  const byName = (name: string | null | undefined, among: AccountRow[]) => {
+    const lower = name?.trim().toLowerCase();
+    return lower ? among.find((item) => item.label?.trim().toLowerCase() === lower) : undefined;
+  };
+
   if (account) {
     const wanted = account.trim();
-    const lower = wanted.toLowerCase();
     const match =
-      accounts.find((item) => item.accountIdentifier === wanted || item.id === wanted) ??
-      accounts.find((item) => item.label?.trim().toLowerCase() === lower);
-    if (!match) throw new EntryError(400, `Unknown account "${wanted}"`, { accounts: known });
-    return { accountIdentifier: match.accountIdentifier, card };
+      accounts.find((item) => item.accountIdentifier === wanted || item.id === wanted) ?? byName(wanted, accounts);
+    if (match) return found(match);
   }
   if (card?.last4) {
     const matches = accountsForLast4(accounts, card.last4);
-    if (matches.length === 1) return { accountIdentifier: matches[0].accountIdentifier, card };
-    throw new EntryError(
-      400,
-      matches.length
-        ? `Card ${card.last4} matches more than one account; give the account`
-        : `No account ends in ${card.last4}; give the account`,
-      { accounts: known },
-    );
+    if (matches.length === 1) return found(matches[0]);
+    if (matches.length > 1) {
+      const named = byName(accountName, matches) ?? byName(account, matches);
+      if (named) return found(named);
+      throw new EntryError(400, `Card ${card.last4} matches more than one account; give the account`, {
+        accounts: matches.map((item) => ({ accountIdentifier: item.accountIdentifier, label: item.label })),
+      });
+    }
   }
-  throw new EntryError(400, "account is required", { accounts: known });
+  if (!account && accountName) {
+    const named = byName(accountName, accounts);
+    if (named) return found(named);
+  }
+
+  // Nothing matched: Fortuna creates the account from what the entry shows.
+  const identifier = account?.trim() || (card?.last4 ? `****${card.last4}` : UNASSIGNED_ACCOUNT);
+  const label =
+    accountName?.trim() ||
+    (account ? null : card?.last4 ? `Card ending ${card.last4}` : "Unassigned assistant entries");
+  const evidence = card?.last4 ? `card ${card.last4}` : account ? `account "${account.trim()}"` : "no account given";
+  const existing = accounts.find((item) => item.accountIdentifier === identifier);
+  if (existing) return found(existing);
+  const row = await prisma.accountIdentifier.upsert({
+    where: { userId_accountIdentifier: { userId, accountIdentifier: identifier } },
+    update: {},
+    create: {
+      userId,
+      accountIdentifier: identifier,
+      label,
+      autoCreated: true,
+      autoCreatedFrom: `assistant entry${input.externalId ? ` ${input.externalId}` : ""} (${evidence})`,
+    },
+    select: ACCOUNT_SELECT,
+  });
+  return { accountIdentifier: row.accountIdentifier, card, autoCreated: row.autoCreated, created: row };
 }
 
+/** Where entries go when the assistant gives neither an account nor a card. */
+export const UNASSIGNED_ACCOUNT = "Assistant: no account";
+
 /** A category by id or name (case-insensitive); none means Uncategorized. */
-async function resolveCategory(userId: string, category: string) {
+export async function resolveCategory(userId: string, category: string) {
   const wanted = category.trim();
   const categories = await prisma.category.findMany({
     where: { userId },
@@ -93,8 +172,88 @@ async function resolveCategory(userId: string, category: string) {
   return match;
 }
 
+/** The assistant's suggested category, when it names one of the user's categories. */
+async function suggestedCategoryMatch(userId: string, suggestion: string | null | undefined) {
+  if (!suggestion) return null;
+  try {
+    return await resolveCategory(userId, suggestion);
+  } catch (error) {
+    if (error instanceof EntryError) return null;
+    throw error;
+  }
+}
+
+type EntryFacts = {
+  date: Date;
+  description: string;
+  label: string | null;
+  amountIn: number | null;
+  amountOut: number | null;
+  accountIdentifier: string;
+  suggestedCategory: string | null | undefined;
+};
+
+/**
+ * Fortuna's classification of an entry: its import rules and auto-categorization
+ * first (as for statement rows), the assistant's suggestion only when none of
+ * them chose a category, Uncategorized otherwise.
+ */
+async function classifyEntry(userId: string, entry: EntryFacts) {
+  const [row] = await classifyRows(userId, undefined, [
+    {
+      date: entry.date.toISOString().slice(0, 10),
+      description: entry.description,
+      label: entry.label || undefined,
+      amountIn: entry.amountIn ?? undefined,
+      amountOut: entry.amountOut ?? undefined,
+      accountIdentifier: entry.accountIdentifier,
+      metadata: { accountIdentifier: entry.accountIdentifier },
+    },
+  ]);
+  const reserved = await TransactionService.ensureReservedCategories(userId);
+  const warnings: string[] = [];
+  let categoryId: string | undefined = row.categoryId || undefined;
+  let linkage: Record<string, unknown> | null = null;
+  const ruleLinkage = row.linkage?.type as string | undefined;
+  const reason = typeof row.linkage?.detectionReason === "string" ? row.linkage.detectionReason : "Matched a rule";
+  if (ruleLinkage === "internal") {
+    categoryId = reserved.internal.id;
+    linkage = { type: "internal", autoDetected: true, detectionReason: reason };
+  } else if (ruleLinkage === "reimbursement" && (entry.amountIn ?? 0) > 0) {
+    categoryId = reserved.reimbursement.id;
+    linkage = { type: "reimbursement", leftoverCategoryId: null, autoDetected: true, detectionReason: reason };
+  } else if (categoryId === reserved.reimbursement.id) {
+    categoryId = undefined;
+  }
+
+  let usedSuggestion = false;
+  if (!categoryId && entry.suggestedCategory) {
+    const match = await suggestedCategoryMatch(userId, entry.suggestedCategory);
+    if (!match) warnings.push(`Unknown category "${entry.suggestedCategory}"; the entry stays Uncategorized`);
+    else if (match.name === RESERVED.reimbursement && !((entry.amountIn ?? 0) > 0))
+      warnings.push("Only money in can be a Reimbursement; the entry stays Uncategorized");
+    else {
+      categoryId = match.id;
+      linkage = linkageFor(match.name, entry.amountIn);
+      usedSuggestion = true;
+    }
+  }
+  const decision = classificationDecision(
+    { label: entry.label },
+    { ...row, categoryId: categoryId && !usedSuggestion ? categoryId : undefined, linkage: usedSuggestion ? null : row.linkage },
+    { suggestedCategory: entry.suggestedCategory, usedSuggestion },
+  );
+  return {
+    categoryId: categoryId || reserved.uncategorized.id,
+    linkage,
+    label: (row.label as string | undefined) || entry.label || null,
+    decision,
+    warnings,
+  };
+}
+
 /** Linkage that matches a reserved category, the way imports set it. */
-function linkageFor(categoryName: string, amountIn: number | null | undefined) {
+export function linkageFor(categoryName: string, amountIn: number | null | undefined) {
   if (categoryName === RESERVED.internal)
     return { type: "internal" as const, autoDetected: false, detectionReason: "Set by the assistant" };
   if (categoryName === RESERVED.reimbursement) {
@@ -110,8 +269,10 @@ function entryMetadata(
   parts: { time?: string | null; occurredAt?: string | null } | null,
   card: Card | null | undefined,
   assistant: Record<string, unknown> | null | undefined,
+  classification?: ClassificationDecision,
 ) {
   const next: Record<string, unknown> = { ...record(previous) };
+  if (classification) next.classification = classification;
   if (parts) {
     if (parts.time) next.time = parts.time;
     else delete next.time;
@@ -149,6 +310,10 @@ export function publicEntry(transaction: Stored) {
     entrySource: transaction.entrySource,
     reconciled: transaction.reconciled,
     reconciledAt: transaction.reconciledAt,
+    reviewStatus: transaction.reviewStatus,
+    reviewReasons: transaction.reviewReasons,
+    reviewedAt: transaction.reviewedAt,
+    classification: metadata.classification ?? null,
     metadata: metadata.assistant ?? null,
     createdAt: transaction.createdAt,
     updatedAt: transaction.updatedAt,
@@ -182,7 +347,7 @@ async function possibleDuplicates(userId: string, transaction: Stored) {
     }));
 }
 
-async function audit(
+export async function audit(
   userId: string,
   actor: EntryActor,
   toolName: string,
@@ -218,6 +383,48 @@ export async function findEntry(userId: string, ref: { id?: string; externalId?:
   return found;
 }
 
+/**
+ * Sets the entry's review reasons from its classification, its account and the
+ * possible duplicates found for it, and builds the write response.
+ */
+async function withReview(
+  userId: string,
+  transaction: Stored,
+  facts: {
+    decision: Pick<ClassificationDecision, "decidedBy"> | undefined;
+    accountAutoCreated: boolean;
+    accountCreated: { id: string; accountIdentifier: string; label: string | null } | null;
+    warnings: string[];
+  },
+) {
+  const duplicates = await possibleDuplicates(userId, transaction);
+  const reasons: ReviewReason[] = reviewReasonsFor({
+    decision: facts.decision ?? { decidedBy: "correction" },
+    accountAutoCreated: facts.accountAutoCreated,
+    possibleDuplicates: duplicates.length,
+  });
+  const saved = await prisma.transaction.update({
+    where: { id: transaction.id },
+    data: { reviewReasons: reasons },
+    include: { category: true },
+  });
+  return {
+    transaction: publicEntry(saved),
+    possibleDuplicates: duplicates,
+    ...(facts.accountCreated
+      ? {
+          accountCreated: {
+            id: facts.accountCreated.id,
+            accountIdentifier: facts.accountCreated.accountIdentifier,
+            label: facts.accountCreated.label,
+            autoCreated: true,
+          },
+        }
+      : {}),
+    ...(facts.warnings.length ? { warnings: facts.warnings } : {}),
+  };
+}
+
 function assertAssistantEntry(transaction: Stored) {
   if (transaction.entrySource !== "assistant")
     throw new EntryError(409, "Only transactions the assistant created can be changed through this API");
@@ -251,34 +458,46 @@ export const AssistantEntries = {
 
   async create(userId: string, input: CreateEntryInput, actor: EntryActor) {
     const parts = entryDateParts(input.date, input.time);
-    const { accountIdentifier, card } = await resolveAccount(userId, input.account, input.card);
+    const account = await resolveAccount(userId, input);
     const settings = await prisma.userSettings.findUnique({ where: { userId }, select: { currency: true } });
+    const classified = await classifyEntry(userId, {
+      date: parts.date,
+      description: input.description,
+      label: input.label || null,
+      amountIn: input.amountIn ?? null,
+      amountOut: input.amountOut ?? null,
+      accountIdentifier: account.accountIdentifier,
+      suggestedCategory: input.suggestedCategory,
+    });
     const transaction = await runInTransaction(async () => {
-      const { uncategorized } = await TransactionService.ensureReservedCategories(userId);
-      const category = input.category ? await resolveCategory(userId, input.category) : uncategorized;
-      const linkage = linkageFor(category.name, input.amountIn);
       const created = await prisma.transaction.create({
         data: {
           userId,
           externalId: input.externalId,
           entrySource: "assistant",
+          reviewStatus: "to_review",
           date: parts.date,
           description: input.description,
-          label: input.label || null,
-          categoryId: category.id,
+          label: classified.label,
+          categoryId: classified.categoryId,
           amountIn: input.amountIn ?? null,
           amountOut: input.amountOut ?? null,
           currency: (input.currency || settings?.currency || "SGD").toUpperCase(),
-          accountIdentifier,
-          metadata: entryMetadata({}, parts, card ?? null, input.metadata ?? null),
-          linkage: linkage ? (linkage as Prisma.InputJsonValue) : Prisma.DbNull,
+          accountIdentifier: account.accountIdentifier,
+          metadata: entryMetadata({}, parts, account.card ?? null, input.metadata ?? null, classified.decision),
+          linkage: classified.linkage ? (classified.linkage as Prisma.InputJsonValue) : Prisma.DbNull,
         },
         include: { category: true },
       });
       await audit(userId, actor, "create_transaction", created.id, { afterValue: publicEntry(created) });
       return created;
     });
-    return { transaction: publicEntry(transaction), possibleDuplicates: await possibleDuplicates(userId, transaction) };
+    return withReview(userId, transaction, {
+      decision: classified.decision,
+      accountAutoCreated: account.autoCreated,
+      accountCreated: account.created,
+      warnings: classified.warnings,
+    });
   },
 
   async update(
@@ -287,7 +506,7 @@ export const AssistantEntries = {
     input: UpdateEntryInput,
     actor: EntryActor,
   ) {
-    const transaction = await runInTransaction(async () => {
+    const changed = await runInTransaction(async () => {
       const existing = await findEntry(userId, ref);
       assertAssistantEntry(existing);
       let dateParts: ReturnType<typeof entryDateParts> | null = null;
@@ -302,8 +521,8 @@ export const AssistantEntries = {
         dateParts = { ...parsed, time };
       }
       const resolved =
-        input.account !== undefined || input.card?.last4
-          ? await resolveAccount(userId, input.account, input.card)
+        input.account !== undefined || input.accountName != null || input.card?.last4
+          ? await resolveAccount(userId, { ...input, externalId: existing.externalId })
           : null;
 
       // One amount replaces the other: money out becoming money in clears amountOut.
@@ -313,21 +532,52 @@ export const AssistantEntries = {
           : input.amountOut != null
             ? { amountIn: null, amountOut: input.amountOut }
             : {};
-      const nextAmountIn =
-        "amountIn" in amounts ? amounts.amountIn : money(existing.amountIn);
+      const nextAmountIn = "amountIn" in amounts ? (amounts.amountIn ?? null) : money(existing.amountIn);
+      const nextAmountOut = "amountOut" in amounts ? (amounts.amountOut ?? null) : money(existing.amountOut);
+      const accountIdentifier = resolved?.accountIdentifier ?? existing.accountIdentifier ?? "";
 
+      // Fortuna classifies again when what it classifies on changed, unless a
+      // review has corrected the entry: a person's correction stands.
+      const previous = record(record(existing.metadata).classification) as Partial<ClassificationDecision>;
+      const relevant =
+        input.description !== undefined ||
+        "amountIn" in amounts ||
+        resolved !== null ||
+        input.suggestedCategory !== undefined;
+      let decision = (previous.decidedBy ? previous : undefined) as ClassificationDecision | undefined;
+      let warnings: string[] = [];
       let categoryChange: { categoryId?: string; linkage?: unknown } = {};
-      if (input.category !== undefined) {
-        const { uncategorized } = await TransactionService.ensureReservedCategories(userId);
-        const category = input.category ? await resolveCategory(userId, input.category) : uncategorized;
-        const linkage = linkageFor(category.name, nextAmountIn);
-        categoryChange = { categoryId: category.id, linkage };
+      let labelChange: { label?: string | null } =
+        input.label !== undefined ? { label: input.label || null } : {};
+      if (relevant && previous.decidedBy !== "correction") {
+        const currentLabel =
+          input.label !== undefined ? input.label || null : previous.labelFromRule ? null : existing.label;
+        const classified = await classifyEntry(userId, {
+          date: dateParts?.date ?? existing.date,
+          description: input.description ?? existing.description,
+          label: currentLabel,
+          amountIn: nextAmountIn,
+          amountOut: nextAmountOut,
+          accountIdentifier,
+          suggestedCategory:
+            input.suggestedCategory !== undefined ? input.suggestedCategory : (previous.suggestedCategory ?? null),
+        });
+        decision = classified.decision;
+        warnings = classified.warnings;
+        const existingType = record(existing.linkage).type;
+        const reservedBefore = existingType === "internal" || existingType === "reimbursement";
+        if (classified.categoryId !== existing.categoryId || (classified.linkage?.type ?? null) !== (reservedBefore ? existingType : null))
+          categoryChange = {
+            categoryId: classified.categoryId,
+            ...(classified.linkage ? { linkage: classified.linkage } : reservedBefore ? { linkage: null } : {}),
+          };
+        if (classified.label !== existing.label) labelChange = { label: classified.label };
       }
 
       await TransactionService.updateTransaction(existing.id, userId, {
         ...(dateParts ? { date: dateParts.date } : {}),
         ...(input.description !== undefined ? { description: input.description } : {}),
-        ...(input.label !== undefined ? { label: (input.label || null) as string } : {}),
+        ...(labelChange as { label?: string }),
         ...(amounts as { amountIn?: number | null; amountOut?: number | null }),
         ...(input.currency ? { currency: input.currency.toUpperCase() } : {}),
         ...(resolved ? { accountIdentifier: resolved.accountIdentifier } : {}),
@@ -336,11 +586,15 @@ export const AssistantEntries = {
       await prisma.transaction.update({
         where: { id: existing.id },
         data: {
+          // A change from the assistant goes back into the queue.
+          reviewStatus: "to_review",
+          reviewedAt: null,
           metadata: entryMetadata(
             existing.metadata,
             dateParts,
             resolved ? resolved.card : input.card,
             input.metadata,
+            decision,
           ),
         },
       });
@@ -349,9 +603,23 @@ export const AssistantEntries = {
         beforeValue: publicEntry(existing),
         afterValue: publicEntry(updated),
       });
-      return updated;
+      const accountAutoCreated =
+        resolved?.autoCreated ??
+        Boolean(
+          updated.accountIdentifier &&
+            (await prisma.accountIdentifier.findFirst({
+              where: { userId, accountIdentifier: updated.accountIdentifier, autoCreated: true },
+              select: { id: true },
+            })),
+        );
+      return { updated, decision, warnings, accountAutoCreated, accountCreated: resolved?.created ?? null };
     });
-    return { transaction: publicEntry(transaction), possibleDuplicates: await possibleDuplicates(userId, transaction) };
+    return withReview(userId, changed.updated, {
+      decision: changed.decision,
+      accountAutoCreated: changed.accountAutoCreated,
+      accountCreated: changed.accountCreated,
+      warnings: changed.warnings,
+    });
   },
 
   async remove(userId: string, ref: { id?: string; externalId?: string }, actor: EntryActor) {

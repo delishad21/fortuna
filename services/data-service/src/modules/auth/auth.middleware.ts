@@ -66,6 +66,21 @@ export function requireApiToken(requiredScopes: string[] = []) {
   };
 }
 
+/** An API token granting at least one of the scopes. */
+export function requireApiTokenAnyOf(scopes: string[]) {
+  const authenticate = requireApiToken();
+  return (request: Request, response: Response, next: NextFunction) =>
+    authenticate(request, response, (error?: unknown) => {
+      if (error) return next(error);
+      const granted = new Set(request.apiAuth?.scopes ?? []);
+      if (granted.has("*") || scopes.some((scope) => granted.has(scope))) return next();
+      return response.status(403).json({
+        error: "API token does not grant the required scope",
+        anyOfScopes: scopes,
+      });
+    });
+}
+
 function trustedServiceMatches(request: Request) {
   const expected = process.env.INTERNAL_SERVICE_TOKEN;
   const supplied = request.header("x-internal-service-token");

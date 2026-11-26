@@ -34,13 +34,14 @@ describe("assistant entry dates", () => {
 describe("assistant entry input", () => {
   const base = { externalId: "mail-1", date: "2026-11-26", description: "KOPITIAM", account: "DBS" };
 
-  it("needs exactly one amount and an account or card", () => {
+  it("needs exactly one amount; the account is optional", () => {
     assert.equal(CreateEntrySchema.safeParse({ ...base, amountOut: 5 }).success, true);
     assert.equal(CreateEntrySchema.safeParse({ ...base }).success, false);
     assert.equal(CreateEntrySchema.safeParse({ ...base, amountIn: 5, amountOut: 5 }).success, false);
     assert.equal(CreateEntrySchema.safeParse({ ...base, amountOut: -5 }).success, false);
     const { account: _account, ...noAccount } = base;
-    assert.equal(CreateEntrySchema.safeParse({ ...noAccount, amountOut: 5 }).success, false);
+    assert.equal(CreateEntrySchema.safeParse({ ...noAccount, amountOut: 5 }).success, true);
+    assert.equal(CreateEntrySchema.safeParse({ ...base, amountOut: 5, category: "Food" }).success, false);
     assert.equal(CreateEntrySchema.safeParse({ ...noAccount, amountOut: 5, card: { last4: "4591" } }).success, true);
     assert.equal(CreateEntrySchema.safeParse({ ...base, amountOut: 5, userId: "x" }).success, false);
   });

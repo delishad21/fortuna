@@ -111,7 +111,7 @@ test("the same externalId updates the entry, which shows in the ledger and analy
       description: "KOPITIAM BEDOK",
       label: "Lunch",
       amountOut: 6.8,
-      category: "food",
+      suggestedCategory: "food",
       card: { last4: "4591" },
       metadata: { notification: "You spent SGD 6.80 at KOPITIAM BEDOK" },
     };
@@ -146,7 +146,7 @@ test("the same externalId updates the entry, which shows in the ledger and analy
       // External ids belong to one user: the other user's same id is their own row.
       await db.accountIdentifier.create({ data: { userId: other.id, accountIdentifier: "OCBC 1" } });
       assert.equal(
-        (await post({ ...entry, card: undefined, category: undefined, account: "OCBC 1" }, otherWriter)).status,
+        (await post({ ...entry, card: undefined, suggestedCategory: undefined, account: "OCBC 1" }, otherWriter)).status,
         201,
       );
       assert.equal(await db.transaction.count({ where: { userId: other.id } }), 1);
@@ -172,7 +172,7 @@ test("the same externalId updates the entry, which shows in the ledger and analy
       const patched = await fetch(`${base}/transactions/external/notif-42`, {
         method: "PATCH",
         headers: writer,
-        body: JSON.stringify({ amountIn: 7.2, category: "Reimbursement", time: "13:00" }),
+        body: JSON.stringify({ amountIn: 7.2, suggestedCategory: "Reimbursement", time: "13:00" }),
       });
       assert.equal(patched.status, 200);
       const refunded = ((await patched.json()) as any).transaction;
@@ -184,9 +184,13 @@ test("the same externalId updates the entry, which shows in the ledger and analy
       const stored = await db.transaction.findUniqueOrThrow({ where: { id: created.transaction.id } });
       assert.equal((stored.linkage as any).type, "reimbursement");
 
-      const unknown = await post({ ...entry, externalId: "notif-43", category: "Nope" });
-      assert.equal(unknown.status, 400);
-      assert.ok(((await unknown.json()) as any).categories.includes("Food"));
+      // An unknown suggestion is only a warning: the entry goes in Uncategorized.
+      const unknown = await post({ ...entry, externalId: "notif-43", suggestedCategory: "Nope" });
+      assert.equal(unknown.status, 201);
+      const unknownBody = (await unknown.json()) as any;
+      assert.equal(unknownBody.transaction.category.name, "Uncategorized");
+      assert.match(unknownBody.warnings[0], /Unknown category "Nope"/);
+      await fetch(`${base}/transactions/external/notif-43`, { method: "DELETE", headers: writer });
 
       // Statement rows aren't the assistant's to change or delete.
       const statementRow = await db.transaction.findFirstOrThrow({ where: { userId: user.id, entrySource: "statement" } });
@@ -205,7 +209,7 @@ test("the same externalId updates the entry, which shows in the ledger and analy
         (await db.agentAuditEvent.findMany({ where: { userId: user.id }, orderBy: { createdAt: "asc" } })).map(
           (event) => event.toolName,
         ),
-        ["create_transaction", "update_transaction", "update_transaction", "delete_transaction"],
+        ["create_transaction", "update_transaction", "update_transaction", "create_transaction", "delete_transaction", "delete_transaction"],
       );
     } finally {
       server.close();

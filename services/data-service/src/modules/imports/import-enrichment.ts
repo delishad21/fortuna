@@ -108,11 +108,25 @@ export async function enrichImportRows(
   rows: Row[],
 ): Promise<Row[]> {
   if (rows.length === 0) return rows;
+  return classifyRows(userId, source.parserId, withSourceMetadata(rows, source));
+}
+
+/**
+ * Fortuna's classification for main-ledger rows, wherever they come from:
+ * import rules, then auto-categorization, then reserved-category linkage.
+ * Statement imports and assistant entries both go through it.
+ */
+export async function classifyRows(
+  userId: string,
+  parserId: string | undefined,
+  rows: Row[],
+): Promise<Row[]> {
+  if (rows.length === 0) return rows;
   await TransactionService.bootstrapDefaultImportRules(userId);
   const ruled = (await TransactionService.applyImportRules(
     userId,
-    source.parserId,
-    withSourceMetadata(rows, source) as never[],
+    parserId,
+    rows as never[],
   )) as unknown as Row[];
 
   const [categories, settings] = await Promise.all([
@@ -139,7 +153,7 @@ export async function enrichImportRows(
     categorized = (await applyAutoCategorization(
       {
         userId,
-        parserId: source.parserId || "",
+        parserId: parserId || "",
         transactions: ruled as ParsedImportTransaction[],
         categoryByName,
       },

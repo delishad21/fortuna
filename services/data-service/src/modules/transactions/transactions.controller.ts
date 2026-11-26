@@ -2,6 +2,8 @@ import { Router, Request, Response } from "express";
 import { TransactionService } from "./transactions.service";
 import { z } from "zod";
 import { parseEntryFilters } from "./assistant-entries";
+import { parseReviewFilter, ReviewStatusSchema } from "./entry-review";
+import { TransactionReview } from "./transaction-review.service";
 
 export const transactionRouter = Router();
 
@@ -163,6 +165,7 @@ const parseFilters = (input: any) => {
         : undefined,
     dateOrder: input.dateOrder as "asc" | "desc" | undefined,
     ...parseEntryFilters(input),
+    ...parseReviewFilter(input),
   };
 };
 
@@ -554,6 +557,7 @@ transactionRouter.get("/", async (req: Request, res: Response) => {
         ? parseFloat(req.query.maxAmount as string)
         : undefined,
       ...parseEntryFilters(req.query),
+      ...parseReviewFilter(req.query),
       limit: req.query.limit ? parseInt(req.query.limit as string) : undefined,
       offset: req.query.offset
         ? parseInt(req.query.offset as string)
@@ -608,6 +612,26 @@ transactionRouter.post("/bulk-delete", async (req: Request, res: Response) => {
     res.json({ success: true, deletedCount: ids.length });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/transactions/review-status
+ * Mark transactions reviewed (or back to review) from the web and phone apps.
+ */
+transactionRouter.post("/review-status", async (req: Request, res: Response) => {
+  try {
+    const { userId, ...body } = req.body ?? {};
+    if (!userId) return res.status(400).json({ error: "userId is required" });
+    const input = ReviewStatusSchema.parse(body);
+    res.json(
+      await TransactionReview.setStatus(userId, input.ids, input.status, {
+        actorType: "user",
+        actorId: userId,
+      }),
+    );
+  } catch (error: any) {
+    res.status(error?.status === 404 ? 404 : 400).json({ error: error.message });
   }
 });
 

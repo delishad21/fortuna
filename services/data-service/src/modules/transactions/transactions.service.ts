@@ -1387,6 +1387,7 @@ export class TransactionService {
       accountIdentifier?: string;
       entrySources?: string[];
       reconciled?: boolean;
+      reviewStatus?: string;
       limit?: number;
       offset?: number;
     },
@@ -1640,6 +1641,9 @@ export class TransactionService {
               entrySource: existing.entrySource,
               reconciled: existing.reconciled,
               reconciledAt: existing.reconciledAt,
+              reviewStatus: existing.reviewStatus,
+              reviewReasons: existing.reviewReasons,
+              reviewedAt: existing.reviewedAt,
               currency: existing.currency,
               metadata: metadata as Prisma.InputJsonValue,
               linkage: isInternal
@@ -1746,6 +1750,7 @@ export class TransactionService {
       accountIdentifier?: string;
       entrySources?: string[];
       reconciled?: boolean;
+      reviewStatus?: string;
     },
     excludeIds: string[] | undefined,
     updates: Partial<ImportTransactionInput>,
@@ -1779,6 +1784,7 @@ export class TransactionService {
       accountIdentifier?: string;
       entrySources?: string[];
       reconciled?: boolean;
+      reviewStatus?: string;
     },
     excludeIds?: string[],
   ) {
@@ -1814,6 +1820,7 @@ export class TransactionService {
       accountIdentifier?: string;
       entrySources?: string[];
       reconciled?: boolean;
+      reviewStatus?: string;
     },
     excludeIds?: string[],
   ) {

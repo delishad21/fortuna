@@ -2,9 +2,10 @@ import { z } from "zod";
 
 /**
  * Input rules for transactions the outside assistant writes through
- * /api/agent/transactions (scope transactions:write). The assistant reviews
- * entries on its side, so they go straight into the ledger as ordinary
- * transactions with entrySource "assistant".
+ * /api/agent/transactions (scope transactions:write). Entries go straight into
+ * the ledger with entrySource "assistant"; Fortuna picks the category with its
+ * own rules (the assistant's suggestedCategory is only a fallback), books the
+ * account (creating one when none matches) and queues the entry for review.
  */
 
 export const ENTRY_SOURCES = ["assistant", "manual", "statement", "mobile"] as const;
@@ -68,8 +69,9 @@ const EntryFields = {
   amountIn: Money.nullish(),
   amountOut: Money.nullish(),
   currency: z.string().trim().regex(/^[A-Za-z]{3}$/, "currency must be a three-letter code").nullish(),
-  category: z.string().trim().min(1).max(120).nullish(),
+  suggestedCategory: z.string().trim().min(1).max(120).nullish(),
   account: z.string().trim().min(1).max(120).nullish(),
+  accountName: z.string().trim().min(1).max(120).nullish(),
   card: CardSchema.nullish(),
   metadata: z.record(z.string(), z.unknown()).nullish(),
 };
@@ -84,8 +86,6 @@ export const CreateEntrySchema = z
     const hasOut = value.amountOut != null;
     if (hasIn === hasOut)
       context.addIssue({ code: "custom", message: "Give exactly one of amountIn or amountOut" });
-    if (!value.account && !value.card?.last4)
-      context.addIssue({ code: "custom", message: "account is required (or a card last4 that names one account)" });
   });
 
 export const UpdateEntrySchema = z
@@ -97,8 +97,9 @@ export const UpdateEntrySchema = z
     amountIn: EntryFields.amountIn,
     amountOut: EntryFields.amountOut,
     currency: EntryFields.currency,
-    category: EntryFields.category,
+    suggestedCategory: EntryFields.suggestedCategory,
     account: EntryFields.account,
+    accountName: EntryFields.accountName,
     card: EntryFields.card,
     metadata: EntryFields.metadata,
   })

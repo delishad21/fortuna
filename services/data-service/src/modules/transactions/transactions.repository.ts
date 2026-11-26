@@ -245,6 +245,7 @@ export class TransactionRepository {
       accountIdentifier?: string;
       entrySources?: string[];
       reconciled?: boolean;
+      reviewStatus?: string;
     },
     excludeIds?: string[],
     ids?: string[],
@@ -275,6 +276,10 @@ export class TransactionRepository {
 
     if (filters?.reconciled !== undefined) {
       where.reconciled = filters.reconciled;
+    }
+
+    if (filters?.reviewStatus) {
+      where.reviewStatus = filters.reviewStatus;
     }
 
     // Under AND so the amount-range OR below can't widen the search.
@@ -379,6 +384,7 @@ export class TransactionRepository {
       accountIdentifier?: string;
       entrySources?: string[];
       reconciled?: boolean;
+      reviewStatus?: string;
       limit?: number;
       offset?: number;
     },
@@ -448,6 +454,7 @@ export class TransactionRepository {
       accountIdentifier?: string;
       entrySources?: string[];
       reconciled?: boolean;
+      reviewStatus?: string;
     },
     excludeIds?: string[],
   ) {
@@ -509,6 +516,7 @@ export class TransactionRepository {
       accountIdentifier?: string;
       entrySources?: string[];
       reconciled?: boolean;
+      reviewStatus?: string;
     },
     excludeIds: string[] | undefined,
     updates: Partial<ImportTransactionInput>,
@@ -545,6 +553,7 @@ export class TransactionRepository {
       accountIdentifier?: string;
       entrySources?: string[];
       reconciled?: boolean;
+      reviewStatus?: string;
     },
     excludeIds?: string[],
   ) {
@@ -566,6 +575,7 @@ export class TransactionRepository {
       accountIdentifier?: string;
       entrySources?: string[];
       reconciled?: boolean;
+      reviewStatus?: string;
     },
     excludeIds?: string[],
   ) {

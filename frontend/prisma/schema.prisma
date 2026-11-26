@@ -366,6 +366,10 @@ model AccountIdentifier {
   /// Friendly name shown with the identifier, e.g. "UOB One credit card".
   label             String?
   color             String   @default("#6366f1") // hex color
+  /// Created by Fortuna for an assistant entry that matched no account; the user confirms or merges it.
+  autoCreated       Boolean  @default(false) @map("auto_created")
+  /// What created it, e.g. "assistant entry gmail:18c2 (card 4591)".
+  autoCreatedFrom   String?  @map("auto_created_from")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
@@ -438,6 +442,11 @@ model Transaction {
   reconciledAt      DateTime? @map("reconciled_at")
   // The assistant's own id for the entry; the same id updates instead of adding a row.
   externalId        String?   @map("external_id")
+  // to_review | reviewed. Assistant entries start to_review; everything else is reviewed.
+  reviewStatus      String    @default("reviewed") @map("review_status")
+  // Why it waits for review: no_rule_matched, assistant_category, new_account, possible_duplicate.
+  reviewReasons     String[]  @default([]) @map("review_reasons")
+  reviewedAt        DateTime? @map("reviewed_at")
   currency          String   @default("SGD")
   metadata          Json? // extra fields from parsing
   linkage           Json? // Transaction linkage data for internal/reimbursement
@@ -453,6 +462,7 @@ model Transaction {
   @@unique([userId, externalId])
   @@index([userId, categoryId])
   @@index([userId, entrySource])
+  @@index([userId, reviewStatus])
   @@map("transactions")
 }
 
