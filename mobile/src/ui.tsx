@@ -2149,6 +2149,7 @@ export const moneyCode = (amount: any, currency = "SGD") => {
 /**
  * One transaction, styled like the web's transaction card: a left edge in the
  * account (or wallet) colour, label, description, a category dot and the amount.
+ * `leading` goes before the text (saved transactions pass TransactionThumb).
  */
 export function TransactionRow({
   item,
@@ -2159,6 +2160,7 @@ export function TransactionRow({
   baseCurrency,
   showDate = false,
   right,
+  leading,
 }: any) {
   const { colors } = useTheme();
   const tripEntry = item.type && item.localAmount != null;
@@ -2213,6 +2215,7 @@ export function TransactionRow({
           <Checkbox checked={!!selected} />
         </View>
       )}
+      {leading}
       <View style={{ flex: 1, gap: 2 }}>
         <Txt bold numberOfLines={1}>
           {item.label || item.description}

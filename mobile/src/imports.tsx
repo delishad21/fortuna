@@ -16,6 +16,7 @@ import { useApi, useResource } from "./api";
 import { useChatApi } from "./chat/api";
 import { shareDownload } from "./sharing";
 import { appendFile } from "./upload";
+import { TransactionThumb } from "./images";
 import {
   ActionMenu,
   Banner,
@@ -1523,6 +1524,7 @@ export function ImportDetailScreen({ navigation, route }: any) {
                 <TransactionRow
                   key={item.id}
                   item={item}
+                  leading={<TransactionThumb item={item} />}
                   onPress={() => navigation.navigate("Transaction", { id: item.id, item })}
                 />
               ))}

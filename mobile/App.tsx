@@ -24,6 +24,7 @@ import { DMMono_400Regular } from "@expo-google-fonts/dm-mono/400Regular";
 import { ApiProvider, useApi, normalizeServer } from "./src/api";
 import { BRAND, Button, Form, styles, ThemeProvider, Txt, useTheme } from "./src/ui";
 import { HomeScreen, AnalyticsScreen } from "./src/home";
+import { AccountsScreen, AccountScreen } from "./src/accounts";
 import {
   TransactionsScreen,
   TransactionScreen,
@@ -234,6 +235,8 @@ const SCREENS: Record<string, [React.ComponentType<any>, string]> = {
   Profile: [ProfileScreen, "Profile"],
   Password: [PasswordScreen, "Password"],
   Preferences: [PreferencesScreen, "Preferences"],
+  Accounts: [AccountsScreen, "Accounts"],
+  Account: [AccountScreen, "Account"],
   Manage: [ManageScreen, "Organize"],
   ManageEditor: [ManageEditorScreen, "Edit"],
   Patterns: [PatternsScreen, "Learned rules"],

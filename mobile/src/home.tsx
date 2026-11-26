@@ -36,6 +36,7 @@ import {
 } from "./ui";
 import { ColumnChart, Donut, RankBars } from "./charts";
 import { shareCsv } from "./sharing";
+import { TransactionThumb } from "./images";
 
 const signed = (n: number, currency?: string) =>
   `${n > 0 ? "+" : n < 0 ? "−" : ""}${money(Math.abs(n), currency)}`;
@@ -160,6 +161,7 @@ function CategorizeRow({ item, categories, onDone, navigation }: any) {
     <View style={{ paddingHorizontal: 12, paddingBottom: 10 }}>
       <TransactionRow
         item={item}
+        leading={<TransactionThumb item={item} />}
         onPress={() => navigation.navigate("Transaction", { id: item.id, item })}
       />
       <Choice
@@ -458,6 +460,7 @@ export function HomeScreen({ navigation }: any) {
                   <TransactionRow
                     key={item.id}
                     item={{ ...item, accountColor: accountColors[item.accountIdentifier] }}
+                    leading={<TransactionThumb item={item} />}
                     showDate
                     onPress={() => openTransaction(item)}
                   />
@@ -818,6 +821,7 @@ function ReportTab({ navigation, currency }: any) {
                     amountOut: item.originalAmountOut ?? item.amountOut,
                     accountColor: accountColors[item.accountIdentifier],
                   }}
+                  leading={<TransactionThumb item={item} />}
                   showDate={ordering === "largest" || ordering === "smallest" || interval === "month"}
                   onPress={() => navigation.navigate("Transaction", { id: item.id, item })}
                 />
@@ -925,6 +929,7 @@ function InsightsTab({ navigation, currency }: any) {
                   <TransactionRow
                     key={item.id}
                     item={item}
+                    leading={<TransactionThumb item={item} />}
                     showDate
                     onPress={() => navigation.navigate("Transaction", { id: item.id, item })}
                   />

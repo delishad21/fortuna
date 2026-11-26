@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { View, Pressable, ScrollView } from "react-native";
 import { Txt, Button, TransactionRow, useTheme } from "../ui";
+import { TransactionThumb } from "../images";
 import {
   useChatApi,
   ComponentBlock,
@@ -90,6 +91,7 @@ function TransactionList({
           <TransactionRow
             key={row.id}
             item={row}
+            leading={<TransactionThumb item={row} />}
             onPress={() => onOpenTransaction(row.id)}
           />
         ))}

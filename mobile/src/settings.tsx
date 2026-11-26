@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Platform, RefreshControl, Switch, View } from "react-native";
+import { Platform, Pressable, RefreshControl, Switch, View } from "react-native";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import Constants from "expo-constants";
 import { useApi, useResource } from "./api";
 import {
@@ -17,6 +18,7 @@ import {
   Group,
   Heading,
   humanize,
+  IconBubble,
   Input,
   ListItem,
   MultiSelect,
@@ -31,10 +33,12 @@ import {
   State,
   styles,
   toast,
+  tap,
   Txt,
   useTheme,
 } from "./ui";
 import { accountDisplay } from "../../frontend/shared/accounts";
+import { CATEGORY_ICONS, categoryIconKey, categoryIonicon } from "../../frontend/shared/categoryIcons";
 
 const SCOPES = [
   "statements:write",
@@ -95,7 +99,7 @@ export function SettingsScreen({ navigation }: any) {
       <Section title="Organize">
         <Group>
           <ListItem icon="pricetags-outline" title="Categories" onPress={() => navigation.navigate("Manage", { kind: "categories" })} />
-          <ListItem icon="card-outline" title="Accounts" onPress={() => navigation.navigate("Manage", { kind: "accounts" })} />
+          <ListItem icon="card-outline" title="Accounts" onPress={() => navigation.navigate("Accounts")} />
           <ListItem icon="git-branch-outline" title="Import rules" onPress={() => navigation.navigate("Manage", { kind: "rules" })} />
           <ListItem
             icon="bulb-outline"
@@ -281,8 +285,7 @@ export function PreferencesScreen() {
   );
 }
 const configs: Record<string, { title: string; get: string; noun: string; subtitle: string }> = {
-  categories: { title: "Categories", get: "getCategories", noun: "category", subtitle: "Trip category names are fixed; you can change their color." },
-  accounts: { title: "Accounts", get: "getAccountNumbers", noun: "account", subtitle: "" },
+  categories: { title: "Categories", get: "getCategories", noun: "category", subtitle: "Trip category names are fixed; you can change their color and icon." },
   rules: { title: "Import rules", get: "getImportRules", noun: "rule", subtitle: "Applied in priority order to rows as statements import." },
 };
 export function ManageScreen({ route, navigation }: any) {
@@ -320,19 +323,9 @@ export function ManageScreen({ route, navigation }: any) {
           kind === "categories" ? (
             <ListItem
               key={item.id}
-              icon="pricetag-outline"
-              color={item.color}
+              left={<IconBubble icon={categoryIonicon(item)} color={item.color} size={32} />}
               title={item.name}
               right={TRIP_CATEGORY_NAMES.includes(item.name) ? <Pill label="Trip" tone="blue" /> : undefined}
-              onPress={() => navigation.navigate("ManageEditor", { kind, item })}
-            />
-          ) : kind === "accounts" ? (
-            <ListItem
-              key={item.id}
-              icon="card-outline"
-              color={item.color}
-              title={item.label || item.accountIdentifier}
-              subtitle={item.label ? item.accountIdentifier : undefined}
               onPress={() => navigation.navigate("ManageEditor", { kind, item })}
             />
           ) : (
@@ -368,11 +361,6 @@ export function ManageEditorScreen({ route, navigation }: any) {
   const fieldMap: Record<string, Field[]> = {
     categories: [
       { key: "name", label: "Name", required: true, hidden: tripCategory },
-      { key: "color", label: "Color", type: "color", required: true },
-    ],
-    accounts: [
-      { key: "label", label: "Friendly name", placeholder: "e.g. UOB One credit card" },
-      { key: "accountIdentifier", label: "Account identifier", required: true },
       { key: "color", label: "Color", type: "color", required: true },
     ],
     rules: [
@@ -429,24 +417,26 @@ export function ManageEditorScreen({ route, navigation }: any) {
   const fields = fieldMap[kind];
   const defaults: any = { color: "#5750F1", enabled: true, matchType: "description_contains", caseSensitive: false, markInternal: false, sortOrder: 0 };
   const initial = Object.fromEntries(fields.map((f) => [f.key, item?.[f.key] ?? defaults[f.key] ?? ""]));
-  const noun = kind === "categories" ? "category" : kind === "accounts" ? "account" : kind === "rules" ? "rule" : "learned rule";
+  const [icon, setIcon] = useState<string | null>(kind === "categories" && item ? categoryIconKey(item) : null);
+  const [color, setColor] = useState<string>(initial.color || BRAND);
+  const noun = kind === "categories" ? "category" : kind === "rules" ? "rule" : "learned rule";
   return (
     <Screen>
-      <Heading title={`${item ? "Edit" : "New"} ${noun}`} subtitle={kind === "patterns" ? `“${item.patternValue}”` : tripCategory ? `${item.name} is a trip category; only its color can change.` : undefined} />
+      <Heading title={`${item ? "Edit" : "New"} ${noun}`} subtitle={kind === "patterns" ? `“${item.patternValue}”` : tripCategory ? `${item.name} is a trip category; only its color and icon can change.` : undefined} />
       <Card>
         <Form
           initial={initial}
           fields={fields}
+          onChange={kind === "categories" ? (v) => setColor(v.color) : undefined}
           onSave={async (v) => {
             if (v.color && !/^#[\da-f]{6}$/i.test(v.color)) throw new Error("Use a six-digit hex color, such as #5750F1");
             if (kind === "rules" && v.matchType === "description_contains" && !String(v.matchValue || "").trim())
               throw new Error("Enter the description text to match");
             if (kind === "categories")
-              await call(item ? "updateCategory" : "createCategory", ...(item ? [item.id, tripCategory ? item.name : v.name, v.color] : [v.name, v.color]));
-            else if (kind === "accounts")
               await call(
-                item ? "updateAccountIdentifier" : "upsertAccountNumber",
-                ...(item ? [item.id, v.accountIdentifier, v.color, v.label || null] : [v.accountIdentifier, v.color, v.label || null]),
+                item ? "updateCategory" : "createCategory",
+                ...(item ? [item.id, tripCategory ? item.name : v.name, v.color] : [v.name, v.color]),
+                ...(icon ? [icon] : []),
               );
             else if (kind === "rules")
               await call(item ? "updateImportRule" : "createImportRule", ...(item ? [item.id, v] : [v]));
@@ -454,7 +444,9 @@ export function ManageEditorScreen({ route, navigation }: any) {
             toast(`${noun[0].toUpperCase()}${noun.slice(1)} saved`);
             navigation.goBack();
           }}
-        />
+        >
+          {kind === "categories" && <IconPicker value={icon} color={color} onChange={setIcon} />}
+        </Form>
       </Card>
       {item && kind !== "patterns" && !tripCategory && (
         <Button
@@ -464,7 +456,7 @@ export function ManageEditorScreen({ route, navigation }: any) {
           icon="trash-outline"
           onPress={() =>
             confirm(`Delete this ${noun}?`, "Existing records and system-defined items may prevent deletion.", async () => {
-              await call(kind === "categories" ? "deleteCategory" : kind === "accounts" ? "deleteAccountIdentifier" : "deleteImportRule", item.id);
+              await call(kind === "categories" ? "deleteCategory" : "deleteImportRule", item.id);
               toast(`${noun[0].toUpperCase()}${noun.slice(1)} deleted`);
               navigation.goBack();
             }, "Delete")
@@ -472,6 +464,47 @@ export function ManageEditorScreen({ route, navigation }: any) {
         />
       )}
     </Screen>
+  );
+}
+function IconPicker({ value, color, onChange }: { value: string | null; color: string; onChange: (key: string) => void }) {
+  const { colors } = useTheme();
+  const tint = /^#[\da-f]{6}$/i.test(color) ? color : colors.purple;
+  const current = CATEGORY_ICONS.find((i) => i.key === value);
+  return (
+    <View style={{ gap: 8 }}>
+      <Txt muted size={13} bold>
+        Icon{current ? ` · ${current.label}` : ""}
+      </Txt>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+        {CATEGORY_ICONS.map((i) => {
+          const selected = i.key === value;
+          return (
+            <Pressable
+              key={i.key}
+              accessibilityRole="button"
+              accessibilityLabel={i.label}
+              accessibilityState={{ selected }}
+              onPress={() => {
+                tap();
+                onChange(i.key);
+              }}
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 8,
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 1,
+                borderColor: selected ? tint : colors.line,
+                backgroundColor: selected ? `${tint}22` : colors.card,
+              }}
+            >
+              <Ionicons name={i.ionicon} size={22} color={selected ? tint : colors.muted} />
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
   );
 }
 const STATUS_TONE: Record<string, any> = { auto_apply: "green", disabled: "neutral", unresolved: "amber" };

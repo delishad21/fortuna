@@ -53,7 +53,9 @@ import {
   useTheme,
 } from "./ui";
 import { shareCsv } from "./sharing";
+import { pickImage, RemoteImage, TransactionThumb } from "./images";
 import { accountDisplay, accountName } from "../../frontend/shared/accounts";
+import { cardDisplay } from "../../frontend/shared/accountTypes";
 import { monthOfRange, monthOptions, monthRange } from "../../frontend/shared/months";
 import {
   ENTRY_SOURCES,
@@ -480,7 +482,12 @@ export function TransactionsScreen({ navigation, route }: any) {
             }}
           >
           <TransactionRow
-            item={{ ...item, accountLabel: names[item.accountIdentifier], accountColor: accountColors[item.accountIdentifier] }}
+            item={{
+              ...item,
+              accountLabel: item.account?.name || names[item.accountIdentifier],
+              accountColor: item.account?.color || accountColors[item.accountIdentifier],
+            }}
+            leading={<TransactionThumb item={item} />}
             selectable={selecting}
             selected={selecting && isSelected(item.id)}
             onLongPress={() => {
@@ -618,6 +625,20 @@ export function TransactionScreen({ navigation, route }: any) {
     });
   const category = t.category;
   const account = (accounts.data || []).find((a: any) => a.accountIdentifier === t.accountIdentifier);
+  const accountText = t.account?.name
+    ? [t.account.name, t.card && cardDisplay(t.card)].filter(Boolean).join(" · ")
+    : account
+      ? accountDisplay(account)
+      : t.accountIdentifier || "No account";
+  const setImage = async (base64: string | null) => {
+    await call("setTransactionImage", t.id, base64);
+    toast(base64 ? "Image saved" : "Image removed");
+    await tx.reload();
+  };
+  const chooseImage = () =>
+    void pickImage()
+      .then((base64) => (base64 ? setImage(base64) : undefined))
+      .catch(notice);
   const metadata = Object.entries(t.metadata || {}).filter(
     ([k, v]) => v != null && v !== "" && typeof v !== "object" && !["parserId"].includes(k),
   );
@@ -625,6 +646,7 @@ export function TransactionScreen({ navigation, route }: any) {
     <Screen refreshControl={<RefreshControl refreshing={tx.loading && !!tx.data} onRefresh={reload} />}>
       <Card style={{ gap: 8 }}>
         <View style={[styles.between, { alignItems: "flex-start" }]}>
+          <TransactionThumb item={t} size={40} />
           <View style={{ flex: 1, gap: 2 }}>
             <Txt bold size={18}>
               {t.label || t.description}
@@ -712,7 +734,7 @@ export function TransactionScreen({ navigation, route }: any) {
             value={typeof t.metadata?.time === "string" ? `${fmtDate(t.date)} · ${t.metadata.time}` : fmtDate(t.date)}
           />
           <KeyValue label="Category" value={category?.name || "Uncategorized"} />
-          <KeyValue label="Account" value={account ? accountDisplay(account) : t.accountIdentifier || "No account"} />
+          <KeyValue label="Account" value={accountText} />
           {t.balance != null && <KeyValue label="Balance" mono value={money(t.balance, t.currency)} />}
           {!!t.currency && <KeyValue label="Currency" value={t.currency} />}
           {!!t.entrySource && <KeyValue label="Source" value={entrySourceLabel(t.entrySource)} />}
@@ -744,6 +766,26 @@ export function TransactionScreen({ navigation, route }: any) {
             <KeyValue label="Parser" value={t.importBatch?.parserId || t.metadata?.parserId} />
           )}
         </Card>
+      </Section>
+      <Section title="Image">
+        {t.imageId ? (
+          <Card style={{ gap: 12 }}>
+            <RemoteImage path={`/api/images/${t.imageId}`} size={160} fallback={null} />
+            <View style={styles.row}>
+              <Button title="Replace" compact secondary icon="image-outline" onPress={chooseImage} />
+              <Button
+                title="Remove"
+                compact
+                secondary
+                danger
+                icon="trash-outline"
+                onPress={() => confirm("Remove image?", "The category icon shows instead.", () => setImage(null), "Remove")}
+              />
+            </View>
+          </Card>
+        ) : (
+          <Button title="Add image" compact secondary icon="image-outline" style={{ alignSelf: "flex-start" }} onPress={chooseImage} />
+        )}
       </Section>
       <Section title="Reconciliation"      >
         <Segmented
