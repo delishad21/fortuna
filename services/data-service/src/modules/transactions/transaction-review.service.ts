@@ -10,11 +10,12 @@ import {
   RESERVED,
   resolveCategory,
   type EntryActor,
+  UNASSIGNED_ACCOUNT,
 } from "./assistant-entries.service";
 import type { ClassificationDecision, CorrectionInput, ReviewQueueQuery, ReviewReason } from "./entry-review";
 import { REVIEW_REASONS } from "./entry-review";
 import { TransactionService } from "./transactions.service";
-import { markAccountReviewed, mergeAccount } from "../accounts/accounts.service";
+import { getAccount, markAccountReviewed, mergeAccount, updateAccount } from "../accounts/accounts.service";
 
 /**
  * The review queue behind /api/agent/transactions/review (scope
@@ -74,19 +75,6 @@ async function freeRuleName(userId: string, wanted: string) {
     if (!taken.has(name)) return name;
   }
   throw new EntryError(409, "Give the rule a name");
-}
-
-async function dropAccountReason(userId: string, accountIdentifier: string) {
-  const rows = await prisma.transaction.findMany({
-    where: { userId, accountIdentifier, reviewReasons: { has: "new_account" } },
-    select: { id: true, reviewReasons: true },
-  });
-  for (const row of rows)
-    await prisma.transaction.update({
-      where: { id: row.id },
-      data: { reviewReasons: row.reviewReasons.filter((reason) => reason !== "new_account") },
-    });
-  return rows.length;
 }
 
 async function accountAudit(
@@ -290,62 +278,62 @@ export const TransactionReview = {
     return { transactions: updated.map(publicEntry) };
   },
 
-  /** Keeps an account Fortuna created: it is no longer flagged, and its entries lose the new_account reason. */
+  /**
+   * Keeps an account Fortuna created: it is no longer flagged, and its entries
+   * lose the new_account reason (accounts.service confirmAccount, like Keep in
+   * the apps). A label renames the account.
+   */
   async confirmAccount(userId: string, ref: string, input: { label?: string }, actor: EntryActor) {
     const account = await findAccount(userId, ref);
-    if (!account) throw new EntryError(404, "Account not found");
-    const result = await runInTransaction(async () => {
-      if (input.label) {
-        await prisma.accountIdentifier.update({ where: { id: account.id }, data: { label: input.label } });
-        if (account.accountId)
-          await prisma.financialAccount.update({ where: { id: account.accountId }, data: { name: input.label } });
-      }
-      let entries: number;
-      if (account.accountId) entries = await markAccountReviewed(prisma, userId, account.accountId);
-      else {
-        await prisma.accountIdentifier.update({ where: { id: account.id }, data: { autoCreated: false } });
-        entries = await dropAccountReason(userId, account.accountIdentifier);
-      }
-      const saved = (await findAccount(userId, account.id))!;
-      await accountAudit(userId, actor, "confirm_account", saved.id, { beforeValue: account, afterValue: saved });
-      return { saved, entries };
+    if (!account?.accountId) throw new EntryError(404, "Account not found");
+    const accountId = account.accountId;
+    return runInTransaction(async () => {
+      const entries = await markAccountReviewed(prisma, userId, accountId);
+      const saved = input.label
+        ? await updateAccount(prisma, userId, accountId, { name: input.label })
+        : await getAccount(prisma, userId, accountId);
+      await accountAudit(userId, actor, "confirm_account", accountId, { beforeValue: account, afterValue: saved });
+      return {
+        account: {
+          id: saved.id,
+          accountIdentifier: account.accountIdentifier,
+          label: saved.name,
+          autoCreated: saved.autoCreated,
+          autoCreatedFrom: saved.autoCreatedFrom,
+        },
+        entriesUpdated: entries,
+      };
     });
-    const row = await prisma.accountIdentifier.findUniqueOrThrow({
-      where: { id: account.id },
-      select: { id: true, accountIdentifier: true, label: true, autoCreatedFrom: true },
-    });
-    return {
-      account: { ...row, label: result.saved.label, autoCreated: result.saved.autoCreated, accountId: result.saved.accountId },
-      entriesUpdated: result.entries,
-    };
   },
 
   /**
-   * Moves everything booked to an account Fortuna created onto an existing
-   * account, then removes the created one. Only auto-created accounts can be merged away.
+   * Merges an account Fortuna created into an existing one (accounts.service
+   * mergeAccount, like Merge into… in the apps): its cards, identifiers and
+   * entries move and it is removed, so the next entry for that card or
+   * identifier lands on the existing account. The shared "no account"
+   * identifier is dropped instead, so later entries without an account are
+   * flagged again. Only auto-created accounts can be merged away here.
    */
   async mergeAccount(userId: string, ref: string, into: string, actor: EntryActor) {
     const [from, target] = await Promise.all([findAccount(userId, ref), findAccount(userId, into)]);
-    if (!from) throw new EntryError(404, "Account not found");
-    if (!target) throw new EntryError(400, `Unknown account "${into}"`);
-    if (from.id === target.id) throw new EntryError(400, "An account can't be merged into itself");
+    if (!from?.accountId) throw new EntryError(404, "Account not found");
+    if (!target?.accountId) throw new EntryError(400, `Unknown account "${into}"`);
+    if (from.accountId === target.accountId) throw new EntryError(400, "An account can't be merged into itself");
     if (!from.autoCreated)
       throw new EntryError(409, "Only accounts Fortuna created can be merged away; correct entries one by one instead");
+    const fromId = from.accountId;
+    const targetId = target.accountId;
     const moved = await runInTransaction(async () => {
-      // Cards and any other identifiers of the created account move with it.
-      if (from.accountId && target.accountId && from.accountId !== target.accountId)
-        await mergeAccount(prisma, userId, from.accountId, target.accountId);
-      const { count } = await prisma.transaction.updateMany({
-        where: { userId, accountIdentifier: from.accountIdentifier },
-        data: { accountIdentifier: target.accountIdentifier },
-      });
-      await prisma.importRule.updateMany({
-        where: { userId, accountIdentifier: from.accountIdentifier },
-        data: { accountIdentifier: target.accountIdentifier },
-      });
-      if (!target.autoCreated) await dropAccountReason(userId, target.accountIdentifier);
-      await prisma.accountIdentifier.delete({ where: { id: from.id } });
-      await accountAudit(userId, actor, "merge_account", from.id, {
+      const count = await prisma.transaction.count({ where: { userId, accountId: fromId } });
+      await mergeAccount(prisma, userId, fromId, targetId);
+      if (from.accountIdentifier === UNASSIGNED_ACCOUNT) {
+        await prisma.transaction.updateMany({
+          where: { userId, accountIdentifier: UNASSIGNED_ACCOUNT },
+          data: { accountIdentifier: target.accountIdentifier },
+        });
+        await prisma.accountIdentifier.deleteMany({ where: { userId, accountIdentifier: UNASSIGNED_ACCOUNT } });
+      }
+      await accountAudit(userId, actor, "merge_account", fromId, {
         beforeValue: from,
         afterValue: { mergedInto: target, transactionsMoved: count },
       });

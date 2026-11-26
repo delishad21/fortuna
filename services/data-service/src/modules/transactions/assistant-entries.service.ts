@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import prisma from "../../lib/prisma";
+import { addCard, createAccount, runInTransaction as runAccountTransaction } from "../accounts/accounts.service";
 import { DuplicateDetector } from "../duplicates/duplicate-detector";
 import { classifyRows } from "../imports/import-enrichment";
 import { runInTransaction } from "../reimbursements/links.service";
@@ -76,12 +77,10 @@ export type ResolvedAccount = {
  */
 async function loadAccounts(userId: string): Promise<AccountRow[]> {
   const rows = await prisma.accountIdentifier.findMany({
-    where: { userId },
+    where: { userId, accountId: { not: null } },
     select: {
       id: true,
       accountIdentifier: true,
-      label: true,
-      autoCreated: true,
       accountId: true,
       account: { select: { name: true, autoCreated: true } },
     },
@@ -90,8 +89,8 @@ async function loadAccounts(userId: string): Promise<AccountRow[]> {
   return rows.map((row) => ({
     id: row.id,
     accountIdentifier: row.accountIdentifier,
-    label: row.account?.name ?? row.label,
-    autoCreated: row.account ? row.account.autoCreated : row.autoCreated,
+    label: row.account?.name ?? null,
+    autoCreated: row.account?.autoCreated ?? false,
     accountId: row.accountId,
   }));
 }
@@ -115,9 +114,9 @@ export async function findAccount(userId: string, ref: string) {
  * An account the assistant names (identifier, id or name) wins, then the
  * user's card with those last 4 digits (or that card id), then a statement
  * identifier ending in them, each only when exactly one matches. When nothing
- * matches, Fortuna creates the account itself (an identifier whose trigger
- * makes a FinancialAccount flagged autoCreated, with what created it) and a
- * Card under it for the last 4 digits; the entry is queued with reason
+ * matches, Fortuna creates the account itself (flagged autoCreated, with what
+ * created it, through the accounts service) and a Card under it for the last 4
+ * digits; the entry is queued with reason
  * new_account until the user confirms or merges it. The assistant never has
  * to invent one.
  */
@@ -206,38 +205,40 @@ export async function resolveAccount(
   const evidence = card?.last4 ? `card ${card.last4}` : account ? `account "${account.trim()}"` : "no account given";
   const existing = accounts.find((item) => item.accountIdentifier === identifier);
   if (existing) return found(existing);
-  // The trigger on account_numbers creates the account and copies the flag.
-  const saved = await prisma.accountIdentifier.upsert({
-    where: { userId_accountIdentifier: { userId, accountIdentifier: identifier } },
-    update: {},
-    create: {
-      userId,
-      accountIdentifier: identifier,
-      label,
-      autoCreated: true,
-      autoCreatedFrom: `assistant entry${input.externalId ? ` ${input.externalId}` : ""} (${evidence})`,
-    },
-    select: { id: true, accountIdentifier: true, label: true, autoCreated: true, accountId: true },
-  });
-  let cardId: string | null = null;
-  if (card?.last4 && /^[0-9]{4}$/.test(card.last4) && saved.accountId) {
-    await prisma.financialAccount.update({ where: { id: saved.accountId }, data: { type: "credit_card" } });
-    cardId = (
-      await prisma.card.upsert({
-        where: { accountId_last4: { accountId: saved.accountId, last4: card.last4 } },
-        update: {},
-        create: { userId, accountId: saved.accountId, last4: card.last4 },
-        select: { id: true },
-      })
-    ).id;
+  let created;
+  try {
+    created = await runAccountTransaction(async (db) => {
+      const account = await createAccount(db, userId, {
+        name: label || identifier,
+        type: card?.last4 ? "credit_card" : "other",
+        color: "#6366f1",
+        identifiers: [identifier],
+        autoCreated: true,
+        autoCreatedFrom: `assistant entry${input.externalId ? ` ${input.externalId}` : ""} (${evidence})`,
+      });
+      const newCard = card?.last4 && /^[0-9]{4}$/.test(card.last4) ? await addCard(db, userId, account.id, { last4: card.last4 }) : null;
+      return { account, cardId: newCard?.id ?? null };
+    });
+  } catch (error) {
+    // Another request created the same identifier first: use that one.
+    const raced = (await loadAccounts(userId)).find((item) => item.accountIdentifier === identifier);
+    if (raced) return found(raced);
+    throw error;
   }
+  const row: AccountRow = {
+    id: created.account.identifiers[0].id,
+    accountIdentifier: identifier,
+    label: created.account.name,
+    autoCreated: true,
+    accountId: created.account.id,
+  };
   return {
-    accountIdentifier: saved.accountIdentifier,
-    accountId: saved.accountId,
+    accountIdentifier: identifier,
+    accountId: created.account.id,
     card,
-    cardId,
-    autoCreated: saved.autoCreated,
-    created: saved,
+    cardId: created.cardId,
+    autoCreated: true,
+    created: row,
   };
 }
 

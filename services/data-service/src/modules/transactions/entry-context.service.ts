@@ -26,27 +26,36 @@ export const SimilarQuerySchema = z
 
 export const EntryContext = {
   /**
-   * Accounts with the last 4 digits a card notification would show. Seam for
-   * Accounts and Cards (task fortu-6489): cards are empty until Card rows exist.
+   * Accounts with their cards' last 4 digits (what a card notification shows),
+   * statement identifiers, and whether Fortuna created them and from what.
+   * Accounts awaiting review come first.
    */
   async accounts(userId: string) {
-    const [accounts, counts] = await Promise.all([
-      prisma.accountIdentifier.findMany({ where: { userId }, orderBy: [{ autoCreated: "desc" }, { createdAt: "asc" }] }),
-      prisma.transaction.groupBy({ by: ["accountIdentifier"], where: { userId }, _count: true }),
-    ]);
-    const used = new Map(counts.map((row) => [row.accountIdentifier, row._count]));
+    const accounts = await prisma.financialAccount.findMany({
+      where: { userId, archived: false },
+      include: {
+        identifiers: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] },
+        cards: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] },
+        _count: { select: { transactions: true } },
+      },
+      orderBy: [{ autoCreated: "desc" }, { createdAt: "asc" }],
+    });
     return {
       accounts: accounts.map((account) => {
-        const digits = identifierDigits(account.accountIdentifier);
+        const primary = account.identifiers[0]?.accountIdentifier ?? null;
+        const digits = primary ? identifierDigits(primary) : "";
         return {
           id: account.id,
-          accountIdentifier: account.accountIdentifier,
-          label: account.label,
-          last4: digits.length >= 4 ? digits.slice(-4) : null,
+          /** The identifier entries are booked under; null when the account has none. */
+          accountIdentifier: primary,
+          identifiers: account.identifiers.map((item) => item.accountIdentifier),
+          label: account.name,
+          type: account.type,
+          last4: account.cards[0]?.last4 ?? (digits.length >= 4 ? digits.slice(-4) : null),
           autoCreated: account.autoCreated,
           autoCreatedFrom: account.autoCreatedFrom,
-          transactionCount: used.get(account.accountIdentifier) ?? 0,
-          cards: [] as Array<{ id: string; last4: string }>,
+          transactionCount: account._count.transactions,
+          cards: account.cards.map((card) => ({ id: card.id, last4: card.last4, network: card.network, nickname: card.nickname })),
         };
       }),
     };

@@ -189,13 +189,12 @@ export async function updateAccount(db: Db, userId: string, accountId: string, i
 }
 
 /**
- * An account no longer needs review: clears its flag (and the legacy one on
- * its identifiers) and the new_account review reason on its transactions.
+ * An account no longer needs review: clears its flag and the new_account
+ * review reason on its transactions.
  * Returns how many transactions lost the reason.
  */
 export async function markAccountReviewed(db: Db, userId: string, accountId: string) {
   await db.financialAccount.update({ where: { id: accountId }, data: { autoCreated: false } });
-  await db.accountIdentifier.updateMany({ where: { userId, accountId, autoCreated: true }, data: { autoCreated: false } });
   const flagged = await db.transaction.findMany({
     where: { userId, accountId, reviewReasons: { has: "new_account" } },
     select: { id: true, reviewReasons: true },

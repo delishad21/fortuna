@@ -120,9 +120,16 @@ test("an entry that matches no account gets one Fortuna creates, to confirm or m
         autoCreated: true,
       });
       assert.ok(first.body.transaction.reviewReasons.includes("new_account"));
-      const created = await db.accountIdentifier.findFirstOrThrow({ where: { userId: user.id, accountIdentifier: "****7788" } });
+      const created = await db.financialAccount.findFirstOrThrow({
+        where: { userId: user.id, identifiers: { some: { accountIdentifier: "****7788" } } },
+        include: { cards: true },
+      });
       assert.equal(created.autoCreated, true);
       assert.match(created.autoCreatedFrom!, /assistant entry a-1 \(card 7788\)/);
+      assert.deepEqual(created.cards.map((card) => card.last4), ["7788"], "a card for the last 4 digits");
+      const firstRow = await db.transaction.findFirstOrThrow({ where: { userId: user.id, externalId: "a-1" } });
+      assert.equal(firstRow.accountId, created.id);
+      assert.equal(firstRow.cardId, created.cards[0].id);
 
       // The next purchase on that card finds the created account and is still flagged.
       const second = await call("POST", "", writer, entry("a-2", { account: undefined, card: { last4: "7788" }, amountOut: 9 }));

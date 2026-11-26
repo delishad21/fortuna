@@ -88,7 +88,8 @@ GROUP BY t."user_id", t."account_number";
 UPDATE "account_numbers" SET "account_id" = gen_random_uuid()::text WHERE "account_id" IS NULL;
 
 -- Identifiers the assistant created (auto_created, from the transaction
--- review migration) give accounts that still need review.
+-- review migration) give accounts that still need review; the flag and what
+-- created the account live on the account from now on.
 INSERT INTO "financial_accounts" ("id", "user_id", "name", "type", "color", "auto_created", "auto_created_from", "created_at", "updated_at")
 SELECT a."account_id", a."user_id",
        COALESCE(NULLIF(btrim(a."label"), ''), a."account_number"),
@@ -106,6 +107,8 @@ FROM "account_numbers" a
 JOIN "financial_accounts" f ON f."id" = a."account_id"
 WHERE f."type" = 'credit_card' AND a."account_number" ~ '[0-9]{4}$' AND a."account_number" LIKE '%*%';
 
+ALTER TABLE "account_numbers" DROP COLUMN "auto_created", DROP COLUMN "auto_created_from";
+
 UPDATE "transactions" t
 SET "account_id" = a."account_id"
 FROM "account_numbers" a
@@ -121,18 +124,17 @@ ALTER TABLE "transactions" ADD CONSTRAINT "transactions_card_id_fkey" FOREIGN KE
 ALTER TABLE "transactions" ADD CONSTRAINT "transactions_image_id_fkey" FOREIGN KEY ("image_id") REFERENCES "images"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- An identifier saved without an account (an import naming a new account, the
--- chat's settings tool, an assistant entry naming an unknown account) gets a
--- new account named after it, flagged for review when the identifier is.
+-- chat's settings tool) gets a new account named after it. Accounts for
+-- unmatched assistant entries are created by the app, flagged auto_created.
 CREATE FUNCTION "account_numbers_assign_account"() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW."account_id" IS NULL THEN
-    INSERT INTO "financial_accounts" ("id", "user_id", "name", "type", "color", "auto_created", "auto_created_from", "updated_at")
+    INSERT INTO "financial_accounts" ("id", "user_id", "name", "type", "color", "updated_at")
     VALUES (
       gen_random_uuid()::text, NEW."user_id",
       COALESCE(NULLIF(btrim(NEW."label"), ''), NEW."account_number"),
       CASE WHEN NEW."label" ~* 'credit' OR NEW."account_number" LIKE '%*%' THEN 'credit_card' ELSE 'other' END,
       CASE WHEN NEW."color" ~ '^#[0-9a-fA-F]{6}$' THEN NEW."color" ELSE '#6366f1' END,
-      NEW."auto_created", NEW."auto_created_from",
       CURRENT_TIMESTAMP
     )
     RETURNING "id" INTO NEW."account_id";
