@@ -1,6 +1,7 @@
 import { z } from "zod";
 import prisma from "../../lib/prisma";
 import { descriptionTerms } from "../chat/tools/ledger";
+import { reimbursableOf } from "../reimbursements/reimbursables.core";
 import { DuplicateDetector } from "../duplicates/duplicate-detector";
 import { identifierDigits } from "./assistant-entries";
 
@@ -181,7 +182,11 @@ export const EntryContext = {
                 : []),
             ],
           },
-          include: { category: { select: { name: true } }, card: { select: { last4: true } } },
+          include: {
+            category: { select: { name: true } },
+            card: { select: { last4: true } },
+            reimbursablePerson: { select: { id: true, name: true } },
+          },
           orderBy: { date: "desc" },
           take: 400,
         })
@@ -238,7 +243,7 @@ export const EntryContext = {
         category: row.category?.name ?? null,
         categoryId: row.categoryId,
         transactionType: precedentType(metadata, row.linkage),
-        reimbursable: metadata.reimbursable ?? null,
+        reimbursable: reimbursableOf(row, row.reimbursablePerson),
         amountIn: row.amountIn == null ? null : Number(row.amountIn),
         amountOut: row.amountOut == null ? null : Number(row.amountOut),
         currency: row.currency,
