@@ -9,6 +9,11 @@ import { SearchBar } from "@/components/ui/SearchBar";
 import { Button } from "@/components/ui/Button";
 import { DatePicker } from "@/components/ui/DatePicker";
 import { monthOfRange, monthOptions, monthRange } from "@/lib/months";
+import {
+  ENTRY_SOURCES,
+  ENTRY_SOURCE_LABELS,
+  type ReconciledFilter,
+} from "@/lib/entrySource";
 
 interface Category {
   id: string;
@@ -28,6 +33,8 @@ interface FilterValues {
   amountMax: string;
   transactionType: "all" | "income" | "expense";
   dateOrder: "desc" | "asc";
+  entrySource: string;
+  reconciled: ReconciledFilter;
 }
 
 interface TransactionFiltersProps {
@@ -78,6 +85,8 @@ export function TransactionFilters({
     amountMax: initialFilters.amountMax || "",
     transactionType: initialFilters.transactionType || "all",
     dateOrder: initialFilters.dateOrder || "desc",
+    entrySource: initialFilters.entrySource || "",
+    reconciled: initialFilters.reconciled || "all",
   });
 
   const updateFilter = <K extends keyof FilterValues>(
@@ -138,6 +147,8 @@ export function TransactionFilters({
       amountMax: "",
       transactionType: "all",
       dateOrder: "desc",
+      entrySource: "",
+      reconciled: "all",
     };
     setFilters(clearedFilters);
     onFilterChange(clearedFilters);
@@ -154,7 +165,9 @@ export function TransactionFilters({
     filters.amountMin ||
     filters.amountMax ||
     filters.transactionType !== "all" ||
-    filters.dateOrder !== "desc";
+    filters.dateOrder !== "desc" ||
+    filters.entrySource ||
+    filters.reconciled !== "all";
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -344,6 +357,45 @@ export function TransactionFilters({
                       options={[
                         { value: "desc", label: "Newest First" },
                         { value: "asc", label: "Oldest First" },
+                      ]}
+                      className="mt-1 w-full"
+                      buttonClassName="w-full"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-dark-5 dark:text-dark-6">
+                      Source
+                    </label>
+                    <Select
+                      value={filters.entrySource}
+                      onChange={(value) => updateFilter("entrySource", value)}
+                      options={[
+                        { value: "", label: "All Sources" },
+                        ...ENTRY_SOURCES.map((source) => ({
+                          value: source,
+                          label: ENTRY_SOURCE_LABELS[source],
+                        })),
+                      ]}
+                      className="mt-1 w-full"
+                      buttonClassName="w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-dark-5 dark:text-dark-6">
+                      Reconciled
+                    </label>
+                    <Select
+                      value={filters.reconciled}
+                      onChange={(value) =>
+                        updateFilter("reconciled", value as ReconciledFilter)
+                      }
+                      options={[
+                        { value: "all", label: "All" },
+                        { value: "reconciled", label: "Reconciled" },
+                        { value: "unreconciled", label: "Not Reconciled" },
                       ]}
                       className="mt-1 w-full"
                       buttonClassName="w-full"

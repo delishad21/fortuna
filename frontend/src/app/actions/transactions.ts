@@ -159,6 +159,8 @@ export async function getTransactions(filters?: {
   transactionType?: "income" | "expense";
   dateOrder?: "asc" | "desc";
   accountIdentifier?: string;
+  entrySource?: string[];
+  reconciled?: boolean;
   limit?: number;
   offset?: number;
 }) {
@@ -185,6 +187,12 @@ export async function getTransactions(filters?: {
     ...(filters?.dateOrder && { dateOrder: filters.dateOrder }),
     ...(filters?.accountIdentifier && {
       accountIdentifier: filters.accountIdentifier,
+    }),
+    ...(filters?.entrySource?.length && {
+      entrySource: filters.entrySource.join(","),
+    }),
+    ...(filters?.reconciled !== undefined && {
+      reconciled: String(filters.reconciled),
     }),
     ...(filters?.limit && { limit: filters.limit.toString() }),
     ...(filters?.offset && { offset: filters.offset.toString() }),
@@ -345,6 +353,8 @@ export interface TransactionFilterPayload {
   transactionType?: "income" | "expense";
   dateOrder?: "asc" | "desc";
   accountIdentifier?: string;
+  entrySource?: string[];
+  reconciled?: boolean;
 }
 
 export async function bulkUpdateTransactionsByIds(

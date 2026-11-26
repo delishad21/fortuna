@@ -33,6 +33,7 @@ import {
   updateTransaction,
 } from "@/app/actions/transactions";
 import { createCategory } from "@/app/actions/categories";
+import { reconciledParam, type ReconciledFilter } from "@/lib/entrySource";
 
 interface Transaction {
   id: string;
@@ -44,6 +45,9 @@ interface Transaction {
   balance: number | null;
   currency?: string | null;
   accountIdentifier?: string | null;
+  entrySource?: string | null;
+  reconciled?: boolean | null;
+  reconciledAt?: string | null;
   category?: {
     id: string;
     name: string;
@@ -119,6 +123,8 @@ interface FilterValues {
   amountMax: string;
   transactionType: "all" | "income" | "expense";
   dateOrder: "desc" | "asc";
+  entrySource: string;
+  reconciled: ReconciledFilter;
 }
 
 interface TransactionsClientProps {
@@ -173,6 +179,8 @@ export function TransactionsClient({
     amountMax: "",
     transactionType: "all",
     dateOrder: "desc",
+    entrySource: "",
+    reconciled: "all",
   });
 
   // Bulk selection
@@ -255,6 +263,8 @@ export function TransactionsClient({
       filters.transactionType !== "all" ? filters.transactionType : undefined,
     dateOrder: filters.dateOrder,
     accountIdentifier: filters.accountIdentifier || undefined,
+    entrySource: filters.entrySource ? [filters.entrySource] : undefined,
+    reconciled: reconciledParam(filters.reconciled),
   });
 
   const fetchTransactions = async (
@@ -290,6 +300,10 @@ export function TransactionsClient({
             ? currentFilters.transactionType
             : undefined,
         dateOrder: currentFilters.dateOrder,
+        entrySource: currentFilters.entrySource
+          ? [currentFilters.entrySource]
+          : undefined,
+        reconciled: reconciledParam(currentFilters.reconciled),
         limit: itemsPerPage,
         offset,
       });

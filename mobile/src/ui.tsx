@@ -30,6 +30,7 @@ import {
   SafeAreaView,
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
+import { entrySourceLabel, reconciledLabel } from "../../frontend/shared/entrySource";
 
 const light = {
   bg: "#F3F4F6",
@@ -1437,6 +1438,19 @@ export function ListItem({
     </Pressable>
   );
 }
+/** A transaction's entry source, with a tick when a statement has reconciled it. */
+export function EntrySourcePill({ entrySource, reconciled }: { entrySource: string; reconciled?: boolean | null }) {
+  return (
+    <View accessible accessibilityLabel={`${entrySourceLabel(entrySource)}, ${reconciledLabel(reconciled).toLowerCase()}`}>
+      <Pill
+        label={entrySourceLabel(entrySource)}
+        icon={reconciled ? "checkmark-circle" : "ellipse-outline"}
+        tone={reconciled ? "green" : "neutral"}
+      />
+    </View>
+  );
+}
+
 export function Pill({
   label,
   tone = "neutral",
@@ -2163,6 +2177,8 @@ export function TransactionRow({
   if (item.linkage?.type === "reimbursement" && !tripEntry) badges.push({ label: "Reimbursement", tone: "green" });
   if (item.linkage?.reimbursedByAllocations?.length) badges.push({ label: "Reimbursed", tone: "green" });
   if (item.metadata?.sourceDetached) badges.push({ label: "Bank row removed", tone: "red" });
+  // Where a ledger row came from, ticked once a statement has confirmed it.
+  const source = !tripEntry && item.entrySource ? entrySourceLabel(item.entrySource) : null;
   const amount = tripEntry ? item.localAmount : income ? item.amountIn : item.amountOut;
   const currency = item.localCurrency || item.currency || "SGD";
   const meta = [
@@ -2213,11 +2229,12 @@ export function TransactionRow({
             </Txt>
           </View>
         )}
-        {badges.length > 0 && (
+        {(badges.length > 0 || !!source) && (
           <View style={{ flexDirection: "row", gap: 4, marginTop: 2, flexWrap: "wrap" }}>
             {badges.slice(0, 2).map((b) => (
               <Pill key={b.label} label={b.label} tone={b.tone} />
             ))}
+            {!!source && <EntrySourcePill entrySource={item.entrySource} reconciled={item.reconciled} />}
           </View>
         )}
       </View>

@@ -1,0 +1,139 @@
+import { z } from "zod";
+
+/**
+ * Input rules for transactions the outside assistant writes through
+ * /api/agent/transactions (scope transactions:write). The assistant reviews
+ * entries on its side, so they go straight into the ledger as ordinary
+ * transactions with entrySource "assistant".
+ */
+
+export const ENTRY_SOURCES = ["assistant", "manual", "statement", "mobile"] as const;
+export type EntrySource = (typeof ENTRY_SOURCES)[number];
+
+const DATE_ONLY = /^(\d{4}-\d{2}-\d{2})$/;
+// The calendar date and clock time are taken as written, so a notification at
+// 07:00 +08:00 stays on its own day instead of moving to the day before in UTC.
+const DATE_TIME = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/;
+const TIME = /^(\d{2}):(\d{2})(?::\d{2})?$/;
+
+function validDay(day: string) {
+  const date = new Date(`${day}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === day;
+}
+
+function validTime(time: string) {
+  const match = TIME.exec(time);
+  return Boolean(match && Number(match[1]) < 24 && Number(match[2]) < 60);
+}
+
+/**
+ * Splits the assistant's date (and optional separate time) into the stored
+ * date, midnight UTC of the calendar day like statement rows, and the clock
+ * time kept in metadata.
+ */
+export function entryDateParts(dateInput: string, timeInput?: string | null) {
+  const text = dateInput.trim();
+  const dateOnly = DATE_ONLY.exec(text);
+  const dateTime = dateOnly ? null : DATE_TIME.exec(text);
+  const day = dateOnly?.[1] ?? dateTime?.[1];
+  if (!day || !validDay(day)) throw new Error("date must be YYYY-MM-DD or an ISO date and time");
+  let time = dateTime?.[2] ?? null;
+  if (timeInput != null && timeInput.trim()) {
+    if (!validTime(timeInput.trim())) throw new Error("time must be HH:MM");
+    time = timeInput.trim().slice(0, 5);
+  }
+  if (time && !validTime(time)) throw new Error("time must be HH:MM");
+  return {
+    date: new Date(`${day}T00:00:00.000Z`),
+    time,
+    occurredAt: dateTime ? text : null,
+  };
+}
+
+const Money = z.number().finite().positive().max(9_999_999_999.99);
+
+const CardSchema = z
+  .object({
+    id: z.string().trim().min(1).max(120).optional(),
+    last4: z.string().trim().regex(/^\d{4}$/, "card.last4 must be four digits").optional(),
+  })
+  .strict()
+  .refine((card) => card.id || card.last4, "card needs an id or last4");
+
+const EntryFields = {
+  date: z.string().trim().min(1).max(40),
+  time: z.string().trim().max(8).nullish(),
+  description: z.string().trim().min(1).max(500),
+  label: z.string().trim().max(200).nullish(),
+  amountIn: Money.nullish(),
+  amountOut: Money.nullish(),
+  currency: z.string().trim().regex(/^[A-Za-z]{3}$/, "currency must be a three-letter code").nullish(),
+  category: z.string().trim().min(1).max(120).nullish(),
+  account: z.string().trim().min(1).max(120).nullish(),
+  card: CardSchema.nullish(),
+  metadata: z.record(z.string(), z.unknown()).nullish(),
+};
+
+export const ExternalIdSchema = z.string().trim().min(1).max(200);
+
+export const CreateEntrySchema = z
+  .object({ externalId: ExternalIdSchema, ...EntryFields })
+  .strict()
+  .superRefine((value, context) => {
+    const hasIn = value.amountIn != null;
+    const hasOut = value.amountOut != null;
+    if (hasIn === hasOut)
+      context.addIssue({ code: "custom", message: "Give exactly one of amountIn or amountOut" });
+    if (!value.account && !value.card?.last4)
+      context.addIssue({ code: "custom", message: "account is required (or a card last4 that names one account)" });
+  });
+
+export const UpdateEntrySchema = z
+  .object({
+    date: EntryFields.date.optional(),
+    time: EntryFields.time,
+    description: EntryFields.description.optional(),
+    label: EntryFields.label,
+    amountIn: EntryFields.amountIn,
+    amountOut: EntryFields.amountOut,
+    currency: EntryFields.currency,
+    category: EntryFields.category,
+    account: EntryFields.account,
+    card: EntryFields.card,
+    metadata: EntryFields.metadata,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.amountIn != null && value.amountOut != null)
+      context.addIssue({ code: "custom", message: "Give only one of amountIn or amountOut" });
+  });
+
+export type CreateEntryInput = z.infer<typeof CreateEntrySchema>;
+export type UpdateEntryInput = z.infer<typeof UpdateEntrySchema>;
+
+/** The digits of an account identifier, e.g. "4265-****-****-4591" → "42654591". */
+export function identifierDigits(identifier: string) {
+  return identifier.replace(/\D/g, "");
+}
+
+/** Accounts a card's last 4 digits could belong to: identifiers ending in them. */
+export function accountsForLast4<T extends { accountIdentifier: string }>(accounts: T[], last4: string) {
+  return accounts.filter((account) => identifierDigits(account.accountIdentifier).endsWith(last4));
+}
+
+/** Parses the list filters `entrySource` (comma-separated) and `reconciled` (true/false). */
+export function parseEntryFilters(query: { entrySource?: unknown; reconciled?: unknown }) {
+  const sources = query.entrySource
+    ? String(query.entrySource)
+        .split(",")
+        .map((value) => value.trim())
+        .filter((value): value is EntrySource => (ENTRY_SOURCES as readonly string[]).includes(value))
+    : [];
+  const reconciled =
+    query.reconciled === "true" || query.reconciled === true
+      ? true
+      : query.reconciled === "false" || query.reconciled === false
+        ? false
+        : undefined;
+  return { entrySources: sources.length ? sources : undefined, reconciled };
+}

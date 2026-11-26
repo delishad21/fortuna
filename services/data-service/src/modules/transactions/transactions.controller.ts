@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { TransactionService } from "./transactions.service";
 import { z } from "zod";
+import { parseEntryFilters } from "./assistant-entries";
 
 export const transactionRouter = Router();
 
@@ -161,6 +162,7 @@ const parseFilters = (input: any) => {
         ? Number(input.maxAmount)
         : undefined,
     dateOrder: input.dateOrder as "asc" | "desc" | undefined,
+    ...parseEntryFilters(input),
   };
 };
 
@@ -551,6 +553,7 @@ transactionRouter.get("/", async (req: Request, res: Response) => {
       maxAmount: req.query.maxAmount
         ? parseFloat(req.query.maxAmount as string)
         : undefined,
+      ...parseEntryFilters(req.query),
       limit: req.query.limit ? parseInt(req.query.limit as string) : undefined,
       offset: req.query.offset
         ? parseInt(req.query.offset as string)

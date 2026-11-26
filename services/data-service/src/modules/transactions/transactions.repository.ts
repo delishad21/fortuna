@@ -243,6 +243,8 @@ export class TransactionRepository {
       minAmount?: number;
       maxAmount?: number;
       accountIdentifier?: string;
+      entrySources?: string[];
+      reconciled?: boolean;
     },
     excludeIds?: string[],
     ids?: string[],
@@ -265,6 +267,14 @@ export class TransactionRepository {
 
     if (filters?.accountIdentifier) {
       where.accountIdentifier = filters.accountIdentifier;
+    }
+
+    if (filters?.entrySources && filters.entrySources.length > 0) {
+      where.entrySource = { in: filters.entrySources };
+    }
+
+    if (filters?.reconciled !== undefined) {
+      where.reconciled = filters.reconciled;
     }
 
     // Under AND so the amount-range OR below can't widen the search.
@@ -322,9 +332,14 @@ export class TransactionRepository {
     transactions: ImportTransactionInput[],
     importBatchId?: string,
   ) {
+    // Imported rows come from a statement, which confirms them.
+    const importedAt = new Date();
     return prisma.transaction.createManyAndReturn({
       select: { id: true, metadata: true },
       data: transactions.map((t) => ({
+        entrySource: "statement",
+        reconciled: true,
+        reconciledAt: importedAt,
         userId,
         date: t.date,
         description: t.description,
@@ -362,6 +377,8 @@ export class TransactionRepository {
       minAmount?: number;
       maxAmount?: number;
       accountIdentifier?: string;
+      entrySources?: string[];
+      reconciled?: boolean;
       limit?: number;
       offset?: number;
     },
@@ -429,6 +446,8 @@ export class TransactionRepository {
       maxAmount?: number;
       dateOrder?: "asc" | "desc";
       accountIdentifier?: string;
+      entrySources?: string[];
+      reconciled?: boolean;
     },
     excludeIds?: string[],
   ) {
@@ -488,6 +507,8 @@ export class TransactionRepository {
       minAmount?: number;
       maxAmount?: number;
       accountIdentifier?: string;
+      entrySources?: string[];
+      reconciled?: boolean;
     },
     excludeIds: string[] | undefined,
     updates: Partial<ImportTransactionInput>,
@@ -522,6 +543,8 @@ export class TransactionRepository {
       minAmount?: number;
       maxAmount?: number;
       accountIdentifier?: string;
+      entrySources?: string[];
+      reconciled?: boolean;
     },
     excludeIds?: string[],
   ) {
@@ -541,6 +564,8 @@ export class TransactionRepository {
       minAmount?: number;
       maxAmount?: number;
       accountIdentifier?: string;
+      entrySources?: string[];
+      reconciled?: boolean;
     },
     excludeIds?: string[],
   ) {

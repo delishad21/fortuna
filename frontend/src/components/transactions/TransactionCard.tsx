@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/Checkbox";
 import Link from "next/link";
+import { EntrySourceBadge } from "@/components/transactions/EntrySourceBadge";
+import { reconciledLabel, entrySourceLabel } from "@/lib/entrySource";
 
 export interface TransactionLinkage {
   type: "internal" | "reimbursement" | "reimbursed";
@@ -51,6 +53,10 @@ export interface TransactionCardTransaction {
   currency?: string | null;
   displayCurrency?: string;
   accountIdentifier?: string | null;
+  /** assistant | manual | statement | mobile; rows not yet saved have none. */
+  entrySource?: string | null;
+  reconciled?: boolean | null;
+  reconciledAt?: string | null;
   category?: {
     id: string;
     name: string;
@@ -291,17 +297,27 @@ export function TransactionCard({
                 ))}
               </div>
             )}
-            {transaction.category && (
+            {(transaction.category || transaction.entrySource) && (
               <div
                 className={`mt-1 flex items-center gap-2 text-xs text-dark-5 dark:text-dark-6 ${
                   wrapText ? "whitespace-normal break-words" : "truncate"
                 }`}
               >
-                <span
-                  className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: transaction.category.color }}
-                />
-                <span>{transaction.category.name}</span>
+                {transaction.category && (
+                  <>
+                    <span
+                      className="w-2 h-2 rounded-full"
+                      style={{ backgroundColor: transaction.category.color }}
+                    />
+                    <span>{transaction.category.name}</span>
+                  </>
+                )}
+                {transaction.entrySource && (
+                  <EntrySourceBadge
+                    entrySource={transaction.entrySource}
+                    reconciled={transaction.reconciled}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -429,6 +445,8 @@ export function TransactionCard({
               <div className="text-dark-5 dark:text-dark-6">Date</div>
               <div className="font-medium text-dark dark:text-white mt-0.5">
                 {formatDate(transaction.date)}
+                {typeof transaction.metadata?.time === "string" &&
+                  ` · ${transaction.metadata.time}`}
               </div>
             </div>
 
@@ -474,6 +492,27 @@ export function TransactionCard({
                     />
                   )}
                   <span>{accountText}</span>
+                </div>
+              </div>
+            )}
+
+            {transaction.entrySource && (
+              <div>
+                <div className="text-dark-5 dark:text-dark-6">Source</div>
+                <div className="font-medium text-dark dark:text-white mt-0.5">
+                  {entrySourceLabel(transaction.entrySource)}
+                </div>
+              </div>
+            )}
+
+            {transaction.entrySource && (
+              <div>
+                <div className="text-dark-5 dark:text-dark-6">Statement</div>
+                <div className="font-medium text-dark dark:text-white mt-0.5">
+                  {reconciledLabel(transaction.reconciled)}
+                  {transaction.reconciled && transaction.reconciledAt
+                    ? ` on ${formatDate(transaction.reconciledAt)}`
+                    : ""}
                 </div>
               </div>
             )}

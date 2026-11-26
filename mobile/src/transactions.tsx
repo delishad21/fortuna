@@ -21,6 +21,7 @@ import {
   confirm,
   DateField,
   DateHeader,
+  EntrySourcePill,
   Dot,
   Empty,
   fmtDate,
@@ -54,6 +55,13 @@ import {
 import { shareCsv } from "./sharing";
 import { accountDisplay, accountName } from "../../frontend/shared/accounts";
 import { monthOfRange, monthOptions, monthRange } from "../../frontend/shared/months";
+import {
+  ENTRY_SOURCES,
+  ENTRY_SOURCE_LABELS,
+  entrySourceLabel,
+  reconciledLabel,
+  reconciledParam,
+} from "../../frontend/shared/entrySource";
 
 /** Filters as the transactions actions expect them (dates are revived on the server). */
 const toQuery = (filters: any, search: string) => {
@@ -61,12 +69,14 @@ const toQuery = (filters: any, search: string) => {
   if (q.dateFrom) q.dateFrom = `${q.dateFrom}T00:00:00`;
   if (q.dateTo) q.dateTo = `${q.dateTo}T23:59:59`;
   if (!q.categoryIds?.length) delete q.categoryIds;
+  q.entrySource = q.entrySource ? [q.entrySource] : undefined;
+  q.reconciled = reconciledParam(q.reconciled);
   return Object.fromEntries(
     Object.entries(q).filter(([, v]) => v !== "" && v != null),
   );
 };
 const filterCount = (f: any) =>
-  ["dateFrom", "dateTo", "minAmount", "maxAmount", "accountIdentifier"].filter((k) => f[k] != null && f[k] !== "")
+  ["dateFrom", "dateTo", "minAmount", "maxAmount", "accountIdentifier", "entrySource", "reconciled"].filter((k) => f[k] != null && f[k] !== "")
     .length + (f.categoryIds?.length ? 1 : 0) + (f.dateOrder === "asc" ? 1 : 0);
 
 function FilterSheet({ visible, onClose, filters, onApply, categories, accounts }: any) {
@@ -164,6 +174,23 @@ function FilterSheet({ visible, onClose, filters, onApply, categories, accounts 
         ]}
         onChange={(accountIdentifier) => set({ accountIdentifier: accountIdentifier || undefined })}
       />
+      <Choice
+        label="Source"
+        value={draft.entrySource || ""}
+        options={[
+          { label: "All sources", value: "" },
+          ...ENTRY_SOURCES.map((source) => ({ label: ENTRY_SOURCE_LABELS[source], value: source })),
+        ]}
+        onChange={(entrySource) => set({ entrySource: entrySource || undefined })}
+      />
+      <Section title="Reconciled">
+        <Segmented
+          values={["", "reconciled", "unreconciled"]}
+          labels={{ "": "All", reconciled: "Reconciled", unreconciled: "Not yet" }}
+          value={draft.reconciled || ""}
+          onChange={(reconciled) => set({ reconciled: reconciled || undefined })}
+        />
+      </Section>
       <Section title="Order">
         <Segmented
           values={["desc", "asc"]}
@@ -367,7 +394,12 @@ export function TransactionsScreen({ navigation, route }: any) {
                 />
               </View>
             </View>
-            {(filters.dateFrom || filters.dateTo || filters.categoryIds?.length || filters.accountIdentifier) && (
+            {(filters.dateFrom ||
+              filters.dateTo ||
+              filters.categoryIds?.length ||
+              filters.accountIdentifier ||
+              filters.entrySource ||
+              filters.reconciled) && (
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
                 {(filters.dateFrom || filters.dateTo) && (
                   <Pill icon="calendar-outline" tone="purple" label={`${fmtDate(filters.dateFrom) || "Start"} – ${fmtDate(filters.dateTo) || "now"}`} />
@@ -377,6 +409,16 @@ export function TransactionsScreen({ navigation, route }: any) {
                 )}
                 {filters.accountIdentifier && (
                   <Pill icon="card-outline" tone="purple" label={names[filters.accountIdentifier] || filters.accountIdentifier} />
+                )}
+                {filters.entrySource && (
+                  <Pill icon="git-branch-outline" tone="purple" label={entrySourceLabel(filters.entrySource)} />
+                )}
+                {filters.reconciled && (
+                  <Pill
+                    icon="checkmark-circle-outline"
+                    tone="purple"
+                    label={filters.reconciled === "reconciled" ? "Reconciled" : "Not reconciled"}
+                  />
                 )}
                 <Pressable accessibilityRole="button" accessibilityLabel="Clear filters" onPress={() => setFilters({})}>
                   <Pill icon="close" tone="red" label="Clear" />
@@ -587,6 +629,7 @@ export function TransactionScreen({ navigation, route }: any) {
           {kind === "reimbursement" && <Pill tone="green" label="Reimbursement" />}
           {reimbursedBy.length > 0 && <Pill tone="green" label="Reimbursed" />}
           {t.metadata?.splitFromTransactionId && <Pill tone="amber" label="Split" />}
+          {!!t.entrySource && <EntrySourcePill entrySource={t.entrySource} reconciled={t.reconciled} />}
         </View>
       </Card>
       <View style={[styles.row, { gap: 8, flexWrap: "wrap" }]}>
@@ -631,11 +674,27 @@ export function TransactionScreen({ navigation, route }: any) {
       </View>
       <Section title="Details">
         <Card style={{ gap: 12 }}>
-          <KeyValue label="Date" value={fmtDate(t.date)} />
+          <KeyValue
+            label="Date"
+            value={typeof t.metadata?.time === "string" ? `${fmtDate(t.date)} · ${t.metadata.time}` : fmtDate(t.date)}
+          />
           <KeyValue label="Category" value={category?.name || "Uncategorized"} />
           <KeyValue label="Account" value={account ? accountDisplay(account) : t.accountIdentifier || "No account"} />
           {t.balance != null && <KeyValue label="Balance" mono value={money(t.balance, t.currency)} />}
           {!!t.currency && <KeyValue label="Currency" value={t.currency} />}
+          {!!t.entrySource && <KeyValue label="Source" value={entrySourceLabel(t.entrySource)} />}
+          {!!t.entrySource && (
+            <KeyValue
+              label="Reconciled"
+              value={
+                t.reconciled
+                  ? t.reconciledAt
+                    ? `Yes · ${fmtDate(t.reconciledAt)}`
+                    : "Yes"
+                  : reconciledLabel(false)
+              }
+            />
+          )}
           {!!(t.importBatch?.filename || t.metadata?.sourceFilename) && (
             <KeyValue label="Statement" value={t.importBatch?.filename || t.metadata?.sourceFilename} />
           )}

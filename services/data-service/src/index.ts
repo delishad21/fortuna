@@ -14,6 +14,7 @@ import { parserFactoryRouter } from "./modules/imports/parser-factory.controller
 import { parserRuntimeRouter } from "./modules/imports/parser-runtime.controller";
 import { HermesWorkflowService } from "./modules/imports/hermes-workflow.service";
 import { accountsRouter } from "./modules/accounts/accounts.controller";
+import { createAgentTransactionsRouter } from "./modules/transactions/agent-transactions.controller";
 
 const app = express();
 const PORT = process.env.PORT || 4001;
@@ -42,6 +43,7 @@ app.use("/api/agent/parser-factory", parserFactoryRouter);
 app.use("/api/parser-runtime", parserRuntimeRouter);
 app.use("/api/agent/accounts", accountsRouter);
 app.use("/api/agent/analytics", agentAnalyticsRouter);
+app.use("/api/agent/transactions", createAgentTransactionsRouter(prisma));
 
 // Error handling
 app.use(

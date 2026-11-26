@@ -1385,6 +1385,8 @@ export class TransactionService {
       minAmount?: number;
       maxAmount?: number;
       accountIdentifier?: string;
+      entrySources?: string[];
+      reconciled?: boolean;
       limit?: number;
       offset?: number;
     },
@@ -1635,6 +1637,9 @@ export class TransactionService {
               balance: index === children.length - 1 ? existing.balance : null,
               accountIdentifier: existing.accountIdentifier,
               source: existing.source,
+              entrySource: existing.entrySource,
+              reconciled: existing.reconciled,
+              reconciledAt: existing.reconciledAt,
               currency: existing.currency,
               metadata: metadata as Prisma.InputJsonValue,
               linkage: isInternal
@@ -1739,6 +1744,8 @@ export class TransactionService {
       minAmount?: number;
       maxAmount?: number;
       accountIdentifier?: string;
+      entrySources?: string[];
+      reconciled?: boolean;
     },
     excludeIds: string[] | undefined,
     updates: Partial<ImportTransactionInput>,
@@ -1770,6 +1777,8 @@ export class TransactionService {
       minAmount?: number;
       maxAmount?: number;
       accountIdentifier?: string;
+      entrySources?: string[];
+      reconciled?: boolean;
     },
     excludeIds?: string[],
   ) {
@@ -1803,6 +1812,8 @@ export class TransactionService {
       maxAmount?: number;
       dateOrder?: "asc" | "desc";
       accountIdentifier?: string;
+      entrySources?: string[];
+      reconciled?: boolean;
     },
     excludeIds?: string[],
   ) {
