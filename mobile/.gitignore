@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# The APK build script (the root .gitignore ignores every scripts/ folder)
+!/scripts/
