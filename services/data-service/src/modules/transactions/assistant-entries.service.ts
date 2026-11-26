@@ -26,6 +26,7 @@ import {
   withSourceEntry,
   type ChannelMatch,
 } from "./entry-sources.service";
+import { reimbursableOf } from "../reimbursements/reimbursables.core";
 
 export class EntryError extends Error {
   constructor(
@@ -441,6 +442,11 @@ export function publicEntry(transaction: Stored) {
     /** The messages behind it (metadata.sources): the primary one, and backups merged into it. */
     sources: Array.isArray(metadata.sources) ? metadata.sources : [],
     metadata: metadata.assistant ?? null,
+    /** Paid for someone who pays it back: who, and what they owe (null when it isn't). */
+    reimbursable: reimbursableOf(
+      transaction,
+      (transaction as { reimbursablePerson?: { id: string; name: string } | null }).reimbursablePerson,
+    ),
     createdAt: transaction.createdAt,
     updatedAt: transaction.updatedAt,
   };

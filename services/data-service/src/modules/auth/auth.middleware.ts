@@ -109,6 +109,14 @@ export function requireAccountAuth(requiredScopes: string[] = []) {
   };
 }
 
+/** The trusted frontend, or an API token granting at least one of the scopes. */
+export function requireAccountAuthAnyOf(scopes: string[]) {
+  const trusted = requireAccountAuth();
+  const tokenMiddleware = requireApiTokenAnyOf(scopes);
+  return (request: Request, response: Response, next: NextFunction) =>
+    trustedServiceMatches(request) ? trusted(request, response, next) : tokenMiddleware(request, response, next);
+}
+
 export function authenticatedUserId(request: Request) {
   if (!request.apiAuth) throw new Error("API authentication context is missing");
   return request.apiAuth.userId;

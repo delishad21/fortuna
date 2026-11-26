@@ -16,6 +16,7 @@ import type { ClassificationDecision, CorrectionInput, ReviewQueueQuery, ReviewR
 import { REVIEW_REASONS } from "./entry-review";
 import { TransactionService } from "./transactions.service";
 import { getAccount, markAccountReviewed, mergeAccount, updateAccount } from "../accounts/accounts.service";
+import { proposeRepayments } from "../reimbursements/reimbursables.service";
 
 /**
  * The review queue behind /api/agent/transactions/review (scope
@@ -105,7 +106,7 @@ export const TransactionReview = {
       prisma.transaction.count({ where }),
       prisma.transaction.findMany({
         where,
-        include: { category: true },
+        include: { category: true, reimbursablePerson: { select: { id: true, name: true } } },
         orderBy: [{ date: "desc" }, { createdAt: "desc" }],
         take: query.limit,
         skip: query.offset,
@@ -119,12 +120,21 @@ export const TransactionReview = {
         ]),
       ),
     ]);
+    // Money in that looks like a repayment from someone with open items comes
+    // with proposed reimbursement links, for twee and the apps to confirm.
+    const proposals = await proposeRepayments(
+      userId,
+      rows.filter((row) => row.reviewStatus === "to_review"),
+    );
     return {
       total,
       limit: query.limit,
       offset: query.offset,
       reasons: Object.fromEntries(grouped) as Record<ReviewReason, number>,
-      transactions: rows.map(publicEntry),
+      transactions: rows.map((row) => ({
+        ...publicEntry(row),
+        reimbursementProposal: proposals.get(row.id) ?? null,
+      })),
     };
   },
 

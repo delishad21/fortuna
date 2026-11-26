@@ -18,6 +18,11 @@ export interface AnalyticsTransaction {
   cardId?: string | null;
   account?: { id: string; name: string; color: string; imageId?: string | null } | null;
   card?: { id: string; last4: string; nickname?: string | null; network?: string | null; imageId?: string | null } | null;
+  /** Paid for someone who pays it back: who, and what they owe. */
+  reimbursablePersonId?: string | null;
+  reimbursableAmount?: AmountLike;
+  /** Set by asOwnSpending when the user counts reimbursable spending as their own. */
+  reimbursableCounted?: boolean;
 }
 
 export const REIMBURSEMENT_LEFTOVER_CATEGORY = {
@@ -85,11 +90,78 @@ export const getEffectiveIn = (tx: { amountIn?: AmountLike; linkage?: unknown })
   return Number(rawIn.toFixed(2));
 };
 
-export const getEffectiveOut = (tx: { amountOut?: AmountLike; linkage?: unknown }) => {
+/**
+ * The user's own spending on a row: money out less what was paid back, and
+ * less what someone owes for it (a reimbursable item) unless the user counts
+ * reimbursable spending as their own (asOwnSpending), when only repayments
+ * come off.
+ */
+export const getEffectiveOut = (tx: {
+  amountOut?: AmountLike;
+  linkage?: unknown;
+  reimbursableAmount?: AmountLike;
+  reimbursableCounted?: boolean;
+}) => {
   if (isInternalTransaction(tx)) return 0;
   const rawOut = Math.max(toNumber(tx.amountOut), 0);
   const reimbursed = getReimbursedAmount(tx.linkage);
-  return Number(Math.max(rawOut - reimbursed, 0).toFixed(2));
+  const owed = tx.reimbursableCounted ? 0 : Math.max(toNumber(tx.reimbursableAmount), 0);
+  return Number(Math.max(rawOut - Math.max(reimbursed, owed), 0).toFixed(2));
+};
+
+/**
+ * Applies the "count reimbursable spending as my own" setting: when set,
+ * reimbursable items count in full until repaid, as before they were marked.
+ */
+export const asOwnSpending = <T extends object>(transactions: T[], countReimbursableAsOwn: boolean): T[] =>
+  countReimbursableAsOwn ? transactions.map((tx) => ({ ...tx, reimbursableCounted: true })) : transactions;
+
+/**
+ * Reimbursable spending in a set of rows, per person: what was spent for them
+ * (what they owe), how much of it is repaid (linked repayments) and what is
+ * still outstanding. `countsAsOwn` says whether it is inside the totals.
+ */
+export const buildReimbursableSummary = (
+  transactions: Array<{
+    amountOut?: AmountLike;
+    linkage?: unknown;
+    reimbursablePersonId?: string | null;
+    reimbursableAmount?: AmountLike;
+    reimbursableCounted?: boolean;
+  }>,
+  people: Map<string, string>,
+  countsAsOwn: boolean,
+) => {
+  const byPerson = new Map<string, { personId: string; name: string; spentFor: number; repaid: number; outstanding: number; items: number }>();
+  for (const tx of transactions) {
+    if (!tx.reimbursablePersonId || isInternalTransaction(tx)) continue;
+    const owed = Math.max(toNumber(tx.reimbursableAmount), 0);
+    const repaid = Math.min(getReimbursedAmount(tx.linkage), owed);
+    const entry = byPerson.get(tx.reimbursablePersonId) || {
+      personId: tx.reimbursablePersonId,
+      name: people.get(tx.reimbursablePersonId) || "Someone",
+      spentFor: 0,
+      repaid: 0,
+      outstanding: 0,
+      items: 0,
+    };
+    entry.spentFor += owed;
+    entry.repaid += repaid;
+    entry.outstanding += owed - repaid;
+    entry.items += 1;
+    byPerson.set(tx.reimbursablePersonId, entry);
+  }
+  const round = (value: number) => Number(value.toFixed(2));
+  const rows = [...byPerson.values()]
+    .map((entry) => ({ ...entry, spentFor: round(entry.spentFor), repaid: round(entry.repaid), outstanding: round(entry.outstanding) }))
+    .sort((a, b) => b.spentFor - a.spentFor || a.name.localeCompare(b.name));
+  return {
+    countsAsOwn,
+    spentFor: round(rows.reduce((sum, row) => sum + row.spentFor, 0)),
+    repaid: round(rows.reduce((sum, row) => sum + row.repaid, 0)),
+    outstanding: round(rows.reduce((sum, row) => sum + row.outstanding, 0)),
+    people: rows,
+  };
 };
 
 export const formatDayKey = (date: Date) => date.toISOString().slice(0, 10);

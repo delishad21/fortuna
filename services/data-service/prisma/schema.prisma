@@ -92,6 +92,7 @@ model User {
   chatConversations ChatConversation[]
   classificationInstructions ClassificationInstruction[]
   reimbursementLinks ReimbursementLink[]
+  reimbursementPeople ReimbursementPerson[]
 
   @@map("users")
 }
@@ -381,6 +382,8 @@ model UserSettings {
   defaultTimeframe             String   @default("month") @map("default_timeframe")
   /// daily | statements; null until chosen (then derived from assistant entries).
   workflowMode                 String?  @map("workflow_mode")
+  /// Count reimbursable spending as the user's own until it is repaid (default: shown apart).
+  analyticsCountReimbursable   Boolean  @default(false) @map("analytics_count_reimbursable")
   createdAt                    DateTime @default(now()) @map("created_at")
   updatedAt                    DateTime @updatedAt @map("updated_at")
 
@@ -647,10 +650,19 @@ model Transaction {
   accountId         String?  @map("account_id")
   cardId            String?  @map("card_id")
   imageId           String?  @map("image_id")
+  /// Reimbursable: paid for someone who pays it back. A flag beside the
+  /// category, not a category (see modules/reimbursements/reimbursables.service.ts).
+  reimbursablePersonId String?  @map("reimbursable_person_id")
+  /// What they owe: amount out, or their share of it. A trigger keeps it in step with amount_out.
+  reimbursableAmount   Decimal? @map("reimbursable_amount") @db.Decimal(12, 2)
+  /// The share as a fraction of amount out (1 = in full); null when it is a fixed amount.
+  reimbursableShare    Decimal? @map("reimbursable_share") @db.Decimal(7, 6)
+  reimbursableNote     String?  @map("reimbursable_note") @db.Text
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
   user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reimbursablePerson ReimbursementPerson? @relation(fields: [reimbursablePersonId], references: [id], onDelete: Restrict)
   category     Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   account      FinancialAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
   card         Card?             @relation(fields: [cardId], references: [id], onDelete: SetNull)
@@ -670,7 +682,27 @@ model Transaction {
   @@index([accountId])
   @@index([cardId])
   @@index([imageId])
+  @@index([userId, reimbursablePersonId])
   @@map("transactions")
+}
+
+// Someone the user pays for and is paid back by. Their items are transactions
+// flagged reimbursable to them; aliases are the other names repayments show
+// them by (e.g. "LEE YOON LI MADELINE"), matched as whole words in any case.
+model ReimbursementPerson {
+  id         String    @id @default(cuid())
+  userId     String    @map("user_id")
+  name       String
+  aliases    String[]  @default([])
+  archivedAt DateTime? @map("archived_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  user  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items Transaction[]
+
+  @@unique([userId, name])
+  @@map("reimbursement_people")
 }
 
 // One reimbursement link: how much of an expense a reimbursement pays back.

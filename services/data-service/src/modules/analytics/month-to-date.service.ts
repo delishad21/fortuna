@@ -1,4 +1,5 @@
 import prisma from "../../lib/prisma";
+import { asOwnSpending, buildReimbursableSummary } from "./analytics.utils";
 import { buildMonthToDate, dayDate, monthToDateFrom } from "./month-to-date";
 
 export const WORKFLOW_MODES = ["daily", "statements"] as const;
@@ -25,18 +26,26 @@ export async function resolveWorkflowMode(userId: string): Promise<{ mode: Workf
   return { mode: assistant ? "daily" : "statements", chosen: false };
 }
 
+/** Names of the people the user pays for, by id, for reimbursable summaries. */
+export async function reimbursementPeopleNames(userId: string) {
+  const people = await prisma.reimbursementPerson.findMany({ where: { userId }, select: { id: true, name: true } });
+  return new Map(people.map((person) => [person.id, person.name] as const));
+}
+
 /**
  * Month-to-date numbers for the user (see buildMonthToDate). One currency,
- * the user's own, and the categories they keep out of analytics left out:
- * the same rules as GET /api/agent/analytics/spending, so the assistant's
- * answers match the dashboard.
+ * the user's own, the categories they keep out of analytics left out, and
+ * reimbursable spending apart unless they count it as their own: the same
+ * rules as GET /api/agent/analytics/spending, so the assistant's answers
+ * match the dashboard. `reimbursable` is the month so far for other people.
  */
 export async function loadMonthToDate(userId: string, today: string) {
   const settings = await prisma.userSettings.findUnique({
     where: { userId },
-    select: { currency: true, analyticsExcludedCategoryIds: true },
+    select: { currency: true, analyticsExcludedCategoryIds: true, analyticsCountReimbursable: true },
   });
   const currency = settings?.currency || "SGD";
+  const countsAsOwn = settings?.analyticsCountReimbursable ?? false;
   const excluded = excludedIds(settings?.analyticsExcludedCategoryIds);
   const transactions = await prisma.transaction.findMany({
     where: {
@@ -46,6 +55,18 @@ export async function loadMonthToDate(userId: string, today: string) {
     },
     include: { category: true },
   });
-  const kept = transactions.filter((tx) => !tx.categoryId || !excluded.has(tx.categoryId));
-  return { currency, ...buildMonthToDate(kept, today) };
+  const kept = asOwnSpending(
+    transactions.filter((tx) => !tx.categoryId || !excluded.has(tx.categoryId)),
+    countsAsOwn,
+  );
+  const monthStart = `${today.slice(0, 7)}-01`;
+  return {
+    currency,
+    ...buildMonthToDate(kept, today),
+    reimbursable: buildReimbursableSummary(
+      kept.filter((tx) => tx.date.toISOString().slice(0, 10) >= monthStart),
+      await reimbursementPeopleNames(userId),
+      countsAsOwn,
+    ),
+  };
 }

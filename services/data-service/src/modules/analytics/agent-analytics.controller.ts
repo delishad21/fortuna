@@ -1,9 +1,10 @@
 import { Router } from "express";
 import prisma from "../../lib/prisma";
 import { authenticatedUserId, requireApiToken } from "../auth/auth.middleware";
+import { asOwnSpending, buildReimbursableSummary } from "./analytics.utils";
 import { buildSpendingRows, matchesCategory, parseSpendingQuery } from "./spending";
 import { resolveToday } from "./month-to-date";
-import { loadMonthToDate } from "./month-to-date.service";
+import { loadMonthToDate, reimbursementPeopleNames } from "./month-to-date.service";
 
 /** Read-only analytics for API tokens with the analytics:read scope. */
 export const agentAnalyticsRouter = Router();
@@ -17,7 +18,7 @@ agentAnalyticsRouter.get("/spending", requireApiToken(["analytics:read"]), async
     const userId = authenticatedUserId(request);
     const settings = await prisma.userSettings.findUnique({
       where: { userId },
-      select: { currency: true, analyticsExcludedCategoryIds: true },
+      select: { currency: true, analyticsExcludedCategoryIds: true, analyticsCountReimbursable: true },
     });
     // One currency per answer, like the chat's summaries: rows in other
     // currencies are left out rather than added together.
@@ -39,25 +40,34 @@ agentAnalyticsRouter.get("/spending", requireApiToken(["analytics:read"]), async
         category: { select: { id: true, name: true, color: true } },
         accountId: true,
         account: { select: { id: true, name: true, color: true } },
+        reimbursablePersonId: true,
+        reimbursableAmount: true,
       },
     });
 
-    // Same exclusions as the app's analytics.
+    // Same exclusions as the app's analytics, and reimbursable spending apart
+    // from the user's own unless they count it (Settings → Analytics).
+    const countsAsOwn = settings?.analyticsCountReimbursable ?? false;
     const excluded = new Set(
       Array.isArray(settings?.analyticsExcludedCategoryIds)
         ? settings.analyticsExcludedCategoryIds.filter((id): id is string => typeof id === "string")
         : [],
     );
-    const kept = transactions.filter(
-      (tx) =>
-        (!tx.categoryId || !excluded.has(tx.categoryId)) &&
-        (!query.category || matchesCategory(tx, query.category)),
+    const kept = asOwnSpending(
+      transactions.filter(
+        (tx) =>
+          (!tx.categoryId || !excluded.has(tx.categoryId)) &&
+          (!query.category || matchesCategory(tx, query.category)),
+      ),
+      countsAsOwn,
     );
 
     response.setHeader("Cache-Control", "no-store");
     return response.json({
       currency,
       rows: buildSpendingRows(kept, query),
+      /** Spent for people who pay it back in this period (left out of rows unless countsAsOwn). */
+      reimbursable: buildReimbursableSummary(kept, await reimbursementPeopleNames(userId), countsAsOwn),
     });
   } catch (error) {
     console.error("Failed to build spending analytics:", error);

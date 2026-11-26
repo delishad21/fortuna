@@ -13,6 +13,7 @@ export const transactionDisplayInclude = {
   importBatch: true,
   account: { select: { id: true, name: true, color: true, type: true, imageId: true } },
   card: { select: { id: true, last4: true, network: true, nickname: true, imageId: true } },
+  reimbursablePerson: { select: { id: true, name: true } },
 } satisfies Prisma.TransactionInclude;
 
 export class TransactionRepository {

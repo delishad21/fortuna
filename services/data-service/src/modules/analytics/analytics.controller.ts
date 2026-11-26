@@ -17,12 +17,14 @@ import {
   isImportedMonth,
   normalizeMerchant,
   REIMBURSEMENT_LEFTOVER_CATEGORY,
+  asOwnSpending,
+  buildReimbursableSummary,
   serializeTransaction,
   summarizeTransactions,
 } from "./analytics.utils";
 import { inferImportSourceFilename } from "../imports/import-source";
 import { dayDate, partialPeriod, resolveToday, sameDayIn, shiftDayKey } from "./month-to-date";
-import { loadMonthToDate, resolveWorkflowMode } from "./month-to-date.service";
+import { loadMonthToDate, reimbursementPeopleNames, resolveWorkflowMode } from "./month-to-date.service";
 
 export const analyticsRouter = Router();
 
@@ -122,31 +124,39 @@ const parseAnalyticsExcludedCategoryIds = (value: unknown) => {
   );
 };
 
-const getAnalyticsExcludedCategoryIds = async (userId: string) => {
-  const settings = await prisma.userSettings.findUnique({
-    where: { userId },
-    select: { analyticsExcludedCategoryIds: true },
-  });
-  return parseAnalyticsExcludedCategoryIds(
-    settings?.analyticsExcludedCategoryIds,
-  );
+type AnalyticsPreferences = {
+  excludedCategoryIds: string[];
+  /** Reimbursable spending counts as the user's own (else it is shown apart). */
+  countReimbursableAsOwn: boolean;
 };
 
+const getAnalyticsPreferences = async (userId: string): Promise<AnalyticsPreferences> => {
+  const settings = await prisma.userSettings.findUnique({
+    where: { userId },
+    select: { analyticsExcludedCategoryIds: true, analyticsCountReimbursable: true },
+  });
+  return {
+    excludedCategoryIds: parseAnalyticsExcludedCategoryIds(settings?.analyticsExcludedCategoryIds),
+    countReimbursableAsOwn: settings?.analyticsCountReimbursable ?? false,
+  };
+};
+
+/** Leaves out excluded categories and applies the reimbursable setting (see asOwnSpending). */
 const filterAnalyticsExcludedCategories = <
   T extends CategoryExcludableTransaction,
 >(
   transactions: T[],
-  excludedCategoryIds: string[] | Set<string>,
+  preferences: AnalyticsPreferences,
 ) => {
-  const excluded =
-    excludedCategoryIds instanceof Set
-      ? excludedCategoryIds
-      : new Set(excludedCategoryIds);
-  if (excluded.size === 0) return transactions;
-  return transactions.filter(
-    (transaction) =>
-      !transaction.categoryId || !excluded.has(transaction.categoryId),
-  );
+  const excluded = new Set(preferences.excludedCategoryIds);
+  const kept =
+    excluded.size === 0
+      ? transactions
+      : transactions.filter(
+          (transaction) =>
+            !transaction.categoryId || !excluded.has(transaction.categoryId),
+        );
+  return asOwnSpending(kept, preferences.countReimbursableAsOwn);
 };
 
 const buildCategoryExclusionWhere = (excludedCategoryIds: string[]) =>
@@ -453,17 +463,17 @@ const getRangeForQuery = (range: string, month: string) => {
 };
 
 const findLatestImportedMonth = async (userId: string, today: string) => {
-  const [rawTransactions, excludedCategoryIds] = await Promise.all([
+  const [rawTransactions, preferences] = await Promise.all([
     prisma.transaction.findMany({
       where: { userId },
       include: LEDGER_INCLUDE,
       orderBy: { date: "desc" },
     }),
-    getAnalyticsExcludedCategoryIds(userId),
+    getAnalyticsPreferences(userId),
   ]);
   const allTransactions = filterAnalyticsExcludedCategories(
     rawTransactions,
-    excludedCategoryIds,
+    preferences,
   );
   const importedMonthGroups = getImportedMonthGroups(allTransactions);
   const currentMonth = today.slice(0, 7);
@@ -481,7 +491,7 @@ const findLatestImportedMonth = async (userId: string, today: string) => {
   const completedMonth = months.find((monthKey) => monthKey < currentMonth) || null;
   return {
     allTransactions,
-    excludedCategoryIds,
+    preferences,
     importedMonthGroups,
     monthGroups,
     months,
@@ -518,7 +528,7 @@ analyticsRouter.get("/dashboard", async (req: Request, res: Response) => {
     startDate.setDate(startDate.getDate() - (timeframeDays - 1));
     startDate.setHours(0, 0, 0, 0);
 
-    const [rawTransactions, excludedCategoryIds] = await Promise.all([
+    const [rawTransactions, preferences] = await Promise.all([
       prisma.transaction.findMany({
         where: {
           userId: userId as string,
@@ -527,11 +537,11 @@ analyticsRouter.get("/dashboard", async (req: Request, res: Response) => {
         include: { category: true },
         orderBy: { date: "asc" },
       }),
-      getAnalyticsExcludedCategoryIds(userId as string),
+      getAnalyticsPreferences(userId as string),
     ]);
     const transactions = filterAnalyticsExcludedCategories(
       rawTransactions,
-      excludedCategoryIds,
+      preferences,
     );
 
     const totals = transactions.reduce(
@@ -993,7 +1003,7 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
     }
 
     const today = resolveToday(req.query.today);
-    const [{ latestMonth, months, currentMonth, excludedCategoryIds }, workflow] = await Promise.all([
+    const [{ latestMonth, months, currentMonth, preferences }, workflow] = await Promise.all([
       findLatestImportedMonth(userId as string, today),
       resolveWorkflowMode(userId as string),
     ]);
@@ -1025,7 +1035,7 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
     });
     const baseTransactions = filterAnalyticsExcludedCategories(
       rawBaseTransactions,
-      excludedCategoryIds,
+      preferences,
     );
 
     // Filters on the Account model and its cards; "none" is rows without one.
@@ -1041,7 +1051,7 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
       ...(typeof cardId === "string" && cardId ? { cardId: cardId === "none" ? null : cardId } : {}),
     };
     const filtered = (rows: typeof rawBaseTransactions) => {
-      const kept = filterAnalyticsExcludedCategories(rows, excludedCategoryIds);
+      const kept = filterAnalyticsExcludedCategories(rows, preferences);
       return merchantKey ? kept.filter((tx) => normalizeMerchant(tx).key === merchantKey) : kept;
     };
 
@@ -1178,6 +1188,12 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
       /** Set while the period is still running: how far in, and its totals at this pace. */
       partial,
       summary,
+      /** Spent for people who pay it back, apart from (or, with the setting, inside) the totals. */
+      reimbursable: buildReimbursableSummary(
+        transactions,
+        await reimbursementPeopleNames(userId as string),
+        preferences.countReimbursableAsOwn,
+      ),
       previousPeriod: {
         start: previousStart,
         end: comparedEnd,
@@ -1392,9 +1408,7 @@ analyticsRouter.get("/monthly", async (req: Request, res: Response) => {
     const endDate = new Date(yearNum, monthNum, 0);
     endDate.setHours(23, 59, 59, 999);
 
-    const excludedCategoryIds = await getAnalyticsExcludedCategoryIds(
-      userId as string,
-    );
+    const preferences = await getAnalyticsPreferences(userId as string);
     const rawTransactions = await prisma.transaction.findMany({
       where: {
         userId: userId as string,
@@ -1405,7 +1419,7 @@ analyticsRouter.get("/monthly", async (req: Request, res: Response) => {
     });
     const transactions = filterAnalyticsExcludedCategories(
       rawTransactions,
-      excludedCategoryIds,
+      preferences,
     );
 
     const totals = transactions.reduce(
@@ -1480,12 +1494,13 @@ analyticsRouter.get("/monthly", async (req: Request, res: Response) => {
         categoryId: true,
         amountOut: true,
         linkage: true,
+        reimbursableAmount: true,
       },
       orderBy: { date: "asc" },
     });
     const trendTransactions = filterAnalyticsExcludedCategories(
       rawTrendTransactions,
-      excludedCategoryIds,
+      preferences,
     );
 
     const trendSeries: Array<{ month: string; totalOut: number }> = [];
@@ -1556,11 +1571,9 @@ analyticsRouter.get("/monthly-summary", async (req: Request, res: Response) => {
       parseInt(month as string),
       0,
     );
-    const excludedCategoryIds = await getAnalyticsExcludedCategoryIds(
-      userId as string,
-    );
+    const preferences = await getAnalyticsPreferences(userId as string);
     const categoryExclusionWhere = buildCategoryExclusionWhere(
-      excludedCategoryIds,
+      preferences.excludedCategoryIds,
     );
 
     // Get category breakdown
@@ -1616,11 +1629,12 @@ analyticsRouter.get("/monthly-summary", async (req: Request, res: Response) => {
         amountOut: true,
         amountIn: true,
         linkage: true,
+        reimbursableAmount: true,
       },
     });
 
     const adjustedByCategory = new Map<string | null, { totalIn: number; totalOut: number }>();
-    for (const tx of monthlyTransactions) {
+    for (const tx of asOwnSpending(monthlyTransactions, preferences.countReimbursableAsOwn)) {
       const key = tx.categoryId ?? null;
       const current = adjustedByCategory.get(key) || { totalIn: 0, totalOut: 0 };
       current.totalIn += getEffectiveIn(tx);
@@ -1689,20 +1703,18 @@ analyticsRouter.get(
         return res.status(400).json({ error: "userId is required" });
       }
 
-      const excludedCategoryIds = await getAnalyticsExcludedCategoryIds(
-        userId as string,
-      );
+      const preferences = await getAnalyticsPreferences(userId as string);
       if (
         categoryId &&
         typeof categoryId === "string" &&
-        excludedCategoryIds.includes(categoryId)
+        preferences.excludedCategoryIds.includes(categoryId)
       ) {
         return res.json({ transactions: [] });
       }
 
       const where: any = {
         userId: userId as string,
-        ...(categoryId ? {} : buildCategoryExclusionWhere(excludedCategoryIds)),
+        ...(categoryId ? {} : buildCategoryExclusionWhere(preferences.excludedCategoryIds)),
       };
 
       if (dateFrom && dateTo) {
@@ -1727,7 +1739,7 @@ analyticsRouter.get(
       });
 
       res.json({
-        transactions: transactions.map((tx) => ({
+        transactions: asOwnSpending(transactions, preferences.countReimbursableAsOwn).map((tx) => ({
           ...tx,
           amountOut: getEffectiveOut(tx),
           rawAmountOut: toNumber(tx.amountOut),
