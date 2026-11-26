@@ -215,6 +215,8 @@ frontend (`http://127.0.0.1:3040` on the home server) with
 `/api/agent/transactions/*`, `/api/agent/rules/*`, `/api/agent/instructions/*`,
 `/api/agent/drafts/*`, `/api/agent/proposals/*` (`POST`),
 `/api/agent/parser-factory/*` (`GET`, `POST`),
+`/api/agent/reimbursables/*` (`GET`, `POST`), `GET /api/images/:imageId`
+(the image bytes with their content type),
 `/api/agent/classification-guide`, `/api/agent/analytics/spending`,
 `/api/agent/analytics/month-to-date` and `POST /api/agent/statements` (see
 [Statement uploads from a server](#statement-uploads-from-a-server-statementswrite)). The web and phone apps' To review
@@ -233,7 +235,7 @@ Fortuna work through one queue.
 | `GET` | `/api/agent/transactions/context/rules` | either | Rules (with origin, reason, hits) and auto-applied learned patterns. |
 | `GET` | `/api/agent/transactions/context/similar?description=&amount=&card=&date=&direction=&limit=` | either | Precedents and possible duplicates. |
 | `GET` | `/api/agent/transactions/review?status=&reasons=&entrySource=&account=&dateFrom=&dateTo=&limit=&offset=` | review | The queue, counts per reason, `newRules`, and per entry its questions, decision and `precedents`. |
-| `POST` | `/api/agent/transactions/review/correct` | review | `{ ids, category?, account?, label?, markReviewed?, createRule? }` |
+| `POST` | `/api/agent/transactions/review/correct` | review | `{ ids, category?, account?, label?, merchant?, transactionType?, markReviewed?, createRule? }`; `transactionType` `internal` or `reimbursement` also sets its reserved category. |
 | `POST` | `/api/agent/transactions/review/status` | review | `{ ids, status: "reviewed" \| "to_review" }` |
 | `POST` | `/api/agent/transactions/review/questions/answer` | review | `{ transactionId, questionId, option? \| value?, markReviewed? }` |
 | `POST` | `/api/agent/transactions/review/rules/:ruleId/undo` | review | Disable the rule and reopen what it classified. |

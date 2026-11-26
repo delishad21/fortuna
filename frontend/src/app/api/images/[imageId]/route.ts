@@ -1,14 +1,17 @@
 import { auth } from "@/lib/auth";
 import { authenticateMobile } from "@/lib/mobile/session";
 import { resolveChatIdentity } from "@/lib/chat/auth";
+import { forwardAgentImage, isAgentToken } from "../../agent/forward";
 
 export const runtime = "nodejs";
 
 /**
  * A transaction, account or card image, for its owner only (web session or
- * mobile bearer token). The files live with data-service.
+ * mobile bearer token), or for an API token's user (the data service checks
+ * the token). The files live with data-service.
  */
 export async function GET(request: Request, context: { params: Promise<{ imageId: string }> }) {
+  if (isAgentToken(request)) return forwardAgentImage(request, (await context.params).imageId);
   try {
     const { userId } = await resolveChatIdentity(
       request,

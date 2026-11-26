@@ -46,3 +46,39 @@ export async function forwardAgentPath(
     return Response.json({ error: unavailable }, { status: 502, headers: noStore });
   }
 }
+
+// An API token (pfa_…) on /api/images/:imageId: the data service checks the
+// token and finds the image among its user's; the bytes and content type pass
+// through unchanged.
+export function isAgentToken(request: Request) {
+  return /^Bearer\s+pfa_/i.test(request.headers.get("authorization") || "");
+}
+
+export async function forwardAgentImage(request: Request, imageId: string) {
+  if (!/^[\w-]{1,64}$/.test(imageId))
+    return Response.json({ error: "Image not found" }, { status: 404, headers: noStore });
+  try {
+    const upstream = await fetch(`${DATA_SERVICE_URL}/api/images/${imageId}`, {
+      headers: { Authorization: request.headers.get("authorization")! },
+      cache: "no-store",
+    });
+    if (!upstream.ok)
+      return new Response(await upstream.text(), {
+        status: upstream.status,
+        headers: { "Content-Type": upstream.headers.get("content-type") || "application/json", ...noStore },
+      });
+    return new Response(upstream.body, {
+      headers: {
+        "Content-Type": upstream.headers.get("content-type") || "application/octet-stream",
+        ...(upstream.headers.get("content-length")
+          ? { "Content-Length": upstream.headers.get("content-length")! }
+          : {}),
+        "Cache-Control": "private, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'",
+      },
+    });
+  } catch {
+    return Response.json({ error: "Image service is unavailable" }, { status: 502, headers: noStore });
+  }
+}
