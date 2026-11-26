@@ -32,6 +32,14 @@ const pageConfig: Record<
   "/analytics": {
     title: "Analytics",
   },
+  "/reimbursements": {
+    title: "Reimbursements",
+  },
+  "/reimbursements/backfill": {
+    title: "Review past items",
+    showBack: true,
+    backHref: "/reimbursements",
+  },
   "/categories": {
     title: "Categories",
   },

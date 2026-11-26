@@ -31,8 +31,8 @@ export const effectiveWorkflowMode = (chosen: unknown, hasAssistantEntries: bool
 
 /** Web sidebar order (by URL): daily trackers get the review queue and transactions first. */
 export const SIDEBAR_ORDER: Record<WorkflowMode, string[]> = {
-  daily: ["/dashboard", "/review", "/transactions", "/analytics", "/chat", "/imports", "/trips"],
-  statements: ["/dashboard", "/imports", "/transactions", "/review", "/analytics", "/trips", "/chat"],
+  daily: ["/dashboard", "/review", "/transactions", "/analytics", "/reimbursements", "/chat", "/imports", "/trips"],
+  statements: ["/dashboard", "/imports", "/transactions", "/review", "/analytics", "/reimbursements", "/trips", "/chat"],
 };
 
 /** Phone tab order (by tab name). */

@@ -20,6 +20,8 @@ import { TextInput } from "@/components/ui/TextInput";
 import { Button } from "@/components/ui/Button";
 import { DatePicker } from "@/components/ui/DatePicker";
 import { EditTransactionModal } from "@/components/transactions/EditTransactionModal";
+import { ReimbursableEditor } from "@/components/reimbursables/ReimbursableEditor";
+import { clearTransactionsReimbursable, setTransactionsReimbursable } from "@/app/actions/reimbursables";
 import { AddCategoryModal } from "@/components/ui/AddCategoryModal";
 import {
   bulkDeleteTransactionsByFilter,
@@ -205,6 +207,7 @@ export function TransactionsClient({
   const [deselectedIds, setDeselectedIds] = useState<Set<string>>(new Set());
   const [bulkCategoryId, setBulkCategoryId] = useState("");
   const [bulkDate, setBulkDate] = useState("");
+  const [bulkReimbursable, setBulkReimbursable] = useState(false);
 
   const accountNameMap = accountDisplayMap(accountNumbers);
   const accountColorMap = accountNumbers.reduce<Record<string, string>>(
@@ -816,6 +819,22 @@ export function TransactionsClient({
                       </div>
 
                       <div className="space-y-2">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => {
+                            setShowBulkMenu(false);
+                            setBulkReimbursable(true);
+                          }}
+                          disabled={selectedCount === 0 || allFilteredSelected || bulkLoading}
+                          title={allFilteredSelected ? "Tick the rows to mark; select all doesn't apply here" : undefined}
+                          className="w-full"
+                        >
+                          Reimbursable…
+                        </Button>
+                      </div>
+
+                      <div className="space-y-2">
                         <div className="w-full h-11 rounded-lg border border-stroke dark:border-dark-3 bg-white dark:bg-dark-3">
                           <DatePicker
                             value={bulkDate}
@@ -875,6 +894,61 @@ export function TransactionsClient({
           </div>
         )}
       </div>
+
+      {bulkReimbursable && selectedIds.size > 0 && !allFilteredSelected ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setBulkReimbursable(false)}>
+          <div
+            className="w-full max-w-2xl rounded-lg bg-white p-5 shadow-dropdown dark:bg-dark-2"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="mb-1 text-base font-semibold text-dark dark:text-white">
+              Paid for someone ({selectedIds.size} selected)
+            </h3>
+            <p className="mb-4 text-xs text-dark-5 dark:text-dark-6">
+              They keep their categories. Money in, internal transfers and reimbursements are skipped.
+            </p>
+            <ReimbursableEditor
+              count={selectedIds.size}
+              onCancel={() => setBulkReimbursable(false)}
+              onSave={async (input) => {
+                const result = await setTransactionsReimbursable({ ids: Array.from(selectedIds), ...input });
+                setBulkReimbursable(false);
+                clearSelection();
+                await fetchTransactions(currentPage, filters);
+                setModalState({
+                  isOpen: true,
+                  type: "success",
+                  title: "Marked reimbursable",
+                  message: `${result.skipped.length ? `${result.skipped.length} skipped (${result.skipped[0].reason.toLowerCase()}). ` : ""}$${result.owed.toFixed(2)} owed.`,
+                });
+              }}
+            />
+            <div className="mt-3 flex justify-start">
+              <button
+                type="button"
+                className="text-sm font-medium text-primary"
+                onClick={async () => {
+                  try {
+                    await clearTransactionsReimbursable(Array.from(selectedIds));
+                    setBulkReimbursable(false);
+                    clearSelection();
+                    await fetchTransactions(currentPage, filters);
+                  } catch (err) {
+                    setModalState({
+                      isOpen: true,
+                      type: "error",
+                      title: "Error",
+                      message: err instanceof Error ? err.message : "Failed to unmark",
+                    });
+                  }
+                }}
+              >
+                Unmark the selected instead
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Edit Transaction Modal */}
       {editingTransaction && (

@@ -182,3 +182,55 @@ export const MATCH_LABELS: Record<AllocationMatch, string> = {
   exact_set: "Adds up exactly",
   oldest_first: "Oldest first",
 };
+
+/** The flag from a transaction's raw columns (getTransactions / getTransaction rows), or null. */
+export const flagFromRow = (row: {
+  reimbursablePersonId?: string | null;
+  reimbursableAmount?: string | number | null;
+  reimbursableShare?: string | number | null;
+  reimbursableNote?: string | null;
+  reimbursablePerson?: { id: string; name: string } | null;
+}): ReimbursableFlag | null => {
+  if (!row.reimbursablePersonId) return null;
+  const owed = Number(row.reimbursableAmount ?? 0);
+  const fraction = row.reimbursableShare === null || row.reimbursableShare === undefined ? null : Number(row.reimbursableShare);
+  return {
+    personId: row.reimbursablePersonId,
+    person: row.reimbursablePerson?.name ?? null,
+    owed,
+    share: fraction === null ? { kind: "amount", amount: owed } : Math.abs(fraction - 1) < 1e-9 ? { kind: "full" } : { kind: "fraction", fraction },
+    note: row.reimbursableNote ?? null,
+  };
+};
+
+/** The share editor's choice: in full, half, a fixed amount or a percentage. */
+export type ShareMode = "full" | "half" | "amount" | "percent";
+
+/** The editor's fields for a stored share. */
+export const shareFields = (share: ReimbursableShare | undefined): { mode: ShareMode; value: string } => {
+  if (!share || share.kind === "full") return { mode: "full", value: "" };
+  if (share.kind === "amount") return { mode: "amount", value: share.amount.toFixed(2) };
+  if (Math.abs(share.fraction - 0.5) < 1e-6) return { mode: "half", value: "" };
+  return { mode: "percent", value: String(Number((share.fraction * 100).toFixed(2))) };
+};
+
+/** The share as the API takes it, or an error to show. */
+export const shareFromFields = (mode: ShareMode, value: string): ReimbursableShareInput | { error: string } => {
+  if (mode === "full" || mode === "half") return mode;
+  const number = Number(value);
+  if (mode === "amount")
+    return number > 0 ? { amount: Math.round(number * 100) / 100 } : { error: "Enter the amount they owe" };
+  return number > 0 && number <= 100 ? { fraction: number / 100 } : { error: "Enter a share from 1 to 100%" };
+};
+
+export const isShareError = (value: ReimbursableShareInput | { error: string }): value is { error: string } =>
+  typeof value === "object" && "error" in value;
+
+export const shareOf = (input: ReimbursableShareInput): ReimbursableShare =>
+  input === "full"
+    ? { kind: "full" }
+    : input === "half"
+      ? { kind: "fraction", fraction: 0.5 }
+      : "amount" in input
+        ? { kind: "amount", amount: input.amount }
+        : { kind: "fraction", fraction: input.fraction };

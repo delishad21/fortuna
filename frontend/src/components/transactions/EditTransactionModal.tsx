@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { CategorySelect } from "@/components/ui/CategorySelect";
 import { AccountIdentifierSelect } from "@/components/ui/AccountIdentifierSelect";
 import { ReimbursementLinkPicker } from "@/components/reimbursement/ReimbursementLinkPicker";
+import { ReimbursableSection } from "@/components/reimbursables/ReimbursableSection";
 import { getLinkedTransactions, updateTransaction } from "@/app/actions/transactions";
 import { Modal } from "@/components/ui/Modal";
 import { setTransactionImage } from "@/app/actions/accounts";
@@ -54,6 +55,11 @@ interface Transaction {
     autoDetected?: boolean;
     detectionReason?: string;
   } | null;
+  reimbursablePersonId?: string | null;
+  reimbursableAmount?: string | number | null;
+  reimbursableShare?: string | number | null;
+  reimbursableNote?: string | null;
+  reimbursablePerson?: { id: string; name: string } | null;
   linkedTransactions?: {
     reimburses: Array<{
       id: string;
@@ -498,6 +504,9 @@ export function EditTransactionModal({
                   Reimbursed by…
                 </Button>
               </div>
+            ) : null}
+            {transaction.amountOut && savedType !== "internal" && savedType !== "reimbursement" ? (
+              <ReimbursableSection transaction={transaction} onChanged={() => onLinksChanged?.([])} />
             ) : null}
           </div>
 

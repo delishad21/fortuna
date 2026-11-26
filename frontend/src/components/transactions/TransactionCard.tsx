@@ -92,6 +92,8 @@ export interface TransactionCardTransaction {
   }>;
   /** Short warning shown as a badge under the description. */
   notice?: string;
+  /** Paid for someone who pays it back. */
+  reimbursablePerson?: { id: string; name: string } | null;
   metadata?: Record<string, any>;
   linkage?: TransactionLinkage | null;
   accentColor?: string;
@@ -356,6 +358,11 @@ export function TransactionCard({
                   />
                 )}
                 {toReview && <ReviewBadge reasons={transaction.reviewReasons} />}
+                {transaction.reimbursablePerson ? (
+                  <span className="inline-flex items-center rounded border border-stroke px-1.5 py-px text-[11px] text-dark-5 dark:border-dark-3 dark:text-dark-6">
+                    For {transaction.reimbursablePerson.name}
+                  </span>
+                ) : null}
               </div>
             )}
           </div>

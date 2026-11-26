@@ -14,6 +14,7 @@ import {
   MessageSquare,
   ChevronUp,
   ListChecks,
+  HandCoins,
 } from "lucide-react";
 import { getWorkflowPreference } from "@/app/actions/user";
 import { getReviewQueue } from "@/app/actions/review";
@@ -31,6 +32,7 @@ const menuItems = [
       { title: "To review", icon: ListChecks, url: "/review" },
       { title: "Trips", icon: Plane, url: "/trips" },
       { title: "Analytics", icon: BarChart3, url: "/analytics" },
+      { title: "Reimbursements", icon: HandCoins, url: "/reimbursements" },
       { title: "Chat", icon: MessageSquare, url: "/chat" },
     ],
   },

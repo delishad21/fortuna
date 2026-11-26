@@ -32,6 +32,10 @@ import {
   type ReviewReason,
 } from "@/lib/reviewTypes";
 import { cn } from "@/lib/utils";
+import { RepaymentProposalCard } from "@/components/reimbursables/RepaymentProposalCard";
+import { ReimbursableEditor } from "@/components/reimbursables/ReimbursableEditor";
+import { setTransactionsReimbursable } from "@/app/actions/reimbursables";
+import { describeShare } from "@/lib/reimbursables";
 
 type Category = { id: string; name: string; color: string; icon?: string | null };
 
@@ -286,6 +290,11 @@ export function ReviewClient({
                 selected={selected.has(row.id)}
                 onSelect={(on) => toggle(row.id, on)}
                 onMarkReviewed={() => void markReviewed([row.id])}
+                onLinked={async (message) => {
+                  setNotice(message);
+                  await refresh();
+                }}
+                onError={(err) => fail(err, "Failed to link the repayment")}
                 disabled={loading}
               />
             ))}
@@ -312,6 +321,8 @@ function ReviewRow({
   selected,
   onSelect,
   onMarkReviewed,
+  onLinked,
+  onError,
   disabled,
 }: {
   row: ReviewEntry;
@@ -319,6 +330,8 @@ function ReviewRow({
   selected: boolean;
   onSelect: (on: boolean) => void;
   onMarkReviewed: () => void;
+  onLinked: (message: string) => Promise<void>;
+  onError: (err: unknown) => void;
   disabled: boolean;
 }) {
   const income = (row.amountIn ?? 0) > 0;
@@ -365,6 +378,11 @@ function ReviewRow({
               {reviewReasonLabel(reason)}
             </span>
           ))}
+          {row.reimbursable ? (
+            <span className="inline-flex items-center rounded border border-stroke px-1.5 py-px text-[11px] dark:border-dark-3">
+              For {row.reimbursable.person || "someone"} · {describeShare(row.reimbursable.share)}
+            </span>
+          ) : null}
         </div>
         {decidedBy ? (
           <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
@@ -373,6 +391,9 @@ function ReviewRow({
               ? ` · the assistant suggested ${row.classification.suggestedCategory}`
               : ""}
           </p>
+        ) : null}
+        {row.reimbursementProposal ? (
+          <RepaymentProposalCard proposal={row.reimbursementProposal} onConfirmed={onLinked} onError={onError} />
         ) : null}
       </div>
       {row.reviewStatus === "to_review" ? (
@@ -411,6 +432,7 @@ function BulkCorrection({
   const [matchValue, setMatchValue] = useState("");
   const [accountOnly, setAccountOnly] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [reimbursable, setReimbursable] = useState(false);
 
   const descriptions = rows.map((row) => row.description);
   const suggestion = suggestRuleMatch(descriptions);
@@ -459,11 +481,30 @@ function BulkCorrection({
           <Button variant="secondary" size="sm" disabled={disabled || saving} onClick={onMarkReviewed}>
             Mark reviewed
           </Button>
+          <Button variant="secondary" size="sm" disabled={disabled || saving} onClick={() => setReimbursable((open) => !open)}>
+            Reimbursable…
+          </Button>
           <button type="button" onClick={onClear} className="text-sm font-medium text-primary">
             Clear selection
           </button>
         </div>
       </div>
+      {reimbursable ? (
+        <div className="rounded-lg border border-stroke p-3 dark:border-dark-3">
+          <ReimbursableEditor
+            count={rows.length}
+            amountOut={rows.length === 1 ? rows[0].amountOut ?? undefined : undefined}
+            onCancel={() => setReimbursable(false)}
+            onSave={async (input) => {
+              const result = await setTransactionsReimbursable({ ids: rows.map((row) => row.id), ...input });
+              setReimbursable(false);
+              await onDone(
+                `Marked reimbursable: ${formatCurrency(result.owed)} owed.${result.skipped.length ? ` ${result.skipped.length} skipped (money in or transfers).` : ""}`,
+              );
+            }}
+          />
+        </div>
+      ) : null}
       <div className="grid gap-3 md:grid-cols-3">
         <div className="flex flex-col gap-1.5">
           <span className={fieldLabel}>Category</span>

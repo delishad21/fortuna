@@ -41,6 +41,7 @@ import {
 } from "@/components/analytics/parts";
 import { localToday } from "@/lib/workflow";
 import { cn } from "@/lib/utils";
+import type { ReimbursableSummary } from "@/lib/reimbursables";
 
 type Transaction = CardSource & {
   merchant: string;
@@ -84,6 +85,8 @@ type BreakdownRow = {
 type SeriesPoint = { key: string; label: string; totalIn: number; totalOut: number; net: number; transactionCount: number };
 
 type ReportData = {
+  /** Spent for people who pay it back, per person. */
+  reimbursable?: ReimbursableSummary;
   selectedMonth: string;
   importedMonths: string[];
   currentMonth?: string | null;
@@ -493,6 +496,30 @@ function ReportsTab({ initialReport, accounts }: { initialReport: ReportData; ac
           sub={hasPrevious ? `${previous.transactionCount} in the previous period${report.previousPeriod?.sameDays ? " (same days)" : ""}` : undefined}
         />
       </div>
+
+      {report.reimbursable && report.reimbursable.spentFor > 0 ? (
+        <SectionCard
+          title="Spent for others"
+          action={
+            <span className="text-xs text-dark-5 dark:text-dark-6">
+              {report.reimbursable.countsAsOwn ? "Counted in your spending until repaid" : "Not in your spending"}
+            </span>
+          }
+        >
+          <div className="divide-y divide-stroke dark:divide-stroke-dark">
+            {report.reimbursable.people.map((person) => (
+              <div key={person.personId} className="flex flex-wrap items-center justify-between gap-3 py-2 text-sm">
+                <span className="text-dark dark:text-white">Spent for {person.name}</span>
+                <span className="tabular-nums text-dark-5 dark:text-dark-6">
+                  <span className="font-medium text-dark dark:text-white">{formatCurrency(person.spentFor)}</span> · repaid{" "}
+                  {formatCurrency(person.repaid)}
+                  {person.outstanding > 0.005 ? ` · ${formatCurrency(person.outstanding)} outstanding` : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      ) : null}
 
       <SectionCard
         title={`${metric === "inOut" ? "Income and spending" : metricWord} ${interval === "day" ? "by day" : "by month"}`}

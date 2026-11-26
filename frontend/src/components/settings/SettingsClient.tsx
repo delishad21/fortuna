@@ -31,6 +31,7 @@ import {
   changePassword,
   updateAutoLabelSettings,
   updateAnalyticsExcludedCategories,
+  updateAnalyticsCountReimbursable,
   type UserProfile,
 } from "@/app/actions/user";
 import {
@@ -131,6 +132,7 @@ export function SettingsClient({
   const [autoLabelThreshold, setAutoLabelThreshold] = useState(
     user?.autoLabelThreshold ?? 0.5,
   );
+  const [countReimbursable, setCountReimbursable] = useState(user?.analyticsCountReimbursable ?? false);
   const [analyticsExcludedCategoryIds, setAnalyticsExcludedCategoryIds] =
     useState<string[]>(user?.analyticsExcludedCategoryIds ?? []);
   const [savedAnalyticsExcludedCategoryIds, setSavedAnalyticsExcludedCategoryIds] =
@@ -710,6 +712,28 @@ export function SettingsClient({
                 </span>
               )}
             </div>
+
+            <label className="mt-4 flex items-start gap-3 rounded-lg border border-stroke px-3 py-2 text-sm text-dark dark:border-dark-3 dark:text-white">
+              <Checkbox
+                checked={countReimbursable}
+                onChange={async (checked) => {
+                  setCountReimbursable(checked);
+                  try {
+                    const saved = await updateAnalyticsCountReimbursable(checked);
+                    setCountReimbursable(saved.analyticsCountReimbursable);
+                  } catch (error) {
+                    setCountReimbursable(!checked);
+                    showModal("error", "Error", error instanceof Error ? error.message : "Failed to save");
+                  }
+                }}
+              />
+              <span>
+                Count reimbursable spending as mine
+                <span className="block text-xs text-dark-5 dark:text-dark-6">
+                  Off: what others owe you is shown apart from your spending. On: it counts until it is repaid.
+                </span>
+              </span>
+            </label>
 
             {excludedCategoryPreview.length > 0 && (
               <div className="mt-4 flex flex-wrap gap-2 text-sm text-dark-5 dark:text-dark-6">
