@@ -213,6 +213,8 @@ The tools call the data service. The same routes are reachable through the
 frontend (`http://127.0.0.1:3040` on the home server) with
 `Authorization: Bearer pfa_…`; the frontend forwards only
 `/api/agent/transactions/*`, `/api/agent/rules/*`, `/api/agent/instructions/*`,
+`/api/agent/drafts/*`, `/api/agent/proposals/*` (`POST`),
+`/api/agent/parser-factory/*` (`GET`, `POST`),
 `/api/agent/classification-guide`, `/api/agent/analytics/spending`,
 `/api/agent/analytics/month-to-date` and `POST /api/agent/statements` (see
 [Statement uploads from a server](#statement-uploads-from-a-server-statementswrite)). The web and phone apps' To review
@@ -245,7 +247,27 @@ Fortuna work through one queue.
 | `POST` | `/api/agent/rules` | rules:write | Create (`origin`, `reason`, `exampleIds` or `recurringBill`, `matchValue`, `account`/`card`, `setCategory`/`setLabel`/`markInternal`, `amountMin`/`amountMax`). |
 | `PATCH` | `/api/agent/rules/:id` | rules:write | Change, or `enabled`. |
 | `POST` | `/api/agent/rules/:id/disable` \| `enable` \| `undo` | rules:write | |
+| `POST` | `/api/agent/drafts` | drafts:write | Create a draft. |
+| `GET` | `/api/agent/drafts?status=` | drafts:read | Drafts. |
+| `GET` / `DELETE` | `/api/agent/drafts/:draftId` | drafts:read / drafts:write | One draft with its rows, reconciliation and proposals; or discard it. |
+| `POST` | `/api/agent/drafts/:draftId/parse` | statements:write + drafts:write | `{ parserId? }` |
+| `PATCH` | `/api/agent/drafts/:draftId/rows/:rowId` | drafts:write | Change a row. |
+| `PATCH` | `/api/agent/drafts/:draftId/reconcile` | drafts:write | `{ expectedVersion, rows?: [{ rowId, transactionId }], entries?: [{ transactionId, action: keep \| delete \| move, accountId? }] }`: match rows to entries, or settle unmatched entries. |
+| `PATCH` | `/api/agent/drafts/:draftId/account` | drafts:write + accounts:read | The account the draft belongs to. |
 | `POST` | `/api/agent/drafts/:draftId/account-questions/answer` | drafts:write + accounts:write | `{ identifier, option, name? }` |
+| `POST` | `/api/agent/drafts/:draftId/proposals` | classification:write | Submit proposals. |
+| `POST` | `/api/agent/proposals/:proposalId/decision` | drafts:write | `{ decision }` |
+| `POST` | `/api/agent/drafts/:draftId/validate` | drafts:read | Check the draft before commit. |
+| `POST` | `/api/agent/drafts/:draftId/commit` | imports:commit | Commit the draft to the ledger. |
+| `POST` | `/api/agent/drafts/validate-selection` \| `commit-selection` | drafts:read \| imports:commit | `{ draftIds, … }` |
+| `POST` | `/api/agent/parser-factory/workspaces` | parser:develop | Open a workspace. |
+| `GET` | `/api/agent/parser-factory/workspaces/:workspaceId` | parser:develop | The workspace, its fixtures and candidates. |
+| `GET` | `/api/agent/parser-factory/workspaces/:workspaceId/fixtures/:fileId/inspect` | parser:develop | |
+| `POST` | `/api/agent/parser-factory/workspaces/:workspaceId/candidates` | parser:develop | Stage a candidate. |
+| `POST` | `/api/agent/parser-factory/workspaces/:workspaceId/candidates/:candidateId/test` \| `submit` | parser:develop | |
+| `POST` | `/api/agent/parser-factory/workspaces/:workspaceId/candidates/:candidateId/approve` | parser:approve | `{ confirmed: true }` |
+| `GET` | `/api/agent/parser-factory/definitions` | parser:develop | Parser definitions and versions. |
+| `POST` | `/api/agent/parser-factory/definitions/:definitionId/versions/:versionId/activate` | parser:approve | `{ confirmed: true }` |
 | `GET` | `/api/agent/analytics/spending?groupBy=category\|month\|merchant\|account&from=&to=&category=&limit=` | analytics:read | Money out per group. |
 | `GET` | `/api/agent/analytics/month-to-date?today=` | analytics:read | The dashboard's month so far: `spent`, `todaySpent`, `weekSpent` (from Monday), `previous.spentSameDay` and `spentTotal`, `projected` (month-end at this pace) and `categories`. `today` defaults to today in Singapore. |
 
