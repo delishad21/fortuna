@@ -2,14 +2,16 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, X } from "lucide-react";
+import { CheckCircle2, ChevronDown, X } from "lucide-react";
 import { getAccounts } from "@/app/actions/accounts";
 import {
+  answerReviewQuestion,
   confirmReviewAccount,
   correctReviewEntries,
   getReviewQueue,
   mergeReviewAccount,
   setReviewEntriesStatus,
+  undoReviewRule,
 } from "@/app/actions/review";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -20,12 +22,17 @@ import { Select } from "@/components/ui/Select";
 import { TextInput } from "@/components/ui/TextInput";
 import { TransactionAvatar } from "@/components/ui/CategoryIcon";
 import { EntrySourceBadge } from "@/components/transactions/EntrySourceBadge";
+import { AssistantDecision } from "@/components/review/AssistantDecision";
 import { EmptyText, SectionCard, formatCurrency, formatDay } from "@/components/analytics/parts";
 import { autoCreatedFromDisplay, type Account } from "@/lib/accountTypes";
 import { ENTRY_SOURCES, classificationLabel, entrySourceLabel, reviewReasonLabel, type EntrySource } from "@/lib/entrySource";
 import {
   REVIEW_REASONS,
+  ruleEffectText,
+  ruleScopeText,
   suggestRuleMatch,
+  type EntryQuestion,
+  type PublicRule,
   type ReviewEntry,
   type ReviewQueue,
   type ReviewQueueFilters,
@@ -150,6 +157,24 @@ export function ReviewClient({
                   await refresh();
                 }}
                 onError={(err) => fail(err, "Failed to update the account")}
+              />
+            ))}
+          </div>
+        </SectionCard>
+      ) : null}
+
+      {queue.newRules?.length ? (
+        <SectionCard title={`New rules from the assistant (${queue.newRules.length})`}>
+          <div className="divide-y divide-stroke dark:divide-stroke-dark">
+            {queue.newRules.map((rule) => (
+              <NewRuleRow
+                key={rule.id}
+                rule={rule}
+                onDone={async (message) => {
+                  setNotice(message);
+                  await refresh();
+                }}
+                onError={(err) => fail(err, "Failed to undo the rule")}
               />
             ))}
           </div>
@@ -294,7 +319,8 @@ export function ReviewClient({
                   setNotice(message);
                   await refresh();
                 }}
-                onError={(err) => fail(err, "Failed to link the repayment")}
+                onAnswered={refresh}
+                onError={(err) => fail(err, "Failed to save the change")}
                 disabled={loading}
               />
             ))}
@@ -322,6 +348,7 @@ function ReviewRow({
   onSelect,
   onMarkReviewed,
   onLinked,
+  onAnswered,
   onError,
   disabled,
 }: {
@@ -331,9 +358,12 @@ function ReviewRow({
   onSelect: (on: boolean) => void;
   onMarkReviewed: () => void;
   onLinked: (message: string) => Promise<void>;
+  onAnswered: () => Promise<void>;
   onError: (err: unknown) => void;
   disabled: boolean;
 }) {
+  const [open, setOpen] = useState(false);
+  const hasDetails = Boolean(row.decision || row.classification || row.merchant || row.transactionType);
   const income = (row.amountIn ?? 0) > 0;
   const decidedBy = row.classification?.decidedBy === "none" ? null : classificationLabel(row.classification);
   return (
@@ -394,6 +424,43 @@ function ReviewRow({
         ) : null}
         {row.reimbursementProposal ? (
           <RepaymentProposalCard proposal={row.reimbursementProposal} onConfirmed={onLinked} onError={onError} />
+        ) : null}
+        {row.questions?.length ? (
+          <div className="mt-2 flex flex-col gap-2">
+            {row.questions.map((question) => (
+              <QuestionPrompt
+                key={question.id}
+                transactionId={row.id}
+                question={question}
+                disabled={disabled}
+                onAnswered={onAnswered}
+                onError={onError}
+              />
+            ))}
+          </div>
+        ) : null}
+        {hasDetails ? (
+          <>
+            <button
+              type="button"
+              onClick={() => setOpen((value) => !value)}
+              className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-primary"
+            >
+              {open ? "Hide details" : "Details"}
+              <ChevronDown className={cn("size-3.5 transition", open && "rotate-180")} />
+            </button>
+            {open ? (
+              <div className="mt-2">
+                <AssistantDecision
+                  classification={row.classification}
+                  decision={row.decision}
+                  transactionType={row.transactionType}
+                  merchant={row.merchant}
+                  precedents={row.precedents}
+                />
+              </div>
+            ) : null}
+          </>
         ) : null}
       </div>
       {row.reviewStatus === "to_review" ? (
@@ -651,6 +718,117 @@ function AutoAccountRow({
           </>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/** One open question: a button per option, and a text field when a free answer is allowed. */
+function QuestionPrompt({
+  transactionId,
+  question,
+  disabled,
+  onAnswered,
+  onError,
+}: {
+  transactionId: string;
+  question: EntryQuestion;
+  disabled: boolean;
+  onAnswered: () => Promise<void>;
+  onError: (err: unknown) => void;
+}) {
+  const [other, setOther] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const answer = async (choice: { option: string } | { value: string }) => {
+    setSaving(true);
+    try {
+      await answerReviewQuestion({ transactionId, questionId: question.id, ...choice });
+      await onAnswered();
+    } catch (err) {
+      onError(err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const busy = disabled || saving;
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg border border-stroke p-2.5 dark:border-dark-3">
+      <p className="text-sm text-dark dark:text-white">{question.prompt}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        {question.options.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            disabled={busy}
+            onClick={() => void answer({ option: option.id })}
+            className="inline-flex items-center rounded-full border border-stroke px-3 py-1 text-sm text-dark transition hover:border-primary hover:text-primary disabled:opacity-60 dark:border-dark-3 dark:text-white"
+          >
+            {option.label}
+          </button>
+        ))}
+        {question.allowOther ? (
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (other.trim()) void answer({ value: other.trim() });
+            }}
+          >
+            <div className="w-44">
+              <TextInput value={other} placeholder="Other" onChange={(event) => setOther(event.target.value)} aria-label="Other answer" />
+            </div>
+            <Button type="submit" variant="secondary" size="sm" disabled={busy || !other.trim()}>
+              Answer
+            </Button>
+          </form>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** A rule the assistant made by itself since the last review, with Undo. */
+function NewRuleRow({
+  rule,
+  onDone,
+  onError,
+}: {
+  rule: PublicRule;
+  onDone: (message: string) => Promise<void>;
+  onError: (err: unknown) => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const scope = ruleScopeText(rule);
+  const examples = rule.exampleTransactionIds.length;
+
+  const undo = async () => {
+    setSaving(true);
+    try {
+      const result = await undoReviewRule(rule.id);
+      await onDone(
+        `Undid “${rule.name}”.${result.reopened ? ` ${result.reopened === 1 ? "1 entry is" : `${result.reopened} entries are`} back in the queue.` : ""}`,
+      );
+    } catch (err) {
+      onError(err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-3 py-3 lg:flex-row lg:items-center lg:justify-between">
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium text-dark dark:text-white">{rule.name}</p>
+        <p className="mt-0.5 text-xs text-dark-5 dark:text-dark-6">
+          {rule.matchType === "always" ? "Every entry" : `Descriptions containing “${rule.matchValue}”`}
+          {scope ? ` · ${scope}` : ""} → {ruleEffectText(rule)} · {examples === 1 ? "1 example" : `${examples} examples`}
+        </p>
+        {rule.reason ? <p className="mt-0.5 text-xs text-dark dark:text-white">{rule.reason}</p> : null}
+      </div>
+      <Button variant="secondary" size="sm" disabled={saving} onClick={() => void undo()}>
+        Undo
+      </Button>
     </div>
   );
 }

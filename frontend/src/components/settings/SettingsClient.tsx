@@ -53,6 +53,7 @@ import {
   createImportRule,
   updateImportRule,
   deleteImportRule,
+  getImportRules,
   type ImportRule,
 } from "@/app/actions/importRules";
 import {
@@ -336,9 +337,24 @@ export function SettingsClient({
     );
   };
 
+  /** The switch saves right away for saved rules; new ones wait for Save Rules. */
+  const handleToggleRule = async (ruleId: string, enabled: boolean) => {
+    setImportRules((prev) => prev.map((rule) => (rule.id === ruleId ? { ...rule, enabled } : rule)));
+    if (ruleId.startsWith("temp-")) return;
+    try {
+      await updateImportRule(ruleId, { enabled });
+    } catch (error) {
+      setImportRules((prev) => prev.map((rule) => (rule.id === ruleId ? { ...rule, enabled: !enabled } : rule)));
+      showModal(
+        "error",
+        "Save Failed",
+        error instanceof Error ? error.message : "Failed to update the rule",
+      );
+    }
+  };
+
   const handleSaveAllRules = async () => {
     try {
-      const savedRules: ImportRule[] = [];
       for (const rule of importRules) {
         const payload = {
           name: rule.name,
@@ -352,16 +368,14 @@ export function SettingsClient({
           setCategoryName: rule.setCategoryName || null,
           markInternal: rule.markInternal,
           sortOrder: rule.sortOrder,
+          amountMin: rule.amountMin ?? null,
+          amountMax: rule.amountMax ?? null,
         };
-        if (rule.id.startsWith("temp-")) {
-          const created = await createImportRule(payload);
-          savedRules.push(created);
-        } else {
-          const updated = await updateImportRule(rule.id, payload);
-          savedRules.push(updated);
-        }
+        if (rule.id.startsWith("temp-")) await createImportRule(payload);
+        else await updateImportRule(rule.id, payload);
       }
-      setImportRules(savedRules);
+      // Reload for the origin, scope, examples and hit stats the list shows.
+      setImportRules(await getImportRules());
       showModal("success", "Rules Saved", "Import rules updated.");
     } catch (error) {
       showModal(
@@ -1242,6 +1256,7 @@ export function SettingsClient({
             prev.map((item) => (item.id === id ? { ...item, ...updates } : item)),
           )
         }
+        onToggleEnabled={handleToggleRule}
         onDeleteRule={handleDeleteRule}
         onSaveAll={handleSaveAllRules}
       />

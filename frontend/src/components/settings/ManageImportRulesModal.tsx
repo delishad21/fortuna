@@ -1,7 +1,8 @@
 "use client";
+import { useState } from "react";
 import { accountDisplay } from "@/lib/accounts";
 
-import { Plus, Trash2, WandSparkles } from "lucide-react";
+import { ChevronDown, Plus, Trash2, WandSparkles } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { TextInput } from "@/components/ui/TextInput";
 import { Select } from "@/components/ui/Select";
@@ -10,6 +11,18 @@ import { NumberInput } from "@/components/ui/NumberInput";
 import type { ImportRule } from "@/app/actions/importRules";
 import type { Category } from "@/app/actions/categories";
 import type { ParserOption } from "@/lib/parsers";
+import { formatDay } from "@/components/analytics/parts";
+import { ruleOriginLabel, ruleScopeText } from "@/lib/reviewTypes";
+import { cn } from "@/lib/utils";
+
+const fieldLabel = "text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6";
+
+/** Empty input clears the bound; anything else is a non-negative amount. */
+const amountValue = (text: string) => {
+  if (!text.trim()) return null;
+  const value = Number(text);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+};
 
 interface ManageImportRulesModalProps {
   isOpen: boolean;
@@ -24,6 +37,8 @@ interface ManageImportRulesModalProps {
   onClose: () => void;
   onAddRule: () => void;
   onRuleChange: (id: string, updates: Partial<ImportRule>) => void;
+  /** Turns a rule on or off; saved rules are saved right away. */
+  onToggleEnabled: (id: string, enabled: boolean) => void | Promise<void>;
   onDeleteRule: (id: string) => void;
   onSaveAll: () => void | Promise<void>;
 }
@@ -37,6 +52,7 @@ export function ManageImportRulesModal({
   onClose,
   onAddRule,
   onRuleChange,
+  onToggleEnabled,
   onDeleteRule,
   onSaveAll,
 }: ManageImportRulesModalProps) {
@@ -79,6 +95,7 @@ export function ManageImportRulesModal({
                 key={rule.id}
                 className="rounded-lg border border-stroke dark:border-dark-3 p-3 bg-white dark:bg-dark-2"
               >
+                <RuleSummary rule={rule} onToggleEnabled={onToggleEnabled} />
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs font-semibold uppercase tracking-wide text-dark-5 dark:text-dark-6">
@@ -191,16 +208,25 @@ export function ManageImportRulesModal({
                       buttonClassName="w-full"
                     />
                   </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className={fieldLabel}>Amount Range</label>
+                    <div className="flex items-center gap-2">
+                      <AmountField
+                        value={rule.amountMin}
+                        placeholder="Min"
+                        onChange={(amountMin) => onRuleChange(rule.id, { amountMin })}
+                      />
+                      <span className="text-sm text-dark-5 dark:text-dark-6">to</span>
+                      <AmountField
+                        value={rule.amountMax}
+                        placeholder="Max"
+                        onChange={(amountMax) => onRuleChange(rule.id, { amountMax })}
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 <div className="mt-3 flex flex-wrap items-center gap-4">
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      checked={rule.enabled}
-                      onChange={(checked) => onRuleChange(rule.id, { enabled: checked })}
-                    />
-                    <span className="text-sm text-dark dark:text-white">Enabled</span>
-                  </div>
                   <div className="flex items-center gap-2">
                     <Checkbox
                       checked={rule.caseSensitive}
@@ -256,6 +282,117 @@ export function ManageImportRulesModal({
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** An optional amount; keeps what is typed (e.g. "12.") while passing the number up. */
+function AmountField({
+  value,
+  placeholder,
+  onChange,
+}: {
+  value: number | null | undefined;
+  placeholder: string;
+  onChange: (value: number | null) => void;
+}) {
+  const [text, setText] = useState(value == null ? "" : String(value));
+  return (
+    <NumberInput
+      value={text}
+      placeholder={placeholder}
+      className="flex-1"
+      inputClassName="w-full"
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(amountValue(e.target.value));
+      }}
+    />
+  );
+}
+
+/** Origin, reason, scope, hit stats and examples of a rule, with its on/off switch. */
+function RuleSummary({
+  rule,
+  onToggleEnabled,
+}: {
+  rule: ImportRule;
+  onToggleEnabled: (id: string, enabled: boolean) => void | Promise<void>;
+}) {
+  const [showExamples, setShowExamples] = useState(false);
+  const saved = !rule.id.startsWith("temp-");
+  const scope = ruleScopeText({
+    account: rule.account ?? null,
+    accountIdentifier: rule.accountIdentifier ?? null,
+    card: rule.card ?? null,
+    amountMin: rule.amountMin ?? null,
+    amountMax: rule.amountMax ?? null,
+  });
+  const examples = rule.examples ?? [];
+  const exampleCount = rule.exampleTransactionIds?.length ?? examples.length;
+  const hits = rule.hitCount ?? 0;
+
+  return (
+    <div className="mb-3 flex flex-col gap-1.5 border-b border-stroke pb-3 dark:border-dark-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-dark-5 dark:text-dark-6">
+          <span className="inline-flex items-center rounded border border-stroke px-1.5 py-px text-[11px] text-dark dark:border-dark-3 dark:text-white">
+            {ruleOriginLabel(rule.origin)}
+          </span>
+          {scope ? <span>{scope}</span> : null}
+          {saved ? (
+            <span>
+              {hits === 0
+                ? "Not used yet"
+                : `Used ${hits === 1 ? "once" : `${hits} times`}${rule.lastHitAt ? `, last on ${formatDay(rule.lastHitAt, "d MMM yyyy")}` : ""}`}
+            </span>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2">
+          {rule.undoneAt ? <span className="text-xs text-dark-5 dark:text-dark-6">Undone</span> : null}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={rule.enabled}
+            aria-label={rule.enabled ? `Turn off ${rule.name}` : `Turn on ${rule.name}`}
+            onClick={() => void onToggleEnabled(rule.id, !rule.enabled)}
+            className={cn(
+              "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition",
+              rule.enabled ? "bg-primary" : "bg-stroke dark:bg-dark-3",
+            )}
+          >
+            <span
+              className={cn(
+                "inline-block size-4 rounded-full bg-white transition",
+                rule.enabled ? "translate-x-[18px]" : "translate-x-0.5",
+              )}
+            />
+          </button>
+        </div>
+      </div>
+      {rule.reason ? <p className="text-sm text-dark dark:text-white">{rule.reason}</p> : null}
+      {exampleCount > 0 ? (
+        <div className="flex flex-col gap-1">
+          <button
+            type="button"
+            onClick={() => setShowExamples((value) => !value)}
+            className="inline-flex w-fit items-center gap-1 text-xs font-medium text-primary"
+          >
+            {exampleCount === 1 ? "1 example" : `${exampleCount} examples`}
+            <ChevronDown className={cn("size-3.5 transition", showExamples && "rotate-180")} />
+          </button>
+          {showExamples ? (
+            <ul className="flex flex-col gap-0.5 text-xs text-dark dark:text-white">
+              {examples.map((example) => (
+                <li key={example.id} className="truncate">
+                  {formatDay(example.date, "d MMM yyyy")} · {example.label || example.description} ·{" "}
+                  {example.category || "Uncategorized"}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

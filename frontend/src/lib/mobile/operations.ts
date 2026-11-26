@@ -200,6 +200,8 @@ import {
   setReviewEntriesStatus,
   confirmReviewAccount,
   mergeReviewAccount,
+  answerReviewQuestion,
+  undoReviewRule,
 } from "@/app/actions/review";
 import { getAvailableParsers } from "@/app/actions/parser";
 
@@ -407,5 +409,7 @@ export const mobileOperations = {
   setReviewEntriesStatus,
   confirmReviewAccount,
   mergeReviewAccount,
+  answerReviewQuestion,
+  undoReviewRule,
   getAvailableParsers,
 };

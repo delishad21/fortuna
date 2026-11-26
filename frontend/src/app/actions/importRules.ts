@@ -1,6 +1,7 @@
 "use server";
 
 import { auth } from "@/lib/actionAuth";
+import type { PublicRule } from "@/lib/reviewTypes";
 
 const DATA_SERVICE_URL =
   process.env.DATA_SERVICE_URL || "http://localhost:4001";
@@ -19,6 +20,19 @@ export interface ImportRule {
   setCategoryName?: string | null;
   markInternal: boolean;
   sortOrder: number;
+  /** Only for amounts in this range (either end optional). */
+  amountMin?: number | null;
+  amountMax?: number | null;
+  /** Saved rules also carry where they came from, their scope, examples and hit stats; new ones don't yet. */
+  origin?: PublicRule["origin"];
+  reason?: string | null;
+  account?: PublicRule["account"];
+  card?: PublicRule["card"];
+  exampleTransactionIds?: string[];
+  examples?: PublicRule["examples"];
+  hitCount?: number;
+  lastHitAt?: string | null;
+  undoneAt?: string | null;
 }
 
 export interface ImportRulePayload {
@@ -34,6 +48,8 @@ export interface ImportRulePayload {
   setCategoryName?: string | null;
   markInternal?: boolean;
   sortOrder?: number;
+  amountMin?: number | null;
+  amountMax?: number | null;
 }
 
 export interface PaylahInternalPreferenceState {

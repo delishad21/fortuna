@@ -36,6 +36,10 @@ export const REVIEW_REASON_LABELS: Record<string, string> = {
   assistant_category: "Assistant's category",
   new_account: "New account",
   possible_duplicate: "Possible duplicate",
+  question: "Question",
+  low_confidence: "Unsure",
+  unknown_account: "Unknown card",
+  rule_undone: "Rule undone",
 };
 
 export const reviewReasonLabel = (reason: string) => REVIEW_REASON_LABELS[reason] ?? reason;
@@ -43,10 +47,26 @@ export const reviewReasonLabel = (reason: string) => REVIEW_REASON_LABELS[reason
 export const reviewReasonsText = (reasons: string[] | null | undefined) =>
   (reasons ?? []).map(reviewReasonLabel).join(" · ");
 
+export const DECIDED_BY_LABELS: Record<string, string> = {
+  structural: "Transfer between your accounts",
+  rule: "Rule",
+  assistant: "Assistant",
+  learned_pattern: "Learned pattern",
+  history: "History",
+  heuristic: "Fortuna's guess",
+  correction: "You",
+  none: "Nobody",
+};
+
+export const decidedByLabel = (decidedBy: string | null | undefined) =>
+  decidedBy ? (DECIDED_BY_LABELS[decidedBy] ?? decidedBy) : null;
+
 /** Who chose an assistant entry's category, from metadata.classification. */
 export function classificationLabel(classification: unknown): string | null {
   const value = classification as { decidedBy?: string; ruleName?: string } | null | undefined;
   switch (value?.decidedBy) {
+    case "structural":
+      return DECIDED_BY_LABELS.structural;
     case "rule":
       return value.ruleName ? `Rule “${value.ruleName}”` : "A rule";
     case "learned_pattern":

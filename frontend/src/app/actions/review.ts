@@ -2,7 +2,7 @@
 
 import { auth } from "@/lib/actionAuth";
 import { dataServiceRequest } from "@/lib/dataService";
-import type { ReviewEntry, ReviewQueue, ReviewQueueFilters } from "@/lib/reviewTypes";
+import type { PublicRule, ReviewEntry, ReviewQueue, ReviewQueueFilters } from "@/lib/reviewTypes";
 
 /**
  * The To review screen on web and phone. It calls data-service's
@@ -50,11 +50,7 @@ export async function correctReviewEntries(input: {
   markReviewed?: boolean;
   createRule?: { matchValue: string; name?: string; accountOnly?: boolean };
 }): Promise<{ transactions: ReviewEntry[]; rule?: { id: string; name: string } }> {
-  const { createRule, ...rest } = input;
-  return call("/correct", {
-    ...rest,
-    ...(createRule ? { createRule: { ...createRule, confirmed: true } } : {}),
-  });
+  return call("/correct", input);
 }
 
 /** Marks entries reviewed, or puts them back in the queue. */
@@ -75,5 +71,33 @@ export async function mergeReviewAccount(accountId: string, intoAccountId: strin
   return call<{ merged: { from: string; into: string }; transactionsMoved: number }>(
     `/accounts/${encodeURIComponent(accountId)}/merge`,
     { into: intoAccountId, confirmed: true },
+  );
+}
+
+/**
+ * Answers an open question on an entry with one of its options (an option id)
+ * or, where the question allows it, a free value. Entries with the same
+ * question (one unknown card) are answered with it; they come back in alsoAnswered.
+ */
+export async function answerReviewQuestion(input: {
+  transactionId: string;
+  questionId: string;
+  option?: string;
+  value?: string;
+  markReviewed?: boolean;
+}) {
+  return call<{
+    transaction: ReviewEntry;
+    answered: { questionId: string; field: string; answer: string };
+    applied: Record<string, unknown>;
+    alsoAnswered?: ReviewEntry[];
+  }>("/questions/answer", input);
+}
+
+/** Undoes a rule the assistant created by itself; the entries it classified go back in the queue. */
+export async function undoReviewRule(ruleId: string) {
+  return call<{ rule: PublicRule; reopened: number; reclassified: number }>(
+    `/rules/${encodeURIComponent(ruleId)}/undo`,
+    {},
   );
 }

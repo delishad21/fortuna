@@ -18,6 +18,7 @@ import { cardDisplay, type AccountCard } from "@/lib/accountTypes";
 import Link from "next/link";
 import { EntrySourceBadge } from "@/components/transactions/EntrySourceBadge";
 import { ReviewBadge } from "@/components/transactions/ReviewBadge";
+import { AssistantDecision } from "@/components/review/AssistantDecision";
 import {
   reconciledLabel,
   entrySourceLabel,
@@ -600,6 +601,21 @@ export function TransactionCard({
               </div>
             )}
 
+            {transaction.entrySource === "assistant" &&
+              transaction.metadata?.classification && (
+                <div className="col-span-2">
+                  <div className="text-dark-5 dark:text-dark-6 mb-2">
+                    How it was classified
+                  </div>
+                  <AssistantDecision
+                    classification={transaction.metadata.classification}
+                    decision={transaction.metadata.classification.assistant}
+                    transactionType={transaction.metadata.transactionType}
+                    merchant={transaction.metadata.merchant}
+                  />
+                </div>
+              )}
+
             {transaction.balance !== null && (
               <div>
                 <div className="text-dark-5 dark:text-dark-6">Balance</div>
@@ -669,7 +685,14 @@ export function TransactionCard({
                   <div className="bg-white dark:bg-dark-2 rounded border border-stroke dark:border-dark-3 p-3">
                     <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
                       {Object.entries(transaction.metadata)
-                        .filter(([key]) => key !== "classification")
+                        .filter(
+                          ([key]) =>
+                            key !== "classification" &&
+                            !(
+                              transaction.entrySource === "assistant" &&
+                              (key === "merchant" || key === "transactionType")
+                            ),
+                        )
                         .map(
                         ([key, value]) => (
                           <div key={key} className="flex gap-2">
