@@ -2,7 +2,6 @@
 import {ConnectionPanel} from "@/components/chat/ConnectionPanel";
 import { MemoryPanel } from "@/components/chat/MemoryPanel";
 import { MailConnectionPanel } from "@/components/chat/MailConnectionPanel";
-import { accountDisplay } from "@/lib/accounts";
 
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -20,6 +19,7 @@ import {
   WandSparkles,
   EyeOff,
 } from "lucide-react";
+import { CategoryIcon } from "@/components/ui/CategoryIcon";
 import { ManageCategoriesModal } from "@/components/settings/ManageCategoriesModal";
 import { ManageAccountsModal } from "@/components/settings/ManageAccountsModal";
 import { ChangePasswordModal } from "@/components/settings/ChangePasswordModal";
@@ -39,11 +39,11 @@ import {
 } from "@/app/actions/categories";
 import { TRIP_CATEGORY_DEFINITIONS } from "@/lib/tripCategories";
 import {
-  updateAccountIdentifier,
-  deleteAccountIdentifier,
-  upsertAccountNumber,
+  getAccountNumbers,
   type AccountIdentifier,
 } from "@/app/actions/accountNumbers";
+import { getAccounts } from "@/app/actions/accounts";
+import type { Account } from "@/lib/accountTypes";
 import {
   createImportRule,
   updateImportRule,
@@ -66,6 +66,7 @@ interface SettingsClientProps {
   user: UserProfile | null;
   initialCategories: Category[];
   initialAccountIdentifiers: AccountIdentifier[];
+  initialAccounts: Account[];
   initialImportRules: ImportRule[];
   parserOptions: ParserOption[];
   initialClassificationPatterns: ClassificationPattern[];
@@ -77,6 +78,7 @@ export function SettingsClient({
   user,
   initialCategories,
   initialAccountIdentifiers,
+  initialAccounts,
   initialImportRules,
   parserOptions,
   initialClassificationPatterns,
@@ -88,9 +90,10 @@ export function SettingsClient({
 
   const [profile, setProfile] = useState<UserProfile | null>(user);
   const [categories, setCategories] = useState<Category[]>(initialCategories);
-  const [accounts, setAccounts] = useState<AccountIdentifier[]>(
+  const [accountIdentifiers, setAccountIdentifiers] = useState<AccountIdentifier[]>(
     initialAccountIdentifiers,
   );
+  const [accounts, setAccounts] = useState<Account[]>(initialAccounts);
   const [importRules, setImportRules] = useState<ImportRule[]>(initialImportRules);
   const [classificationPatterns, setClassificationPatterns] = useState<
     ClassificationPattern[]
@@ -137,11 +140,7 @@ export function SettingsClient({
   const [newCategory, setNewCategory] = useState({
     name: "",
     color: "#6366f1",
-  });
-  const [newAccount, setNewAccount] = useState({
-    identifier: "",
-    label: "",
-    color: "#6366f1",
+    icon: "",
   });
 
   const showModal = (
@@ -261,32 +260,20 @@ export function SettingsClient({
     );
   };
 
-  const handleAccountDelete = (accountId: string) => {
-    showModal(
-      "warning",
-      "Delete Account",
-      "This will remove the account.",
-      async () => {
-        try {
-          await deleteAccountIdentifier(accountId);
-          setAccounts((prev) => prev.filter((item) => item.id !== accountId));
-          showModal("success", "Account Deleted", "Account removed.");
-        } catch (error) {
-          showModal(
-            "error",
-            "Delete Failed",
-            error instanceof Error ? error.message : "Failed to delete account",
-          );
-        }
-      },
-    );
+  const reloadAccounts = async () => {
+    const [nextAccounts, nextIdentifiers] = await Promise.all([
+      getAccounts({ includeArchived: true }),
+      getAccountNumbers(),
+    ]);
+    setAccounts(nextAccounts);
+    setAccountIdentifiers(nextIdentifiers);
   };
 
   const handleSaveAllCategories = async () => {
     try {
       await Promise.all(
         categories.map((category) =>
-          updateCategory(category.id, category.name, category.color),
+          updateCategory(category.id, category.name, category.color, category.icon),
         ),
       );
       showModal("success", "Categories Saved", "All categories updated.");
@@ -295,28 +282,6 @@ export function SettingsClient({
         "error",
         "Save Failed",
         error instanceof Error ? error.message : "Failed to update categories",
-      );
-    }
-  };
-
-  const handleSaveAllAccounts = async () => {
-    try {
-      await Promise.all(
-        accounts.map((account) =>
-          updateAccountIdentifier(
-            account.id,
-            account.accountIdentifier,
-            account.color,
-            account.label ?? null,
-          ),
-        ),
-      );
-      showModal("success", "Accounts Saved", "All accounts updated.");
-    } catch (error) {
-      showModal(
-        "error",
-        "Save Failed",
-        error instanceof Error ? error.message : "Failed to update accounts",
       );
     }
   };
@@ -511,8 +476,10 @@ export function SettingsClient({
 
   const categoryPreview = categories.slice(0, PREVIEW_CHIP_LIMIT);
   const categoryRemaining = Math.max(categories.length - PREVIEW_CHIP_LIMIT, 0);
-  const accountPreview = accounts.slice(0, PREVIEW_CHIP_LIMIT);
-  const accountRemaining = Math.max(accounts.length - PREVIEW_CHIP_LIMIT, 0);
+  const openAccounts = accounts.filter((account) => !account.archived);
+  const accountsToReview = openAccounts.filter((account) => account.autoCreated);
+  const accountPreview = openAccounts.slice(0, PREVIEW_CHIP_LIMIT);
+  const accountRemaining = Math.max(openAccounts.length - PREVIEW_CHIP_LIMIT, 0);
   const rulePreview = importRules.slice(0, PREVIEW_CHIP_LIMIT);
   const ruleRemaining = Math.max(importRules.length - PREVIEW_CHIP_LIMIT, 0);
   const learnedPatterns = classificationPatterns.filter(
@@ -621,7 +588,7 @@ export function SettingsClient({
             <div className="min-w-0">
               <CardTitle>Preferences</CardTitle>
               <p className="text-sm text-dark-5 dark:text-dark-6 mt-1">
-                Manage categories and account identifiers.
+                Manage categories and accounts.
               </p>
             </div>
           </div>
@@ -652,12 +619,9 @@ export function SettingsClient({
               {categoryPreview.map((category) => (
                 <span
                   key={category.id}
-                  className="inline-flex max-w-full items-center gap-2 rounded-full border border-stroke px-3 py-1 dark:border-dark-3"
+                  className="inline-flex max-w-full items-center gap-2 rounded-full border border-stroke py-1 pl-1 pr-3 dark:border-dark-3"
                 >
-                  <span
-                    className="h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: category.color }}
-                  />
+                  <CategoryIcon category={category} size={20} />
                   <span className="truncate">{category.name}</span>
                 </span>
               ))}
@@ -743,10 +707,10 @@ export function SettingsClient({
                 <WalletCards className="h-6 w-6 shrink-0 text-green" />
                 <div className="min-w-0">
                   <h4 className="text-base font-semibold text-dark dark:text-white">
-                    Account Identifiers
+                    Accounts
                   </h4>
                   <p className="text-sm text-dark-5 dark:text-dark-6 mt-1">
-                    Accounts tied to imported statements.
+                    Accounts, cards and statement identifiers.
                   </p>
                 </div>
               </div>
@@ -758,6 +722,13 @@ export function SettingsClient({
                 Manage
               </Button>
             </div>
+            {accountsToReview.length > 0 && (
+              <p className="mt-3 text-sm text-orange">
+                {accountsToReview.length === 1
+                  ? "1 account needs review."
+                  : `${accountsToReview.length} accounts need review.`}
+              </p>
+            )}
             <div className="mt-4 flex max-h-[68px] flex-wrap gap-2 overflow-hidden text-sm text-dark-5 dark:text-dark-6">
               {accountPreview.map((account) => (
                 <span
@@ -768,10 +739,10 @@ export function SettingsClient({
                     className="h-2.5 w-2.5 rounded-full"
                     style={{ backgroundColor: account.color }}
                   />
-                  <span className="truncate">{accountDisplay(account)}</span>
+                  <span className="truncate">{account.name}</span>
                 </span>
               ))}
-              {accounts.length === 0 && <span>No accounts yet.</span>}
+              {openAccounts.length === 0 && <span>No accounts yet.</span>}
               {accountRemaining > 0 && (
                 <span className="inline-flex items-center rounded-full border border-stroke px-3 py-1 dark:border-dark-3">
                   +{accountRemaining} more
@@ -1072,9 +1043,10 @@ export function SettingsClient({
             const created = await createCategory(
               newCategory.name.trim(),
               newCategory.color,
+              newCategory.icon || undefined,
             );
             setCategories((prev) => [...prev, created]);
-            setNewCategory({ name: "", color: "#6366f1" });
+            setNewCategory({ name: "", color: "#6366f1", icon: "" });
           } catch (error) {
             showModal(
               "error",
@@ -1095,6 +1067,11 @@ export function SettingsClient({
             prev.map((item) => (item.id === id ? { ...item, color } : item)),
           )
         }
+        onCategoryIconChange={(id, icon) =>
+          setCategories((prev) =>
+            prev.map((item) => (item.id === id ? { ...item, icon } : item)),
+          )
+        }
         onDeleteCategory={handleCategoryDelete}
         onSaveAll={handleSaveAllCategories}
       />
@@ -1102,56 +1079,12 @@ export function SettingsClient({
       <ManageAccountsModal
         isOpen={manageAccountsOpen}
         accounts={accounts}
-        newAccount={newAccount}
         onClose={() => setManageAccountsOpen(false)}
-        onNewAccountChange={setNewAccount}
-        onAddAccount={async () => {
-          if (!newAccount.identifier.trim()) return;
-          try {
-            const created = await upsertAccountNumber(
-              newAccount.identifier.trim(),
-              newAccount.color,
-              newAccount.label,
-            );
-            setAccounts((prev) => {
-              const exists = prev.some((item) => item.id === created.id);
-              if (exists) {
-                return prev.map((item) =>
-                  item.id === created.id ? created : item,
-                );
-              }
-              return [...prev, created];
-            });
-            setNewAccount({ identifier: "", label: "", color: "#6366f1" });
-          } catch (error) {
-            showModal(
-              "error",
-              "Create Failed",
-              error instanceof Error
-                ? error.message
-                : "Failed to create account identifier",
-            );
-          }
-        }}
-        onAccountIdentifierChange={(id, identifier) =>
-          setAccounts((prev) =>
-            prev.map((item) =>
-              item.id === id ? { ...item, accountIdentifier: identifier } : item,
-            ),
-          )
+        onChanged={reloadAccounts}
+        onError={(title, message) => showModal("error", title, message)}
+        onConfirm={(title, message, action) =>
+          showModal("warning", title, message, () => void action())
         }
-        onAccountLabelChange={(id, label) =>
-          setAccounts((prev) =>
-            prev.map((item) => (item.id === id ? { ...item, label } : item)),
-          )
-        }
-        onAccountColorChange={(id, color) =>
-          setAccounts((prev) =>
-            prev.map((item) => (item.id === id ? { ...item, color } : item)),
-          )
-        }
-        onDeleteAccount={handleAccountDelete}
-        onSaveAll={handleSaveAllAccounts}
       />
 
       <ChangePasswordModal
@@ -1169,7 +1102,7 @@ export function SettingsClient({
         rules={importRules}
         categories={categories}
         parserOptions={parserOptions}
-        accounts={accounts}
+        accounts={accountIdentifiers}
         onClose={() => setManageRulesOpen(false)}
         onAddRule={() =>
           setImportRules((prev) => [

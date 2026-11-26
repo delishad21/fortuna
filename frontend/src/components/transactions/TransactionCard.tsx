@@ -13,6 +13,8 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/Checkbox";
+import { TransactionAvatar } from "@/components/ui/CategoryIcon";
+import { cardDisplay, type AccountCard } from "@/lib/accountTypes";
 import Link from "next/link";
 import { EntrySourceBadge } from "@/components/transactions/EntrySourceBadge";
 import { ReviewBadge } from "@/components/transactions/ReviewBadge";
@@ -66,10 +68,17 @@ export interface TransactionCardTransaction {
   /** to_review while an assistant entry waits for review. */
   reviewStatus?: string | null;
   reviewReasons?: string[] | null;
+  accountId?: string | null;
+  cardId?: string | null;
+  /** Merchant logo or receipt; shown instead of the category icon. */
+  imageId?: string | null;
+  account?: { id: string; name: string; color: string } | null;
+  card?: Pick<AccountCard, "id" | "last4" | "network" | "nickname"> | null;
   category?: {
     id: string;
     name: string;
     color: string;
+    icon?: string | null;
   };
   tripFundings?: Array<{
     id: string;
@@ -117,6 +126,8 @@ interface TransactionCardProps {
   compact?: boolean;
   /** How to show the account, e.g. "UOB One credit card · 4265-…"; defaults to the identifier. */
   accountName?: string;
+  /** Shows the transaction's image or category icon before the description. */
+  showAvatar?: boolean;
   linkedTransactions?: {
     reimburses: LinkedTransaction[];
     reimbursedBy: LinkedTransaction[];
@@ -168,9 +179,17 @@ export function TransactionCard({
   showDate = false,
   compact = false,
   accountName,
+  showAvatar = false,
   linkedTransactions,
 }: TransactionCardProps) {
-  const accountText = accountName || transaction.accountIdentifier;
+  // The linked account's name when there is one, else the identifier's label.
+  const accountText = [
+    transaction.account?.name || accountName || transaction.accountIdentifier,
+    transaction.card ? cardDisplay(transaction.card) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const hasAccount = Boolean(transaction.accountIdentifier || transaction.account);
   const [isExpanded, setIsExpanded] = useState(false);
   const primaryClickAction = getTransactionCardPrimaryClickAction({
     hasSelectionToggle: Boolean(onToggleSelect),
@@ -260,6 +279,13 @@ export function TransactionCard({
               <Checkbox checked={selected} onChange={onToggleSelect} />
             </div>
           )}
+          {showAvatar && (
+            <TransactionAvatar
+              transaction={transaction}
+              size={compact ? 28 : 36}
+              className="mt-0.5"
+            />
+          )}
           {/* Left: Description */}
           <div className="flex-1 min-w-0">
             {showDate && (
@@ -283,9 +309,7 @@ export function TransactionCard({
             >
               {compact && `${formatDate(transaction.date)} · `}
               {transaction.description}
-              {compact &&
-                transaction.accountIdentifier &&
-                ` · ${accountText}`}
+              {compact && hasAccount && ` · ${accountText}`}
             </div>
             {transaction.notice && (
               <div className="mt-1">
@@ -493,20 +517,23 @@ export function TransactionCard({
               </div>
             )}
 
-            {transaction.accountIdentifier && (
+            {hasAccount && (
               <div>
-                <div className="text-dark-5 dark:text-dark-6">
-                  Account Identifier
-                </div>
+                <div className="text-dark-5 dark:text-dark-6">Account</div>
                 <div className="font-medium text-dark dark:text-white mt-0.5 flex items-center gap-2">
-                  {accountColor && (
+                  {(transaction.account?.color || accountColor) && (
                     <span
                       className="w-2.5 h-2.5 rounded-full"
-                      style={{ backgroundColor: accountColor }}
+                      style={{ backgroundColor: transaction.account?.color || accountColor }}
                     />
                   )}
                   <span>{accountText}</span>
                 </div>
+                {transaction.account && transaction.accountIdentifier && (
+                  <div className="text-xs text-dark-5 dark:text-dark-6 mt-0.5">
+                    {transaction.accountIdentifier}
+                  </div>
+                )}
               </div>
             )}
 

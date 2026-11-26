@@ -567,7 +567,7 @@ function ReportTransactionCards({
 
   // Date orders group by day like the Transactions page; amount orders are a flat list.
   if (ordering === "newest" || ordering === "oldest") {
-    return <ExpandableTransactionList transactions={cards} accountColorMap={accountColorMap} accountNameMap={accountNameMap} />;
+    return <ExpandableTransactionList transactions={cards} accountColorMap={accountColorMap} accountNameMap={accountNameMap} showAvatars />;
   }
   return (
     <div className="space-y-3">
@@ -578,6 +578,7 @@ function ReportTransactionCards({
           accountColor={card.accountIdentifier ? accountColorMap[card.accountIdentifier] : undefined}
           accountName={card.accountIdentifier ? accountNameMap[card.accountIdentifier] : undefined}
           showDate
+          showAvatar
         />
       ))}
     </div>

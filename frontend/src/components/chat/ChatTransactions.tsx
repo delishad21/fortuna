@@ -33,6 +33,9 @@ export function asTransactions(
     balance: amount(row.balance),
     currency: row.currency,
     accountIdentifier: row.accountIdentifier,
+    imageId: typeof row.imageId === "string" ? row.imageId : null,
+    account: row.account?.name ? row.account : null,
+    card: row.card?.last4 ? row.card : null,
     category: row.category
       ? { ...row.category, color: row.category.color || "#9ca3af" }
       : undefined,
@@ -74,6 +77,7 @@ export function ChatTransactions({
       <ExpandableTransactionList
         transactions={transactions.slice(0, shown)}
         accountNameMap={accountNameMap}
+        showAvatars
       />
       {remaining > 0 && (
         <button

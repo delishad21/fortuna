@@ -5,18 +5,20 @@ import { Tags, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { TextInput } from "@/components/ui/TextInput";
 import { ColorSelect } from "@/components/ui/ColorSelect";
+import { CategoryIconSelect } from "@/components/ui/CategoryIconSelect";
 import type { Category } from "@/app/actions/categories";
 
 interface ManageCategoriesModalProps {
   isOpen: boolean;
   categories: Category[];
   lockedCategoryNames?: string[];
-  newCategory: { name: string; color: string };
+  newCategory: { name: string; color: string; icon: string };
   onClose: () => void;
-  onNewCategoryChange: (next: { name: string; color: string }) => void;
+  onNewCategoryChange: (next: { name: string; color: string; icon: string }) => void;
   onAddCategory: () => void | Promise<void>;
   onCategoryNameChange: (id: string, name: string) => void;
   onCategoryColorChange: (id: string, color: string) => void;
+  onCategoryIconChange: (id: string, icon: string) => void;
   onDeleteCategory: (id: string) => void;
   onSaveAll: () => void | Promise<void>;
 }
@@ -31,6 +33,7 @@ export function ManageCategoriesModal({
   onAddCategory,
   onCategoryNameChange,
   onCategoryColorChange,
+  onCategoryIconChange,
   onDeleteCategory,
   onSaveAll,
 }: ManageCategoriesModalProps) {
@@ -51,7 +54,7 @@ export function ManageCategoriesModal({
                 Manage Categories
               </h2>
               <p className="text-sm text-dark-5 dark:text-dark-6 mt-0.5">
-                Edit names or colors, or add new categories.
+                Edit names, colors or icons, or add new categories.
               </p>
             </div>
           </div>
@@ -70,6 +73,14 @@ export function ManageCategoriesModal({
                       value={newCategory.color}
                       onChange={(color) =>
                         onNewCategoryChange({ ...newCategory, color })
+                      }
+                    />
+                    <CategoryIconSelect
+                      value={newCategory.icon}
+                      name={newCategory.name}
+                      color={newCategory.color}
+                      onChange={(icon) =>
+                        onNewCategoryChange({ ...newCategory, icon })
                       }
                     />
                     <TextInput
@@ -123,6 +134,12 @@ export function ManageCategoriesModal({
                 <ColorSelect
                   value={category.color}
                   onChange={(color) => onCategoryColorChange(category.id, color)}
+                />
+                <CategoryIconSelect
+                  value={category.icon}
+                  name={category.name}
+                  color={category.color}
+                  onChange={(icon) => onCategoryIconChange(category.id, icon)}
                 />
                 <div className="flex-1 min-w-[200px]">
                   <TextInput

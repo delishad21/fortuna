@@ -40,6 +40,7 @@ import {
   type ReconciledFilter,
   type ReviewFilter,
 } from "@/lib/entrySource";
+import type { CardNetwork } from "@/lib/accountTypes";
 
 interface Transaction {
   id: string;
@@ -56,10 +57,14 @@ interface Transaction {
   reconciledAt?: string | null;
   reviewStatus?: string | null;
   reviewReasons?: string[] | null;
+  imageId?: string | null;
+  account?: { id: string; name: string; color: string } | null;
+  card?: { id: string; last4: string; network: CardNetwork | null; nickname: string | null } | null;
   category?: {
     id: string;
     name: string;
     color: string;
+    icon?: string | null;
   };
   tripFundings?: Array<{
     id: string;
@@ -111,6 +116,7 @@ interface Category {
   id: string;
   name: string;
   color: string;
+  icon?: string | null;
 }
 
 interface AccountNumber {
@@ -854,6 +860,7 @@ export function TransactionsClient({
                 onEdit={handleEdit}
                 onDelete={handleDelete}
                 onMarkReviewed={handleMarkReviewed}
+                showAvatars
                 linkedTransactionsById={Object.fromEntries(
                   transactions.map((tx) => [
                     tx.id,
@@ -891,6 +898,13 @@ export function TransactionsClient({
                 message: warnings.join("\n"),
               });
           }}
+          onImageChanged={(imageId) =>
+            setTransactions((prev) =>
+              prev.map((tx) =>
+                tx.id === editingTransaction.id ? { ...tx, imageId } : tx,
+              ),
+            )
+          }
           onSplit={handleSplitTransaction}
           onAddCategory={() => setIsAddCategoryModalOpen(true)}
           onAddAccountIdentifier={handleAddAccountIdentifier}

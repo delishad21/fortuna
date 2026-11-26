@@ -316,6 +316,7 @@ function OverviewTab({
                     accountColor={card.accountIdentifier ? accountColors[card.accountIdentifier] : undefined}
                     accountName={card.accountIdentifier ? accountNames[card.accountIdentifier] : undefined}
                     showDate
+                    showAvatar
                   />
                 );
               })}

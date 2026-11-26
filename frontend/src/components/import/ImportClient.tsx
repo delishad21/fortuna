@@ -1,8 +1,10 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { stageStatementImport } from "@/app/actions/agentDrafts";
-import { upsertAccountNumber } from "@/app/actions/accountNumbers";
+import { getAccountNumbers, upsertAccountNumber } from "@/app/actions/accountNumbers";
+import { addAccountIdentifier, getAccounts } from "@/app/actions/accounts";
+import type { Account } from "@/lib/accountTypes";
 import {
   getPaylahInternalPreferenceState,
   setPaylahInternalPreference,
@@ -82,6 +84,15 @@ export function ImportClient({
   const [pendingUploadAfterPaylahPrompt, setPendingUploadAfterPaylahPrompt] =
     useState(false);
   const paylahPromptConfirmedRef = useRef(false);
+  const [existingAccounts, setExistingAccounts] = useState<Account[]>([]);
+
+  // Loaded when new identifiers turn up, so they can join an existing account.
+  useEffect(() => {
+    if (pendingAccountColors.size === 0) return;
+    getAccounts()
+      .then(setExistingAccounts)
+      .catch(() => setExistingAccounts([]));
+  }, [pendingAccountColors]);
 
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
@@ -263,9 +274,22 @@ export function ImportClient({
   const handleConfirmAccountColors = async (
     colorsByAccount: Record<string, string>,
     labelsByAccount: Record<string, string> = {},
+    accountIdsByIdentifier: Record<string, string> = {},
   ) => {
-    const accountsToSave = Array.from(pendingAccountColors.keys());
+    const identifiers = Array.from(pendingAccountColors.keys());
+    const toExisting = identifiers.filter((id) => accountIdsByIdentifier[id]);
+    const accountsToSave = identifiers.filter((id) => !accountIdsByIdentifier[id]);
     try {
+      // Identifiers added to an existing account, then refreshed with its name.
+      if (toExisting.length) {
+        await Promise.all(
+          toExisting.map((identifier) =>
+            addAccountIdentifier(accountIdsByIdentifier[identifier], identifier),
+          ),
+        );
+        const refreshed = await getAccountNumbers();
+        setAccountIdentifiers(refreshed);
+      }
       const savedAccounts = await Promise.all(
         accountsToSave.map((accountIdentifier) =>
           upsertAccountNumber(
@@ -331,6 +355,7 @@ export function ImportClient({
             defaultColor,
           }),
         )}
+        existingAccounts={existingAccounts}
         onConfirm={handleConfirmAccountColors}
         onCancel={() => {
           // The drafts stay staged; unknown accounts can be assigned per row in review.

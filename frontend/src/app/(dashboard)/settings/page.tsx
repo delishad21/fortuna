@@ -1,5 +1,6 @@
 import { getCategories } from "@/app/actions/categories";
 import { getAccountNumbers } from "@/app/actions/accountNumbers";
+import { getAccounts } from "@/app/actions/accounts";
 import { getCurrentUser } from "@/app/actions/user";
 import { bootstrapDefaultImportRules, getImportRules } from "@/app/actions/importRules";
 import {
@@ -20,6 +21,7 @@ export default async function SettingsPage() {
   const [
     user,
     categories,
+    accountIdentifiers,
     accounts,
     importRules,
     parserOptions,
@@ -30,6 +32,10 @@ export default async function SettingsPage() {
     getCurrentUser(),
     getCategories({ scope: "settings" }),
     getAccountNumbers(),
+    getAccounts({ includeArchived: true }).catch((error) => {
+      console.error("Failed to load accounts:", error);
+      return [];
+    }),
     getImportRules(),
     getParserOptions("bank"),
     getClassificationPatterns(),
@@ -41,7 +47,8 @@ export default async function SettingsPage() {
     <SettingsClient
       user={user}
       initialCategories={categories}
-      initialAccountIdentifiers={accounts}
+      initialAccountIdentifiers={accountIdentifiers}
+      initialAccounts={accounts}
       initialImportRules={importRules}
       parserOptions={parserOptions}
       initialClassificationPatterns={classificationPatterns}

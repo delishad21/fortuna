@@ -4,13 +4,17 @@ import { useEffect, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { Button } from "./Button";
 import { ColorSelect } from "./ColorSelect";
+import { Select } from "./Select";
 
 interface NewAccountColorModalProps {
   isOpen: boolean;
   accounts: Array<{ accountIdentifier: string; defaultColor: string }>;
+  /** Existing accounts a new identifier can be added to instead. */
+  existingAccounts?: Array<{ id: string; name: string; color: string }>;
   onConfirm: (
     colorsByAccount: Record<string, string>,
     labelsByAccount: Record<string, string>,
+    accountIdsByIdentifier: Record<string, string>,
   ) => void;
   onCancel: () => void;
 }
@@ -18,9 +22,11 @@ interface NewAccountColorModalProps {
 export function NewAccountColorModal({
   isOpen,
   accounts,
+  existingAccounts = [],
   onConfirm,
   onCancel,
 }: NewAccountColorModalProps) {
+  const [accountIds, setAccountIds] = useState<Record<string, string>>({});
   const [selectedColors, setSelectedColors] = useState<Record<string, string>>(
     {},
   );
@@ -31,6 +37,7 @@ export function NewAccountColorModal({
 
   useEffect(() => {
     if (!isOpen) return;
+    setAccountIds({});
     setSelectedColors(
       Object.fromEntries(
         accounts.map((account) => [
@@ -70,8 +77,13 @@ export function NewAccountColorModal({
         {/* Content */}
         <div className="p-6 space-y-3 max-h-[60vh] overflow-y-auto">
           {accounts.map((account) => {
+            const existing = existingAccounts.find(
+              (item) => item.id === accountIds[account.accountIdentifier],
+            );
             const selectedColor =
-              selectedColors[account.accountIdentifier] || account.defaultColor;
+              existing?.color ||
+              selectedColors[account.accountIdentifier] ||
+              account.defaultColor;
 
             return (
               <div
@@ -89,6 +101,30 @@ export function NewAccountColorModal({
                   <p className="text-sm font-semibold text-dark dark:text-white truncate mt-0.5">
                     {account.accountIdentifier}
                   </p>
+                  {existingAccounts.length > 0 && (
+                    <Select
+                      value={accountIds[account.accountIdentifier] || ""}
+                      options={[
+                        { value: "", label: "New account" },
+                        ...existingAccounts.map((item) => ({
+                          value: item.id,
+                          label: item.name,
+                          color: item.color,
+                        })),
+                      ]}
+                      onChange={(id) =>
+                        setAccountIds((prev) => ({
+                          ...prev,
+                          [account.accountIdentifier]: id,
+                        }))
+                      }
+                      size="sm"
+                      menuStrategy="fixed"
+                      menuPlacement="auto"
+                      className="mt-2"
+                    />
+                  )}
+                  {!existing && (
                   <input
                     aria-label={`Name for ${account.accountIdentifier}`}
                     value={labels[account.accountIdentifier] || ""}
@@ -102,13 +138,16 @@ export function NewAccountColorModal({
                     }
                     className="mt-2 w-full rounded-md border border-stroke bg-white px-2.5 py-1.5 text-sm outline-none focus:border-primary dark:border-dark-3 dark:bg-dark-2"
                   />
+                  )}
                 </div>
-                <ColorSelect
-                  value={selectedColor}
-                  onChange={(color) =>
-                    handleColorChange(account.accountIdentifier, color)
-                  }
-                />
+                {!existing && (
+                  <ColorSelect
+                    value={selectedColor}
+                    onChange={(color) =>
+                      handleColorChange(account.accountIdentifier, color)
+                    }
+                  />
+                )}
               </div>
             );
           })}
@@ -126,7 +165,7 @@ export function NewAccountColorModal({
           </Button>
           <Button
             variant="primary"
-            onClick={() => onConfirm(selectedColors, labels)}
+            onClick={() => onConfirm(selectedColors, labels, accountIds)}
           >
             Save Accounts
           </Button>

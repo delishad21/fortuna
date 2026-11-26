@@ -14,6 +14,8 @@ interface ExpandableTransactionListProps {
   canEdit?: (transaction: TransactionCardTransaction) => boolean;
   onDelete?: (id: string) => void;
   onMarkReviewed?: (id: string) => void;
+  /** Shows each transaction's image or category icon. */
+  showAvatars?: boolean;
   linkedTransactionsById?: Record<
     string,
     {
@@ -41,6 +43,7 @@ export function ExpandableTransactionList({
   canEdit,
   onDelete,
   onMarkReviewed,
+  showAvatars = false,
   linkedTransactionsById,
 }: ExpandableTransactionListProps) {
   const groupedTransactions = transactions.reduce(
@@ -95,6 +98,7 @@ export function ExpandableTransactionList({
                   }
                   onDelete={onDelete}
                   onMarkReviewed={onMarkReviewed}
+                  showAvatar={showAvatars}
                   selected={selectedIds ? selectedIds.has(transaction.id) : false}
                   onToggleSelect={
                     onToggleSelect ? () => onToggleSelect(transaction.id) : undefined

@@ -10,6 +10,10 @@ import { AccountIdentifierSelect } from "@/components/ui/AccountIdentifierSelect
 import { ReimbursementLinkPicker } from "@/components/reimbursement/ReimbursementLinkPicker";
 import { getLinkedTransactions, updateTransaction } from "@/app/actions/transactions";
 import { Modal } from "@/components/ui/Modal";
+import { setTransactionImage } from "@/app/actions/accounts";
+import { CategoryIcon } from "@/components/ui/CategoryIcon";
+import { ImageUploadField } from "@/components/ui/ImageUploadField";
+import { cardDisplay, type AccountCard } from "@/lib/accountTypes";
 import {
   SplitTransactionModal,
   type SplitTransactionChildInput,
@@ -24,10 +28,14 @@ interface Transaction {
   amountOut: number | null;
   balance: number | null;
   accountIdentifier?: string | null;
+  imageId?: string | null;
+  account?: { id: string; name: string; color: string } | null;
+  card?: Pick<AccountCard, "id" | "last4" | "network" | "nickname"> | null;
   category?: {
     id: string;
     name: string;
     color: string;
+    icon?: string | null;
   };
   metadata?: Record<string, any>;
   linkage?: {
@@ -72,6 +80,7 @@ interface Category {
   id: string;
   name: string;
   color: string;
+  icon?: string | null;
 }
 
 interface AccountIdentifier {
@@ -89,6 +98,8 @@ interface EditTransactionModalProps {
   onSave: (transaction: Transaction) => Promise<void>;
   /** Links are saved straight away by the picker; the parent refreshes. */
   onLinksChanged?: (warnings: string[]) => void | Promise<void>;
+  /** The image is saved straight away; the parent updates its copy. */
+  onImageChanged?: (imageId: string | null) => void;
   onSplit: (
     transactionId: string,
     children: [SplitTransactionChildInput, SplitTransactionChildInput],
@@ -105,6 +116,7 @@ export function EditTransactionModal({
   onClose,
   onSave,
   onLinksChanged,
+  onImageChanged,
   onSplit,
   onAddCategory,
   onAddAccountIdentifier,
@@ -141,9 +153,11 @@ export function EditTransactionModal({
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
   const [showSplitWarning, setShowSplitWarning] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [imageId, setImageId] = useState(transaction.imageId ?? null);
 
   useEffect(() => {
     setFormData(withAmounts(transaction));
+    setImageId(transaction.imageId ?? null);
     setLinkageType(
       transaction.linkage?.type === "internal"
         ? "internal"
@@ -364,6 +378,27 @@ export function EditTransactionModal({
             />
           </div>
 
+          {/* Image */}
+          <div>
+            <label className="block text-sm font-medium text-dark dark:text-white mb-2">
+              Image
+            </label>
+            <ImageUploadField
+              imageUrl={imageId ? `/api/images/${imageId}` : null}
+              fallback={<CategoryIcon category={formData.category} size={48} />}
+              onUpload={async (base64) => {
+                const result = await setTransactionImage(transaction.id, base64);
+                setImageId(result.imageId);
+                onImageChanged?.(result.imageId);
+              }}
+              onRemove={async () => {
+                await setTransactionImage(transaction.id, null);
+                setImageId(null);
+                onImageChanged?.(null);
+              }}
+            />
+          </div>
+
           {/* Category */}
           <div>
             <label className="block text-sm font-medium text-dark dark:text-white mb-2">
@@ -482,6 +517,13 @@ export function EditTransactionModal({
               }
               onAddClick={onAddAccountIdentifier}
             />
+            {transaction.account &&
+              formData.accountIdentifier === transaction.accountIdentifier && (
+                <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
+                  {transaction.account.name}
+                  {transaction.card ? ` · ${cardDisplay(transaction.card)}` : ""}
+                </p>
+              )}
           </div>
 
           {/* Amount Type - Income or Expense */}

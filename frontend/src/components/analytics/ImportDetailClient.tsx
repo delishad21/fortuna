@@ -40,7 +40,8 @@ type ImportTransaction = {
   label?: string | null;
   amountIn: number;
   amountOut: number;
-  category?: { id: string; name: string; color: string } | null;
+  category?: { id: string; name: string; color: string; icon?: string | null } | null;
+  imageId?: string | null;
   merchant?: string;
 };
 
@@ -158,6 +159,7 @@ const toCardTransactions = (transactions: ImportTransaction[]): TransactionCardT
     amountIn: tx.amountIn > 0 ? tx.amountIn : null,
     amountOut: tx.amountOut > 0 ? tx.amountOut : null,
     balance: null,
+    imageId: tx.imageId ?? null,
     category: tx.category || undefined,
   }));
 
@@ -230,7 +232,7 @@ export function ImportDetailClient({ importDetail }: { importDetail: ImportDetai
       <Card>
         <CardHeader><CardTitle>Transactions</CardTitle></CardHeader>
         <CardContent>
-          <ExpandableTransactionList transactions={toCardTransactions(importDetail.transactions)} />
+          <ExpandableTransactionList transactions={toCardTransactions(importDetail.transactions)} showAvatars />
         </CardContent>
       </Card>
     </div>

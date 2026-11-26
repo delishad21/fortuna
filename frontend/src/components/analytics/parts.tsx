@@ -5,6 +5,7 @@ import { format, parseISO } from "date-fns";
 import { ArrowDownRight, ArrowUpRight, ChevronLeft, ChevronRight } from "lucide-react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { Card } from "@/components/ui/Card";
+import { TransactionAvatar } from "@/components/ui/CategoryIcon";
 import type { TransactionCardTransaction } from "@/components/transactions/TransactionCard";
 import { accountDisplayMap } from "@/lib/accounts";
 import { Select } from "@/components/ui/Select";
@@ -237,7 +238,8 @@ export type CompactTransaction = {
   label?: string | null;
   amountIn: number;
   amountOut: number;
-  category?: { id: string; name: string; color: string } | null;
+  category?: { id: string; name: string; color: string; icon?: string | null } | null;
+  imageId?: string | null;
 };
 
 export function TransactionRows({
@@ -253,7 +255,8 @@ export function TransactionRows({
         const income = tx.amountIn > 0;
         return (
           <div key={tx.id} className="flex items-center justify-between gap-3 py-2.5">
-            <div className="min-w-0">
+            <TransactionAvatar transaction={tx} size={32} />
+            <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-dark dark:text-white">{tx.label || tx.description}</p>
               <p className="mt-0.5 flex items-center gap-1.5 text-xs text-dark-5 dark:text-dark-6">
                 <span>{formatDay(tx.date)}</span>
@@ -360,6 +363,7 @@ export const toCardTransaction = (tx: CardSource): TransactionCardTransaction =>
   amountOut: tx.originalAmountOut !== undefined ? tx.originalAmountOut : tx.amountOut || null,
   balance: null,
   accountIdentifier: tx.accountIdentifier ?? null,
+  imageId: tx.imageId ?? null,
   category: tx.category || undefined,
   linkage: tx.linkage ?? null,
 });

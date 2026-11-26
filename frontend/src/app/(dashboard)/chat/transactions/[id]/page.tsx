@@ -4,6 +4,8 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { chatApi } from "@/lib/chat/client";
 import { DataDetails } from "@/components/chat/ActionPreview";
+import { TransactionAvatar } from "@/components/ui/CategoryIcon";
+import { cardDisplay } from "@/lib/accountTypes";
 export default function ChatTransactionPage() {
   const { id } = useParams<{ id: string }>(),
     [item, setItem] = useState<any>(null),
@@ -22,7 +24,8 @@ export default function ChatTransactionPage() {
       <Link className="text-primary" href="/chat">
         Back to chat
       </Link>
-      <h1 className="text-2xl font-semibold">
+      <h1 className="flex items-center gap-3 text-2xl font-semibold">
+        {item && <TransactionAvatar transaction={item} size={40} />}
         {item?.label || item?.description || "Transaction details"}
       </h1>
       {error ? (
@@ -37,7 +40,11 @@ export default function ChatTransactionPage() {
               income: item.amountIn,
               expense: item.amountOut,
               currency: item.currency,
-              account: item.accountIdentifier,
+              account: item.account?.name
+                ? [item.account.name, item.card ? cardDisplay(item.card) : null]
+                    .filter(Boolean)
+                    .join(" · ")
+                : item.accountIdentifier,
               category: item.category?.name || null,
               reimbursement: item.linkage,
             }}
