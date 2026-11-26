@@ -1,5 +1,6 @@
 /** The review queue as the apps get it (data-service publicEntry and TransactionReview.queue). */
 import type { EntrySource, ReviewStatus } from "./entrySource";
+import type { ReimbursableFlag, RepaymentProposal } from "./reimbursables";
 
 export const REVIEW_REASONS = ["no_rule_matched", "assistant_category", "new_account", "possible_duplicate"] as const;
 export type ReviewReason = (typeof REVIEW_REASONS)[number];
@@ -28,6 +29,10 @@ export interface ReviewEntry {
   reviewReasons: ReviewReason[];
   reviewedAt: string | null;
   classification: { decidedBy?: string; ruleName?: string; suggestedCategory?: string } | null;
+  /** Paid for someone who pays it back: who, and what they owe. */
+  reimbursable?: ReimbursableFlag | null;
+  /** Money in that looks like a repayment: the items it would pay back, to confirm. */
+  reimbursementProposal?: RepaymentProposal | null;
   createdAt: string;
 }
 

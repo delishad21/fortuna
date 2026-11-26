@@ -14,6 +14,8 @@ export interface UserProfile {
   autoLabelEnabled: boolean;
   autoLabelThreshold: number;
   analyticsExcludedCategoryIds: string[];
+  /** Reimbursable spending counts as the user's own until repaid (default: shown apart). */
+  analyticsCountReimbursable: boolean;
 }
 
 const parseCategoryIdList = (value: unknown): string[] => {
@@ -47,6 +49,7 @@ export async function getCurrentUser(): Promise<UserProfile | null> {
           autoLabelEnabled: true,
           autoLabelThreshold: true,
           analyticsExcludedCategoryIds: true,
+          analyticsCountReimbursable: true,
         },
       },
     },
@@ -64,6 +67,7 @@ export async function getCurrentUser(): Promise<UserProfile | null> {
     analyticsExcludedCategoryIds: parseCategoryIdList(
       user.settings?.analyticsExcludedCategoryIds,
     ),
+    analyticsCountReimbursable: user.settings?.analyticsCountReimbursable ?? false,
   };
 }
 
@@ -119,6 +123,7 @@ export async function updateUserProfile(
           autoLabelEnabled: true,
           autoLabelThreshold: true,
           analyticsExcludedCategoryIds: true,
+          analyticsCountReimbursable: true,
         },
       },
     },
@@ -134,6 +139,7 @@ export async function updateUserProfile(
     analyticsExcludedCategoryIds: parseCategoryIdList(
       user.settings?.analyticsExcludedCategoryIds,
     ),
+    analyticsCountReimbursable: user.settings?.analyticsCountReimbursable ?? false,
   };
 }
 
@@ -207,6 +213,21 @@ export async function updateAnalyticsExcludedCategories(categoryIds: string[]) {
       settings.analyticsExcludedCategoryIds,
     ),
   };
+}
+
+/** Whether analytics count reimbursable spending as the user's own (Settings → Analytics). */
+export async function updateAnalyticsCountReimbursable(countAsOwn: boolean) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    throw new Error("Not authenticated");
+  }
+  const settings = await prisma.userSettings.upsert({
+    where: { userId: session.user.id },
+    create: { userId: session.user.id, analyticsCountReimbursable: countAsOwn === true },
+    update: { analyticsCountReimbursable: countAsOwn === true },
+    select: { analyticsCountReimbursable: true },
+  });
+  return { analyticsCountReimbursable: settings.analyticsCountReimbursable };
 }
 
 export async function changePassword(
