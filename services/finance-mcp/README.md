@@ -140,6 +140,18 @@ Scopes (Settings → API Tokens, web or phone):
   (category, account or label on up to 200 rows; `createRule` with
   `confirmed: true` also saves an enabled import rule), `set_review_status`,
   `confirm_account`, `merge_account` (`confirmed: true`).
+- Reimbursable spending (money out paid for someone who pays it back; it
+  keeps its category): `get_outstanding_reimbursements` and
+  `list_reimbursement_people` (`transactions:review` or `analytics:read`:
+  what each person owes, in total and per month, with the open items),
+  `set_reimbursable` (by ids, or by a search with `preview` first and then
+  `confirmed: true`; in full unless a `share` is given) and
+  `unset_reimbursable`, `add_reimbursement_person` /
+  `update_reimbursement_person`, `get_reimbursement_link_proposals` and
+  `confirm_reimbursement_links` (links a repayment to the items it pays back;
+  review entries carry the same `reimbursementProposal`),
+  `get_reimbursable_backfill` (read-only) and `apply_reimbursable_backfill`
+  (`confirmed: true`). Routes: `/api/agent/reimbursables/*`.
 
 ### HTTP endpoints
 
