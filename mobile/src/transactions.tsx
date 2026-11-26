@@ -53,6 +53,7 @@ import {
   useTheme,
 } from "./ui";
 import { shareCsv } from "./sharing";
+import { ReimbursableSection, ReimbursableSheet } from "./reimbursables";
 import { pickImage, RemoteImage, TransactionThumb } from "./images";
 import { accountDisplay, accountName } from "../../frontend/shared/accounts";
 import { cardDisplay } from "../../frontend/shared/accountTypes";
@@ -268,6 +269,7 @@ export function TransactionsScreen({ navigation, route }: any) {
   const [allFiltered, setAllFiltered] = useState(false);
   const [excluded, setExcluded] = useState<string[]>([]);
   const [bulk, setBulk] = useState<"" | "category" | "date">("");
+  const [reimbursing, setReimbursing] = useState(false);
   useEffect(() => {
     if (route.params?.search != null) setSearch(route.params.search);
   }, [route.params?.search]);
@@ -533,6 +535,33 @@ export function TransactionsScreen({ navigation, route }: any) {
             <Button compact secondary icon="pricetag-outline" title="Category" style={{ flex: 1 }} disabled={!count} onPress={() => setBulk("category")} />
             <Button compact secondary icon="calendar-outline" title="Date" style={{ flex: 1 }} disabled={!count} onPress={() => setBulk("date")} />
             <Button compact secondary icon="share-outline" title="Export" style={{ flex: 1 }} disabled={!count} onPress={() => exportCsv("selection")} />
+            <ActionMenu
+              title="Paid for someone"
+              icon="cash-outline"
+              label="Reimbursable"
+              actions={[
+                {
+                  label: "Mark reimbursable",
+                  icon: "cash-outline",
+                  disabled: !count || allFiltered,
+                  hint: allFiltered ? "Tick the rows to mark; select all doesn't apply" : undefined,
+                  onPress: () => setReimbursing(true),
+                },
+                {
+                  label: "Unmark reimbursable",
+                  icon: "close-circle-outline",
+                  disabled: !count || allFiltered,
+                  onPress: () =>
+                    void call("clearTransactionsReimbursable", selected)
+                      .then(async () => {
+                        toast(`Unmarked ${plural(count, "transaction")}`);
+                        endSelection();
+                        await list.reload();
+                      })
+                      .catch(notice),
+                },
+              ]}
+            />
             <IconButton
               icon="trash-outline"
               label="Delete selected"
@@ -551,6 +580,15 @@ export function TransactionsScreen({ navigation, route }: any) {
           </View>
         </Footer>
       )}
+      <ReimbursableSheet
+        visible={reimbursing}
+        ids={selected}
+        onClose={() => setReimbursing(false)}
+        onSaved={async () => {
+          endSelection();
+          await list.reload();
+        }}
+      />
       <FilterSheet
         visible={showFilters}
         onClose={() => setShowFilters(false)}
@@ -791,6 +829,7 @@ export function TransactionScreen({ navigation, route }: any) {
           <Button title="Add image" compact secondary icon="image-outline" style={{ alignSelf: "flex-start" }} onPress={chooseImage} />
         )}
       </Section>
+      {!income && kind === "none" && <ReimbursableSection transaction={t} onChanged={reload} />}
       <Section title="Reconciliation"      >
         <Segmented
           values={income ? ["none", "internal", "reimbursement"] : ["none", "internal"]}

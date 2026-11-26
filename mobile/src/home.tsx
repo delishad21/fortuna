@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { Pressable, RefreshControl, ScrollView, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useApi, useResource } from "./api";
+import { SpentForOthers } from "./reimbursables";
 import {
   BRAND,
   Button,
@@ -1133,6 +1134,7 @@ function ReportTab({ navigation, currency }: any) {
               )}
             </Card>
           </Section>
+          <SpentForOthers summary={r.reimbursable} />
           <Section
             title={`Transactions (${transactions.length})`}
             action="Share CSV"

@@ -139,6 +139,12 @@ export function SettingsScreen({ navigation }: any) {
           <ListItem icon="pricetags-outline" title="Categories" onPress={() => navigation.navigate("Manage", { kind: "categories" })} />
           <ListItem icon="card-outline" title="Accounts" onPress={() => navigation.navigate("Accounts")} />
           <ListItem
+            icon="cash-outline"
+            title="Reimbursements"
+            subtitle="What people you pay for owe you"
+            onPress={() => navigation.navigate("Reimbursements")}
+          />
+          <ListItem
             icon="notifications-outline"
             title="Sources"
             subtitle="Bank app notifications and alert emails the assistant watches"
@@ -311,6 +317,29 @@ export function PreferencesScreen() {
             />
           </Section>
         </>
+      )}
+      {user.data && (
+        <Section title="Reimbursable spending">
+          <Card>
+            <View style={styles.between}>
+              <View style={{ flex: 1 }}>
+                <Txt>Count reimbursable spending as mine</Txt>
+                <Txt muted size={12}>
+                  Off: what others owe you is shown apart from your spending. On: it counts until it is repaid.
+                </Txt>
+              </View>
+              <Switch
+                accessibilityLabel="Count reimbursable spending as mine"
+                value={!!user.data.analyticsCountReimbursable}
+                onValueChange={(v) =>
+                  void call("updateAnalyticsCountReimbursable", v)
+                    .then(() => user.reload())
+                    .catch(notice)
+                }
+              />
+            </View>
+          </Card>
+        </Section>
       )}
       {paylah.data && (
         <Section title="PayLah">

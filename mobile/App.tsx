@@ -59,6 +59,7 @@ import { MembersScreen, SharedOverviewScreen } from "./src/trips/sharing";
 import { TripImportScreen } from "./src/trips/import";
 import { TripReimbursementScreen } from "./src/trips/reimburse";
 import { BankPickerScreen } from "./src/trips/bank";
+import { ReimbursableBackfillScreen, ReimbursementPersonScreen, ReimbursementsScreen } from "./src/reimbursables";
 import {
   SettingsScreen,
   ProfileScreen,
@@ -254,6 +255,9 @@ const SCREENS: Record<string, [React.ComponentType<any>, string]> = {
   AIConnection: [AIConnectionScreen, "AI connection"],
   Analytics: [AnalyticsScreen, "Analytics"],
   Review: [ReviewScreen, "To review"],
+  Reimbursements: [ReimbursementsScreen, "Reimbursements"],
+  ReimbursementPerson: [ReimbursementPersonScreen, "Owed to you"],
+  ReimbursableBackfill: [ReimbursableBackfillScreen, "Review past items"],
   Transaction: [TransactionScreen, "Transaction"],
   Split: [SplitScreen, "Split"],
   LinkPicker: [LinkPickerScreen, "Reimbursement links"],

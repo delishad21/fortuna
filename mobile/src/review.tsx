@@ -25,6 +25,7 @@ import {
   Txt,
 } from "./ui";
 import { TransactionThumb } from "./images";
+import { ReimbursableSheet, RepaymentProposalCard } from "./reimbursables";
 import { AccountThumb } from "./accounts";
 import type { Account } from "../../frontend/shared/accountTypes";
 import { autoCreatedFromDisplay } from "../../frontend/shared/accountTypes";
@@ -259,6 +260,7 @@ export function ReviewScreen({ navigation }: any) {
   const [selected, setSelected] = useState<string[]>([]);
   const [selecting, setSelecting] = useState(false);
   const [correcting, setCorrecting] = useState(false);
+  const [reimbursing, setReimbursing] = useState(false);
   const accounts = useResource<Account[]>("getAccounts", { includeArchived: false });
   const base = {
     status,
@@ -309,6 +311,9 @@ export function ReviewScreen({ navigation }: any) {
             <View style={{ flexDirection: "row", gap: 8 }}>
               <View style={{ flex: 1 }}>
                 <Button title="Correct…" compact disabled={!chosen.length} onPress={() => setCorrecting(true)} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Button title="Reimbursable…" compact secondary disabled={!chosen.length} onPress={() => setReimbursing(true)} />
               </View>
               {status !== "reviewed" && (
                 <View style={{ flex: 1 }}>
@@ -428,6 +433,11 @@ export function ReviewScreen({ navigation }: any) {
                         {why}
                       </Txt>
                     )}
+                    {!!item.reimbursementProposal && !selecting && (
+                      <View style={{ paddingLeft: 61, paddingRight: 12, paddingBottom: 10 }}>
+                        <RepaymentProposalCard proposal={item.reimbursementProposal} onConfirmed={reload} />
+                      </View>
+                    )}
                   </View>
                 );
               })}
@@ -452,6 +462,16 @@ export function ReviewScreen({ navigation }: any) {
         visible={correcting}
         onClose={() => setCorrecting(false)}
         onDone={async () => {
+          done();
+          await reload();
+        }}
+      />
+      <ReimbursableSheet
+        visible={reimbursing}
+        ids={chosen.map((e) => e.id)}
+        amountOut={chosen.length === 1 ? Number(chosen[0].amountOut || 0) : undefined}
+        onClose={() => setReimbursing(false)}
+        onSaved={async () => {
           done();
           await reload();
         }}
