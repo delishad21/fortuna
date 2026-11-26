@@ -25,6 +25,7 @@ import { ApiProvider, useApi, normalizeServer } from "./src/api";
 import { BRAND, Button, Form, styles, ThemeProvider, Txt, useTheme } from "./src/ui";
 import { HomeScreen, AnalyticsScreen } from "./src/home";
 import { AccountsScreen, AccountScreen } from "./src/accounts";
+import { SourcesScreen } from "./src/sources";
 import {
   TransactionsScreen,
   TransactionScreen,
@@ -237,6 +238,7 @@ const SCREENS: Record<string, [React.ComponentType<any>, string]> = {
   Preferences: [PreferencesScreen, "Preferences"],
   Accounts: [AccountsScreen, "Accounts"],
   Account: [AccountScreen, "Account"],
+  Sources: [SourcesScreen, "Sources"],
   Manage: [ManageScreen, "Organize"],
   ManageEditor: [ManageEditorScreen, "Edit"],
   Patterns: [PatternsScreen, "Learned rules"],

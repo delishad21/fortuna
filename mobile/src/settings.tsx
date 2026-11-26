@@ -100,6 +100,12 @@ export function SettingsScreen({ navigation }: any) {
         <Group>
           <ListItem icon="pricetags-outline" title="Categories" onPress={() => navigation.navigate("Manage", { kind: "categories" })} />
           <ListItem icon="card-outline" title="Accounts" onPress={() => navigation.navigate("Accounts")} />
+          <ListItem
+            icon="notifications-outline"
+            title="Sources"
+            subtitle="Bank app notifications and alert emails the assistant watches"
+            onPress={() => navigation.navigate("Sources")}
+          />
           <ListItem icon="git-branch-outline" title="Import rules" onPress={() => navigation.navigate("Manage", { kind: "rules" })} />
           <ListItem
             icon="bulb-outline"
