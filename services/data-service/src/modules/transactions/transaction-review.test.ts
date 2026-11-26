@@ -352,3 +352,52 @@ test("existing, imported and manual rows are reviewed; only assistant entries wa
       db.$executeRawUnsafe(`UPDATE "transactions" SET "review_status" = 'maybe' WHERE "id" = 'legacy-row'`),
     );
   }));
+
+test("the apps' To review screen works the same queue as the trusted frontend", () =>
+  withChatDb(async (db) => {
+    const previous = process.env.INTERNAL_SERVICE_TOKEN;
+    process.env.INTERNAL_SERVICE_TOKEN = "review-test-internal";
+    const { user, food } = await setup(db, "review-frontend");
+    // An account made in Settings with a card and no statement identifier.
+    const wallet = await db.financialAccount.create({ data: { userId: user.id, name: "Everyday Wallet" } });
+    const writer = await token(db, user.id, "fwriter01", ["transactions:write"]);
+    const app = { "x-internal-service-token": "review-test-internal", "x-authenticated-user-id": user.id, "Content-Type": "application/json" };
+    const { server, call } = await serve(db);
+    try {
+      const created = await call("POST", "", writer, entry("f-1", { account: undefined, card: { last4: "4591" } }));
+      assert.equal(created.status, 201);
+      const autoAccountId = created.body.transaction.accountId;
+      assert.ok(autoAccountId);
+
+      assert.equal((await call("GET", "/review", { ...app, "x-internal-service-token": "wrong" })).status, 401);
+      const queue = await call("GET", `/review?account=${autoAccountId}`, app);
+      assert.equal(queue.status, 200);
+      assert.deepEqual(queue.body.transactions.map((row: any) => row.externalId), ["f-1"]);
+      assert.ok("imageId" in queue.body.transactions[0]);
+
+      // Corrections can book to an account found by its id, without an identifier.
+      const corrected = await call("POST", "/review/correct", app, {
+        ids: [created.body.transaction.id],
+        category: food.id,
+        account: wallet.id,
+        markReviewed: false,
+      });
+      assert.equal(corrected.status, 200, JSON.stringify(corrected.body));
+      assert.equal(corrected.body.transactions[0].accountId, wallet.id);
+      assert.equal(corrected.body.transactions[0].category.name, "Food");
+
+      const audit = await db.agentAuditEvent.findFirstOrThrow({
+        where: { userId: user.id, toolName: "correct_transaction" },
+      });
+      assert.equal(audit.actorType, "trusted_service");
+
+      // The auto-created account merges into the Settings account.
+      const merged = await call("POST", `/review/accounts/${autoAccountId}/merge`, app, { into: wallet.id, confirmed: true });
+      assert.equal(merged.status, 200, JSON.stringify(merged.body));
+      assert.equal(await db.financialAccount.count({ where: { id: autoAccountId } }), 0);
+      assert.equal(await db.card.count({ where: { accountId: wallet.id, last4: "4591" } }), 1);
+    } finally {
+      server.close();
+      process.env.INTERNAL_SERVICE_TOKEN = previous;
+    }
+  }));
