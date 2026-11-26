@@ -12,7 +12,7 @@ Use this procedure whenever the user supplies a bank or travel-wallet statement.
 3. Inspect trusted metadata and query the parser registry. Choose the most specific compatible deterministic parser.
 4. Create one persisted draft per statement, preserving source identity. Trip drafts require an existing target trip.
 5. Parse the draft and verify dates, descriptions, direction, row count, currency, balances where present, and the visible account/card identifier. Every selected main-ledger row must have `accountIdentifier`.
-6. Call `list_accounts`. If the statement identifier is new, ask the user to confirm its identifier and colour, call `create_account`, then use `assign_import_draft_account` when the parser did not populate the rows. Never substitute a category colour for an account colour.
+6. Call `list_accounts` (or `resolve_account` with the identifier or a card's last 4 digits). If the statement identifier is new, ask the user whether it belongs to an existing account (then `add_account_identifier`) or is a new one (then `create_account` with its name, type, colour and the identifier), then use `assign_import_draft_account` when the parser did not populate the rows. Never substitute a category colour for an account colour.
 7. Query deterministic rules, learned evidence, categories, bounded similar transactions, and overlapping trips only as needed.
 8. Submit version-bound, idempotent proposals. Never invent category, trip, wallet, transaction, row, or rule IDs.
 9. Labels at confidence 0.85 and ordinary categories at 0.90 may auto-apply. Internal transfers, reimbursements, funding, and conversions always remain review-only.

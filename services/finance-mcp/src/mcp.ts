@@ -41,38 +41,167 @@ export function createFinanceMcpServer(identity: AccountIdentity) {
     async () => result(identity),
   );
 
+  const json = (body: unknown) => ({ method: "POST", body: JSON.stringify(body) });
+  const accountPath = (...parts: string[]) => `/api/agent/accounts/${parts.map(encodeURIComponent).join("/")}`;
+  const imageInput = {
+    url: z.string().url().max(2000).optional().describe("Public https URL of a PNG, JPEG, GIF or WebP image (at most 5 MB)"),
+    base64: z.string().min(1).optional().describe("The image bytes as base64, instead of url"),
+  };
+  const accountType = z.enum(["savings", "current", "credit_card", "other"]);
+  const cardNetwork = z.enum(["visa", "mastercard", "amex", "unionpay", "jcb", "discover", "nets", "other"]);
+
   server.registerTool(
     "list_accounts",
     {
-      title: "List bank and card accounts",
-      description: "List the account identifiers and colours owned by this MCP container's finance account.",
-      inputSchema: z.object({}),
+      title: "List accounts and cards",
+      description:
+        "List the user's accounts (savings, current, credit card, other) with their statement identifiers and cards (last 4 digits). A credit card is its own account with cards under it; debit cards sit under a savings or current account. Accounts with autoCreated=true were created automatically and await the user's review.",
+      inputSchema: z.object({
+        includeArchived: z.boolean().default(false),
+        needsReview: z.boolean().default(false).describe("Only accounts created automatically and not yet confirmed"),
+      }),
     },
-    async () => result(await dataServiceRequest("/api/agent/accounts")),
+    async ({ includeArchived, needsReview }) =>
+      result(await dataServiceRequest(`/api/agent/accounts?includeArchived=${includeArchived}&needsReview=${needsReview}`)),
+  );
+
+  server.registerTool(
+    "resolve_account",
+    {
+      title: "Find the account and card a notification or statement means",
+      description:
+        "Match a card's last 4 digits (e.g. from 'card ending 1234') or a statement identifier to the user's cards and accounts. Returns every match with matchedBy (identifier, card_last4 or identifier_last4); an empty list means no account matches.",
+      inputSchema: z.object({
+        last4: z.string().regex(/^[0-9]{4}$/).optional(),
+        identifier: z.string().trim().min(1).max(120).optional(),
+      }),
+    },
+    async (input) => {
+      const query = new URLSearchParams(Object.entries(input).filter(([, v]) => v) as [string, string][]);
+      return result(await dataServiceRequest(`/api/agent/accounts/resolve?${query}`));
+    },
   );
 
   server.registerTool(
     "create_account",
     {
-      title: "Create or update a bank or card account",
-      description: "Create an account identifier with a display colour, or update the colour of an existing identifier. Requires explicit user confirmation in the current interaction.",
+      title: "Create an account",
+      description:
+        "Create an account, optionally with the statement identifiers imports use to match it. Requires explicit user confirmation in the current interaction.",
       inputSchema: z.object({
-        accountIdentifier: z.string().trim().min(1).max(120),
+        name: z.string().trim().min(1).max(80),
+        institution: z.string().trim().max(80).nullable().optional(),
+        type: accountType.default("other"),
         color: z.string().regex(/^#[0-9a-fA-F]{6}$/).default("#6366f1"),
+        identifiers: z.array(z.string().trim().min(1).max(120)).max(20).optional(),
         confirmed: z.literal(true),
       }),
     },
-    async (input) => result(await dataServiceRequest("/api/agent/accounts", { method: "POST", body: JSON.stringify(input) })),
+    async (input) => result(await dataServiceRequest("/api/agent/accounts", json(input))),
   );
 
   server.registerTool(
-    "update_account_color",
+    "update_account",
     {
-      title: "Update an account colour",
-      description: "Change the display colour of an existing owned account. Requires explicit user confirmation.",
-      inputSchema: z.object({ accountId: z.string(), color: z.string().regex(/^#[0-9a-fA-F]{6}$/), confirmed: z.literal(true) }),
+      title: "Update an account",
+      description: "Rename an account or change its institution, type, colour or archived state. Requires explicit user confirmation.",
+      inputSchema: z.object({
+        accountId: z.string(),
+        name: z.string().trim().min(1).max(80).optional(),
+        institution: z.string().trim().max(80).nullable().optional(),
+        type: accountType.optional(),
+        color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+        archived: z.boolean().optional(),
+        confirmed: z.literal(true),
+      }),
     },
-    async ({ accountId, ...body }) => result(await dataServiceRequest(`/api/agent/accounts/${encodeURIComponent(accountId)}`, { method: "PATCH", body: JSON.stringify(body) })),
+    async ({ accountId, ...body }) => result(await dataServiceRequest(accountPath(accountId), { method: "PATCH", body: JSON.stringify(body) })),
+  );
+
+  server.registerTool(
+    "add_account_identifier",
+    {
+      title: "Add a statement identifier to an account",
+      description:
+        "Make a statement identifier (account number or name read off statements) match this account. If another account has it, it moves here with its transactions. Requires explicit user confirmation.",
+      inputSchema: z.object({ accountId: z.string(), identifier: z.string().trim().min(1).max(120), confirmed: z.literal(true) }),
+    },
+    async ({ accountId, ...body }) => result(await dataServiceRequest(accountPath(accountId, "identifiers"), json(body))),
+  );
+
+  server.registerTool(
+    "merge_account",
+    {
+      title: "Merge an account into another",
+      description:
+        "Move every identifier, card and transaction of accountId onto intoAccountId and delete accountId. Use for an automatically created account that turned out to be an existing one. Requires explicit user confirmation.",
+      inputSchema: z.object({ accountId: z.string(), intoAccountId: z.string(), confirmed: z.literal(true) }),
+    },
+    async ({ accountId, ...body }) => result(await dataServiceRequest(accountPath(accountId, "merge"), json(body))),
+  );
+
+  server.registerTool(
+    "add_card",
+    {
+      title: "Add a card to an account",
+      description: "Add a card (last 4 digits, optional network and nickname) under an account. Requires explicit user confirmation.",
+      inputSchema: z.object({
+        accountId: z.string(),
+        last4: z.string().regex(/^[0-9]{4}$/),
+        network: cardNetwork.nullable().optional(),
+        nickname: z.string().trim().max(80).nullable().optional(),
+        confirmed: z.literal(true),
+      }),
+    },
+    async ({ accountId, ...body }) => result(await dataServiceRequest(accountPath(accountId, "cards"), json(body))),
+  );
+
+  server.registerTool(
+    "update_card",
+    {
+      title: "Update a card",
+      description: "Change a card's last 4 digits, network or nickname, or move it (with its transactions) to another account. Requires explicit user confirmation.",
+      inputSchema: z.object({
+        cardId: z.string(),
+        accountId: z.string().optional(),
+        last4: z.string().regex(/^[0-9]{4}$/).optional(),
+        network: cardNetwork.nullable().optional(),
+        nickname: z.string().trim().max(80).nullable().optional(),
+        confirmed: z.literal(true),
+      }),
+    },
+    async ({ cardId, ...body }) => result(await dataServiceRequest(accountPath("cards", cardId), { method: "PATCH", body: JSON.stringify(body) })),
+  );
+
+  server.registerTool(
+    "set_account_image",
+    {
+      title: "Set an account's or card's image",
+      description: "Set the image of an account (accountId) or a card (cardId) from a URL or base64 bytes. A card without its own image shows its account's.",
+      inputSchema: z.object({ accountId: z.string().optional(), cardId: z.string().optional(), ...imageInput }),
+    },
+    async ({ accountId, cardId, ...body }) => {
+      if (Boolean(accountId) === Boolean(cardId)) throw new Error("Send accountId or cardId");
+      const path = cardId ? accountPath("cards", cardId, "image") : accountPath(accountId!, "image");
+      return result(await dataServiceRequest(path, { method: "PUT", body: JSON.stringify(body) }));
+    },
+  );
+
+  server.registerTool(
+    "set_transaction_image",
+    {
+      title: "Attach an image to a transaction",
+      description:
+        "Attach a merchant logo or receipt to a saved transaction, from a public URL or base64 bytes (PNG, JPEG, GIF or WebP, at most 5 MB). Identical images are stored once, so reuse the same logo freely. Send clear=true to remove it. Needs the transactions:write scope.",
+      inputSchema: z.object({ transactionId: z.string(), clear: z.boolean().optional(), ...imageInput }),
+    },
+    async ({ transactionId, clear, ...body }) =>
+      result(
+        await dataServiceRequest(`/api/agent/transactions/${encodeURIComponent(transactionId)}/image`, {
+          method: clear ? "DELETE" : "PUT",
+          ...(clear ? {} : { body: JSON.stringify(body) }),
+        }),
+      ),
   );
 
   const entryFields = {
@@ -459,8 +588,8 @@ export function createFinanceMcpServer(identity: AccountIdentity) {
     "assign_import_batch_account",
     {
       title: "Repair an imported batch account assignment",
-      description: "Assign an existing account identifier to every transaction in one owned committed import batch. Use only for a precisely identified batch and only after explicit confirmation.",
-      inputSchema: z.object({ batchId: z.string(), accountIdentifier: z.string().trim().min(1).max(120), confirmed: z.literal(true) }),
+      description: "Assign an existing account (by accountId or one of its statement identifiers) to every transaction in one owned committed import batch. Use only for a precisely identified batch and only after explicit confirmation.",
+      inputSchema: z.object({ batchId: z.string(), accountIdentifier: z.string().trim().min(1).max(120).optional(), accountId: z.string().optional(), confirmed: z.literal(true) }),
     },
     async ({ batchId, ...body }) => result(await dataServiceRequest(`/api/agent/accounts/import-batches/${encodeURIComponent(batchId)}/assign`, { method: "POST", body: JSON.stringify(body) })),
   );
