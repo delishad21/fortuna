@@ -99,6 +99,7 @@ import {
   updateSource,
   deleteSource,
 } from "@/app/actions/sources";
+import { getInstructions, createInstruction, updateInstruction } from "@/app/actions/instructions";
 import {
   bootstrapDefaultImportRules,
   getImportRules,
@@ -308,6 +309,9 @@ export const mobileOperations = {
   createSource,
   updateSource,
   deleteSource,
+  getInstructions,
+  createInstruction,
+  updateInstruction,
   bootstrapDefaultImportRules,
   getImportRules,
   createImportRule,

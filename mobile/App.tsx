@@ -28,6 +28,7 @@ import { BRAND, Button, Form, styles, ThemeProvider, Txt, useTheme } from "./src
 import { HomeScreen, AnalyticsScreen } from "./src/home";
 import { AccountsScreen, AccountScreen } from "./src/accounts";
 import { SourcesScreen } from "./src/sources";
+import { InstructionsScreen } from "./src/instructions";
 import {
   TransactionsScreen,
   TransactionScreen,
@@ -283,6 +284,7 @@ const SCREENS: Record<string, [React.ComponentType<any>, string]> = {
   Accounts: [AccountsScreen, "Accounts"],
   Account: [AccountScreen, "Account"],
   Sources: [SourcesScreen, "Sources"],
+  Instructions: [InstructionsScreen, "Instructions"],
   Manage: [ManageScreen, "Organize"],
   ManageEditor: [ManageEditorScreen, "Edit"],
   Patterns: [PatternsScreen, "Learned rules"],

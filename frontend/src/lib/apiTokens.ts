@@ -15,6 +15,8 @@ export const API_TOKEN_SCOPES = [
   "analytics:read",
   "transactions:write",
   "transactions:review",
+  "instructions:read",
+  "instructions:write",
 ] as const;
 
 export type ApiTokenScope = (typeof API_TOKEN_SCOPES)[number];
@@ -28,6 +30,7 @@ export const DEFAULT_HERMES_SCOPES: ApiTokenScope[] = [
   "rules:read",
   "accounts:read",
   "accounts:write",
+  "instructions:read",
 ];
 
 export interface ApiTokenSummary {

@@ -370,7 +370,7 @@ export function ChatConversationScreen({ route, navigation }: any) {
         >
           <Ionicons name="bookmark-outline" size={14} color={colors.purple} />
           <Txt size={13} style={{ flex: 1 }}>
-            {block.action === "saved" ? "Remembered" : "Forgot"}:{" "}
+            {block.action === "saved" ? "Saved instruction" : "Disabled instruction"}:{" "}
             {block.content}
           </Txt>
         </View>

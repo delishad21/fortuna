@@ -473,7 +473,6 @@ export const UNSURE_CONFIDENCE = 0.7;
 export const isUnsure = (row: ReviewRow) =>
   row.suggestion?.confidence !== undefined &&
   row.suggestion.confidence < UNSURE_CONFIDENCE;
-export type ChatMemory = { id: string; content: string; updatedAt: string };
 export type ReviewCategory = { id: string; name: string; color?: string | null };
 export type TransactionReview = {
   id: string;

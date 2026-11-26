@@ -59,6 +59,8 @@ const SCOPES = [
   "analytics:read",
   "transactions:write",
   "transactions:review",
+  "instructions:read",
+  "instructions:write",
 ];
 const DEFAULT_SCOPES = [
   "statements:write",
@@ -69,6 +71,7 @@ const DEFAULT_SCOPES = [
   "rules:read",
   "accounts:read",
   "accounts:write",
+  "instructions:read",
 ];
 const TRIP_CATEGORY_NAMES = ["Flights", "Accommodation", "Attractions", "Fees"];
 /** "I mainly track daily" or "I mainly upload statements"; it only changes what comes first. */
@@ -140,6 +143,12 @@ export function SettingsScreen({ navigation }: any) {
             title="Sources"
             subtitle="Bank app notifications and alert emails the assistant watches"
             onPress={() => navigation.navigate("Sources")}
+          />
+          <ListItem
+            icon="book-outline"
+            title="Classification instructions"
+            subtitle="How you want things classified, for Fortuna's chat and your assistants"
+            onPress={() => navigation.navigate("Instructions")}
           />
           <ListItem icon="git-branch-outline" title="Import rules" onPress={() => navigation.navigate("Manage", { kind: "rules" })} />
           <ListItem

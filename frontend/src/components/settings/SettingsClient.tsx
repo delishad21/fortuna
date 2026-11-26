@@ -1,6 +1,6 @@
 "use client";
 import {ConnectionPanel} from "@/components/chat/ConnectionPanel";
-import { MemoryPanel } from "@/components/chat/MemoryPanel";
+import { InstructionsPanel } from "@/components/settings/InstructionsPanel";
 import { MailConnectionPanel } from "@/components/chat/MailConnectionPanel";
 
 import { useState, useEffect } from "react";
@@ -113,6 +113,11 @@ export function SettingsClient({
     AppliedClassificationSummaryItem[]
   >(initialAppliedClassificationSummary);
   const [activeTab, setActiveTab] = useState<"profile" | "rules" | "api" | "ai">("profile");
+  // Links such as /settings?tab=rules#instructions open on that tab.
+  useEffect(() => {
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    if (tab === "profile" || tab === "rules" || tab === "api" || tab === "ai") setActiveTab(tab);
+  }, []);
   useEffect(()=>{if(new URLSearchParams(window.location.search).get("tab")==="ai")setActiveTab("ai");},[]);
 
   const [passwordState, setPasswordState] = useState({
@@ -530,7 +535,7 @@ export function SettingsClient({
         onChange={setActiveTab}
       />
 
-      {activeTab === "ai" ? <><ConnectionPanel/><MailConnectionPanel/><MemoryPanel/></> : activeTab === "profile" ? (
+      {activeTab === "ai" ? <><ConnectionPanel/><MailConnectionPanel/></> : activeTab === "profile" ? (
       <>
       <Card>
         <CardHeader className="flex flex-col gap-4">
@@ -829,6 +834,8 @@ export function SettingsClient({
       </>
       ) : activeTab === "rules" ? (
       <>
+
+      <InstructionsPanel accounts={accounts} />
 
       <Card>
         <CardHeader>

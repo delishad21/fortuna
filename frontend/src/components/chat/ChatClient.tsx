@@ -412,7 +412,7 @@ export function ChatClient() {
         >
           <Bookmark size={14} className="text-primary" aria-hidden />
           <span className="font-medium">
-            {value.action === "saved" ? "Remembered" : "Forgot"}:
+            {value.action === "saved" ? "Saved instruction" : "Disabled instruction"}:
           </span>
           <span
             className={
@@ -422,7 +422,7 @@ export function ChatClient() {
             {value.content}
           </span>
           <Link
-            href="/settings?tab=ai#memories"
+            href="/settings?tab=rules#instructions"
             className="ml-auto text-xs text-primary"
           >
             Manage
