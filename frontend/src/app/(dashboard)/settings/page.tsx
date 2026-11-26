@@ -2,7 +2,7 @@ import { getCategories } from "@/app/actions/categories";
 import { getAccountNumbers } from "@/app/actions/accountNumbers";
 import { getAccounts } from "@/app/actions/accounts";
 import { getSources } from "@/app/actions/sources";
-import { getCurrentUser } from "@/app/actions/user";
+import { getCurrentUser, getWorkflowPreference } from "@/app/actions/user";
 import { bootstrapDefaultImportRules, getImportRules } from "@/app/actions/importRules";
 import {
   getAppliedClassificationSummary,
@@ -30,6 +30,7 @@ export default async function SettingsPage() {
     classificationPatterns,
     appliedClassificationSummary,
     apiTokens,
+    workflow,
   ] = await Promise.all([
     getCurrentUser(),
     getCategories({ scope: "settings" }),
@@ -47,6 +48,7 @@ export default async function SettingsPage() {
     getClassificationPatterns(),
     getAppliedClassificationSummary(),
     getApiTokens(),
+    getWorkflowPreference().catch(() => null),
   ]);
 
   return (
@@ -61,6 +63,7 @@ export default async function SettingsPage() {
       initialClassificationPatterns={classificationPatterns}
       initialAppliedClassificationSummary={appliedClassificationSummary}
       initialApiTokens={apiTokens}
+      initialWorkflow={workflow}
     />
   );
 }

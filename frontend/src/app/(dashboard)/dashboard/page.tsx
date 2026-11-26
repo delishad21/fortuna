@@ -1,15 +1,24 @@
 import { getAccountNumbers } from "@/app/actions/accountNumbers";
-import { getDashboardOverview, getDashboardReview } from "@/app/actions/analytics";
+import { getDailyOverview, getDashboardOverview, getDashboardReview } from "@/app/actions/analytics";
 import { getCategories } from "@/app/actions/categories";
 import { DashboardClient } from "@/components/analytics/DashboardClient";
 
 export default async function DashboardPage() {
-  const [overview, review, categories, accounts] = await Promise.all([
+  const [overview, review, daily, categories, accounts] = await Promise.all([
     getDashboardOverview(),
     getDashboardReview(),
+    getDailyOverview(),
     getCategories({ scope: "main" }),
     getAccountNumbers(),
   ]);
 
-  return <DashboardClient initialOverview={overview} initialReview={review} categories={categories} accounts={accounts} />;
+  return (
+    <DashboardClient
+      initialOverview={overview}
+      initialReview={review}
+      initialDaily={daily}
+      categories={categories}
+      accounts={accounts}
+    />
+  );
 }

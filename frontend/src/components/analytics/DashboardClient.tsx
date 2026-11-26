@@ -13,8 +13,11 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { ArrowRight, CheckCircle2, FileText, Upload } from "lucide-react";
+import { ArrowRight, CheckCircle2, FileText, Upload, X } from "lucide-react";
 import { getDashboardOverview } from "@/app/actions/analytics";
+import { setWorkflowMode } from "@/app/actions/user";
+import { DailyOverview, type DailyOverviewData } from "@/components/analytics/DailyOverview";
+import { WORKFLOW_OPTIONS, localToday, type WorkflowMode } from "@/lib/workflow";
 import { updateTransaction } from "@/app/actions/transactions";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -61,6 +64,9 @@ type OverviewData = {
   largestExpenses?: CardSource[];
   attention?: { stagedImports: number; stagedRows: number; uncategorizedCount: number };
   hasTransactions: boolean;
+  today?: string;
+  /** The newest month with statement rows. */
+  latestStatementMonth?: string | null;
 };
 
 type CoverageAccount = {
@@ -101,18 +107,27 @@ type ReviewData = {
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
+type DashboardTab = "month" | "overview" | "review";
+
 export function DashboardClient({
   initialOverview,
   initialReview,
+  initialDaily,
   categories,
   accounts = [],
 }: {
   initialOverview: OverviewData;
   initialReview: ReviewData;
+  initialDaily: DailyOverviewData;
   categories: Category[];
   accounts?: AccountInfo[];
 }) {
-  const [activeTab, setActiveTab] = useState<"overview" | "review">("overview");
+  const router = useRouter();
+  const mode: WorkflowMode = initialDaily.workflow.mode;
+  // The preference only decides which tab leads; both views are always there.
+  const [activeTab, setActiveTab] = useState<DashboardTab>(mode === "daily" ? "month" : "overview");
+  const [promptDismissed, setPromptDismissed] = useState(false);
+  const [savingMode, setSavingMode] = useState(false);
   const [overview, setOverview] = useState(initialOverview);
   const [loadingMonth, setLoadingMonth] = useState(false);
   const [uncategorized, setUncategorized] = useState(initialReview.reviewQueue.uncategorized);
@@ -124,24 +139,72 @@ export function DashboardClient({
   const changeMonth = async (month: string) => {
     setLoadingMonth(true);
     try {
-      setOverview(await getDashboardOverview(month));
+      setOverview(await getDashboardOverview(month, localToday()));
     } finally {
       setLoadingMonth(false);
     }
   };
 
+  const chooseMode = async (value: WorkflowMode) => {
+    setSavingMode(true);
+    try {
+      await setWorkflowMode(value);
+      try {
+        window.localStorage.setItem("fortuna:workflowMode", value);
+      } catch {}
+      setActiveTab(value === "daily" ? "month" : "overview");
+      setPromptDismissed(true);
+      router.refresh();
+    } finally {
+      setSavingMode(false);
+    }
+  };
+
+  const monthTab = { key: "month" as const, label: "This month" };
+  const overviewTab = { key: "overview" as const, label: mode === "daily" ? "Statements" : "Overview" };
+  const reviewTab = { key: "review" as const, label: `Review${reviewCount ? ` (${reviewCount})` : ""}` };
+
   return (
     <div className="flex flex-col gap-6">
+      {!initialDaily.workflow.chosen && !promptDismissed ? (
+        <Card className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="font-semibold text-dark dark:text-white">How do you mainly use Fortuna?</p>
+            <p className="mt-0.5 text-sm text-dark-5 dark:text-dark-6">It decides what the dashboard shows first. You can change it in Settings.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {WORKFLOW_OPTIONS.map((option) => (
+              <Button
+                key={option.value}
+                size="sm"
+                variant={option.value === mode ? "primary" : "secondary"}
+                disabled={savingMode}
+                onClick={() => void chooseMode(option.value)}
+              >
+                {option.label}
+              </Button>
+            ))}
+            <button
+              type="button"
+              aria-label="Dismiss"
+              onClick={() => setPromptDismissed(true)}
+              className="flex size-9 items-center justify-center rounded-lg text-dark-5 hover:bg-gray-2 dark:text-dark-6 dark:hover:bg-dark-3"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        </Card>
+      ) : null}
+
       <PageTabs
-        tabs={[
-          { key: "overview", label: "Overview" },
-          { key: "review", label: `Review${reviewCount ? ` (${reviewCount})` : ""}` },
-        ]}
+        tabs={mode === "daily" ? [monthTab, overviewTab, reviewTab] : [overviewTab, monthTab, reviewTab]}
         activeTab={activeTab}
         onChange={setActiveTab}
       />
 
-      {activeTab === "overview" ? (
+      {activeTab === "month" ? (
+        <DailyOverview data={initialDaily} onOpenReviewTab={() => setActiveTab("review")} />
+      ) : activeTab === "overview" ? (
         <OverviewTab overview={overview} loading={loadingMonth} onMonthChange={changeMonth} accounts={accounts} />
       ) : (
         <ReviewTab
@@ -154,6 +217,36 @@ export function DashboardClient({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The statement to upload next: the month after the latest statement, once
+ * that month is over. Null when the statements are up to date.
+ */
+function nextStatementMonth(latest: string | null, today?: string) {
+  const current = (today || localToday()).slice(0, 7);
+  const [year, month] = current.split("-").map(Number);
+  const lastMonth = `${month === 1 ? year - 1 : year}-${String(month === 1 ? 12 : month - 1).padStart(2, "0")}`;
+  if (!latest) return lastMonth;
+  if (latest >= lastMonth) return null;
+  const [latestYear, latestMonth] = latest.split("-").map(Number);
+  return `${latestMonth === 12 ? latestYear + 1 : latestYear}-${String(latestMonth === 12 ? 1 : latestMonth + 1).padStart(2, "0")}`;
+}
+
+function UploadPrompt({ month, latest }: { month: string; latest: string | null }) {
+  return (
+    <Card className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <p className="font-semibold text-dark dark:text-white">Upload your {formatMonth(month, "MMMM yyyy")} statement</p>
+        {latest ? (
+          <p className="mt-0.5 text-sm text-dark-5 dark:text-dark-6">Your latest statement is for {formatMonth(latest, "MMMM yyyy")}.</p>
+        ) : null}
+      </div>
+      <Link href="/imports">
+        <Button leftIcon={<Upload className="size-4" />}>Upload statement</Button>
+      </Link>
+    </Card>
   );
 }
 
@@ -202,8 +295,11 @@ function OverviewTab({
   const largest = overview.largestExpenses || [];
   const { colors: accountColors, names: accountNames } = accountMaps(accounts);
 
+  const uploadMonth = nextStatementMonth(overview.latestStatementMonth ?? null, overview.today);
+
   return (
     <div className={cn("flex flex-col gap-6 transition-opacity", loading && "opacity-60")}>
+      {uploadMonth ? <UploadPrompt month={uploadMonth} latest={overview.latestStatementMonth ?? null} /> : null}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-xl font-bold text-dark dark:text-white">{formatMonth(overview.selectedMonth, "MMMM yyyy")}</h2>
         <MonthSwitcher

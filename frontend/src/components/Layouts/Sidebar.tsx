@@ -3,6 +3,7 @@
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import {
   LayoutDashboard,
   Upload,
@@ -12,7 +13,11 @@ import {
   Settings,
   MessageSquare,
   ChevronUp,
+  ListChecks,
 } from "lucide-react";
+import { getWorkflowPreference } from "@/app/actions/user";
+import { getReviewQueue } from "@/app/actions/review";
+import { SIDEBAR_ORDER, isWorkflowMode, type WorkflowMode } from "@/lib/workflow";
 import { useSidebarContext } from "./sidebar-context";
 import { BrandLogo } from "@/components/ui/Brand";
 
@@ -23,6 +28,7 @@ const menuItems = [
       { title: "Dashboard", icon: LayoutDashboard, url: "/dashboard" },
       { title: "Imports", icon: Upload, url: "/imports" },
       { title: "Transactions", icon: Receipt, url: "/transactions" },
+      { title: "To review", icon: ListChecks, url: "/review" },
       { title: "Trips", icon: Plane, url: "/trips" },
       { title: "Analytics", icon: BarChart3, url: "/analytics" },
       { title: "Chat", icon: MessageSquare, url: "/chat" },
@@ -34,9 +40,48 @@ const menuItems = [
   },
 ];
 
+const MODE_KEY = "fortuna:workflowMode";
+
 export function Sidebar() {
   const pathname = usePathname();
   const { setIsOpen, isOpen, isMobile, toggleSidebar } = useSidebarContext();
+  const [mode, setMode] = useState<WorkflowMode>("statements");
+  const [reviewCount, setReviewCount] = useState(0);
+
+  // The workflow preference orders the menu; the last one seen is cached so
+  // the menu doesn't reorder on every page load.
+  useEffect(() => {
+    try {
+      const cached = window.localStorage.getItem(MODE_KEY);
+      if (isWorkflowMode(cached)) setMode(cached);
+    } catch {}
+    getWorkflowPreference()
+      .then((preference) => {
+        setMode(preference.mode);
+        try {
+          window.localStorage.setItem(MODE_KEY, preference.mode);
+        } catch {}
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    getReviewQueue({ limit: 1 })
+      .then((queue) => setReviewCount(queue.total))
+      .catch(() => {});
+  }, [pathname]);
+
+  const sections = useMemo(() => {
+    const order = SIDEBAR_ORDER[mode];
+    const rank = (url: string) => {
+      const index = order.indexOf(url);
+      return index === -1 ? order.length : index;
+    };
+    return menuItems.map((section) => ({
+      ...section,
+      items: [...section.items].sort((a, b) => rank(a.url) - rank(b.url)),
+    }));
+  }, [mode]);
 
   return (
     <>
@@ -70,7 +115,7 @@ export function Sidebar() {
 
           {/* Navigation */}
           <div className="custom-scrollbar mt-6 flex-1 overflow-y-auto pr-3 min-[850px]:mt-10">
-            {menuItems.map((section) => (
+            {sections.map((section) => (
               <div key={section.section} className="mb-6">
                 <h2 className="mb-5 text-sm font-medium text-dark-4 dark:text-dark-6">
                   {section.section}
@@ -106,6 +151,11 @@ export function Sidebar() {
                               aria-hidden="true"
                             />
                             <span>{item.title}</span>
+                            {item.url === "/review" && reviewCount > 0 ? (
+                              <span className="ml-auto mr-2 rounded-full bg-primary px-2 py-0.5 text-xs font-semibold tabular-nums text-white">
+                                {reviewCount > 99 ? "99+" : reviewCount}
+                              </span>
+                            ) : null}
                             {isActive && (
                               <span className="absolute right-0 top-0 h-full w-1 rounded-l-lg bg-primary" />
                             )}

@@ -23,6 +23,9 @@ const pageConfig: Record<
   "/transactions": {
     title: "Transactions",
   },
+  "/review": {
+    title: "To review",
+  },
   "/trips": {
     title: "Trips",
   },

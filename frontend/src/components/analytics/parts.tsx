@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/Card";
 import { TransactionAvatar } from "@/components/ui/CategoryIcon";
 import type { TransactionCardTransaction } from "@/components/transactions/TransactionCard";
 import { accountDisplayMap } from "@/lib/accounts";
+import type { CardNetwork } from "@/lib/accountTypes";
 import { Select } from "@/components/ui/Select";
 import { cn } from "@/lib/utils";
 
@@ -346,6 +347,13 @@ export const barSizeFor = (count: number) =>
 /** A transaction from the analytics API with what the transaction cards need. */
 export type CardSource = CompactTransaction & {
   accountIdentifier?: string | null;
+  accountId?: string | null;
+  account?: { id: string; name: string; color: string; imageId?: string | null } | null;
+  card?: { id: string; last4: string; nickname?: string | null; network?: string | null } | null;
+  entrySource?: string | null;
+  reviewStatus?: string | null;
+  reviewReasons?: string[] | null;
+  reconciled?: boolean | null;
   linkage?: TransactionCardTransaction["linkage"];
   originalAmountIn?: number | null;
   originalAmountOut?: number | null;
@@ -363,6 +371,20 @@ export const toCardTransaction = (tx: CardSource): TransactionCardTransaction =>
   amountOut: tx.originalAmountOut !== undefined ? tx.originalAmountOut : tx.amountOut || null,
   balance: null,
   accountIdentifier: tx.accountIdentifier ?? null,
+  accountId: tx.accountId ?? null,
+  account: tx.account ? { id: tx.account.id, name: tx.account.name, color: tx.account.color } : null,
+  card: tx.card
+    ? {
+        id: tx.card.id,
+        last4: tx.card.last4,
+        nickname: tx.card.nickname ?? null,
+        network: (tx.card.network ?? null) as CardNetwork | null,
+      }
+    : null,
+  entrySource: tx.entrySource ?? null,
+  reviewStatus: tx.reviewStatus ?? null,
+  reviewReasons: tx.reviewReasons ?? null,
+  reconciled: tx.reconciled ?? null,
   imageId: tx.imageId ?? null,
   category: tx.category || undefined,
   linkage: tx.linkage ?? null,

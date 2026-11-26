@@ -65,6 +65,8 @@ import {
 import type { ParserOption } from "@/lib/parsers";
 import type { ApiTokenSummary } from "@/lib/apiTokens";
 import { ApiTokensPanel } from "@/components/settings/ApiTokensPanel";
+import { WorkflowPanel } from "@/components/settings/WorkflowPanel";
+import type { WorkflowMode } from "@/lib/workflow";
 
 interface SettingsClientProps {
   user: UserProfile | null;
@@ -77,6 +79,7 @@ interface SettingsClientProps {
   initialClassificationPatterns: ClassificationPattern[];
   initialAppliedClassificationSummary: AppliedClassificationSummaryItem[];
   initialApiTokens: ApiTokenSummary[];
+  initialWorkflow?: { mode: WorkflowMode; chosen: boolean } | null;
 }
 
 export function SettingsClient({
@@ -90,6 +93,7 @@ export function SettingsClient({
   initialClassificationPatterns,
   initialAppliedClassificationSummary,
   initialApiTokens,
+  initialWorkflow = null,
 }: SettingsClientProps) {
   const PREVIEW_CHIP_LIMIT = 4;
   const tripCategoryNames = TRIP_CATEGORY_DEFINITIONS.map((item) => item.name);
@@ -596,6 +600,8 @@ export function SettingsClient({
           </div>
         </CardContent>
       </Card>
+
+      <WorkflowPanel initial={initialWorkflow} />
 
       <div className="grid gap-6 xl:grid-cols-2">
       <Card>
