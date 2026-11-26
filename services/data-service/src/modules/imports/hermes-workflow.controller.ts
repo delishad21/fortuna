@@ -4,6 +4,7 @@ import { z } from "zod";
 import { authenticatedUserId, requireAccountAuth } from "../auth/auth.middleware";
 import { HermesWorkflowService } from "./hermes-workflow.service";
 import { paylahEmailGuide, paylahHint } from "./paylah-emails";
+import { unlockStatement } from "./statement-unlock";
 
 export const hermesWorkflowRouter = Router();
 
@@ -71,20 +72,35 @@ function actor(request: Request) {
 }
 
 function sendError(response: Response, error: unknown) {
-  const candidate = error as { status?: number; message?: string; issues?: unknown };
+  const candidate = error as { status?: number; message?: string; issues?: unknown; code?: unknown };
   return response.status(candidate.status || (candidate.issues ? 400 : 500)).json({
     error: candidate.message || "Unexpected workflow error",
+    ...(typeof candidate.code === "string" && candidate.code.startsWith("pdf_") ? { code: candidate.code } : {}),
   });
 }
+
+// Optional, for password-protected PDFs: used once to decrypt the upload, never stored or logged.
+const StatementPasswordSchema = z.string().min(1).max(1000).optional();
 
 hermesWorkflowRouter.post(
   "/statements",
   requireAccountAuth(["statements:write"]),
-  upload.single("file"),
+  (request, response, next) =>
+    upload.single("file")(request, response, (error?: unknown) => {
+      if (!error) return next();
+      if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE")
+        return response.status(413).json({ error: "Statements must be under 25 MB" });
+      if (error instanceof multer.MulterError)
+        return response.status(400).json({ error: `Send one statement in the "file" field (${error.message})` });
+      return response.status(415).json({ error: "Upload a PDF or CSV statement" });
+    }),
   async (request, response) => {
     try {
       if (!request.file) return response.status(400).json({ error: "Statement file is required" });
-      const statement = await HermesWorkflowService.registerStatement(authenticatedUserId(request), request.file, actor(request));
+      const password = StatementPasswordSchema.safeParse(request.body?.password || undefined);
+      if (!password.success) return response.status(400).json({ error: "The PDF password must be 1 to 1000 characters" });
+      const file = await unlockStatement(request.file, password.data);
+      const statement = await HermesWorkflowService.registerStatement(authenticatedUserId(request), file, actor(request));
       return response.status(statement.duplicate ? 200 : 201).json({ statement });
     } catch (error) {
       return sendError(response, error);

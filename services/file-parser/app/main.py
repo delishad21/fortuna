@@ -8,6 +8,7 @@ from .parsers import PARSER_MAP, PARSER_VERSIONS, revolut_statement_parser
 from .parsers.config_candidate import evaluate_candidate
 from .parsers.config_candidate import parse_config_csv
 from .fixture_inspector import inspect_fixture
+from .pdf_unlock import UNLOCKED, unlock_pdf
 from .runtime_registry import get_dynamic_parser, list_dynamic_parsers
 from .sandbox_queue import SandboxExecutionError, submit_python_job
 import json
@@ -203,6 +204,25 @@ def get_parsers():
     return jsonify({
         "parsers": parser_items
     })
+
+
+@app.route("/pdf/unlock", methods=["POST"])
+def unlock_statement_pdf():
+    """Decrypts a password-protected PDF for storage. Never logs the password."""
+    if not _internal_request_allowed():
+        return jsonify({"error": "Internal service authentication required"}), 401
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+    status, unlocked = unlock_pdf(
+        request.files["file"].read(), request.form.get("password") or None
+    )
+    if status == UNLOCKED:
+        return app.response_class(
+            unlocked,
+            mimetype="application/pdf",
+            headers={"X-Pdf-Status": status, "Cache-Control": "no-store"},
+        )
+    return jsonify({"status": status})
 
 
 @app.route("/candidate/test", methods=["POST"])

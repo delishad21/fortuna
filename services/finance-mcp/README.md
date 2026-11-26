@@ -27,6 +27,43 @@ in `Content-Type`. The response contains an opaque `fileRef` for MCP tools.
 
 The gateway validates `FINANCE_API_TOKEN` at startup and exits if it is missing, invalid, expired, or revoked. Tool schemas intentionally contain no `userId` field.
 
+## Statement uploads from a server (`statements:write`)
+
+A server that receives statements itself (twee, at month end) uploads them
+straight to Fortuna and passes the assistant only the statement id, so the
+file and any PDF password never go through the model.
+
+`POST /api/agent/statements` with `Authorization: Bearer pfa_…` and a
+`multipart/form-data` body. On the home server it is reachable through the
+frontend at `http://127.0.0.1:3040/api/agent/statements` (the public site's
+nginx allows 20 MB bodies).
+
+| Field | | |
+|---|---|---|
+| `file` | required | One PDF or CSV statement, under 25 MB. The limits and accepted types are the web upload's (it uses the same route). |
+| `password` | optional | The PDF's open password. Used once to decrypt the upload, then forgotten: it is not stored, logged, audited or returned. Ignored for CSVs and PDFs that open without one. |
+
+A locked PDF is stored decrypted, so parsing it later needs no password.
+Uploading the same statement again (same bytes) returns the same id.
+
+| Status | Body | |
+|---|---|---|
+| 201 | `{ "statement": { "id": "upload_…", "filename", "contentType", "sha256", "sizeBytes", "status", "createdAt", "duplicate": false } }` | Stored. `statement.id` is the `fileRef` for `inspect_statement` and `create_import_draft`. |
+| 200 | the same, `"duplicate": true` | Already uploaded; the existing id. |
+| 422 | `{ "error", "code": "pdf_password_required" }` | The PDF is locked and no password was sent. Ask for it and upload again. |
+| 422 | `{ "error", "code": "pdf_password_incorrect" }` | The password doesn't open the PDF. Ask again. |
+| 401 / 403 | `{ "error", "requiredScopes": ["statements:write"] }` | No token, or a token without `statements:write`. |
+| 413 / 415 / 400 | `{ "error" }` | Over 25 MB; not a PDF or CSV; no `file` field. |
+
+Nothing is stored when a password is missing or wrong. The file shows in
+Fortuna's Statements list like a web upload.
+
+```sh
+curl -sS http://127.0.0.1:3040/api/agent/statements \
+  -H "Authorization: Bearer $FORTUNA_TOKEN" \
+  -F file=@dbs-2026-12.pdf -F password="$PDF_PASSWORD"
+```
+
 ## Daily transactions from the assistant (`transactions:write`, `transactions:review`)
 
 An outside assistant (twee) that reads spending from emails and phone
@@ -110,8 +147,9 @@ The tools call the data service. The same routes are reachable through the
 frontend (`http://127.0.0.1:3040` on the home server) with
 `Authorization: Bearer pfa_…`; the frontend forwards only
 `/api/agent/transactions/*`, `/api/agent/instructions/*`,
-`/api/agent/classification-guide`, `/api/agent/analytics/spending` and
-`/api/agent/analytics/month-to-date`. The web and phone apps' To review
+`/api/agent/classification-guide`, `/api/agent/analytics/spending`,
+`/api/agent/analytics/month-to-date` and `POST /api/agent/statements` (see
+[Statement uploads from a server](#statement-uploads-from-a-server-statementswrite)). The web and phone apps' To review
 screen calls the same `/review` routes (as the trusted frontend), so twee and
 Fortuna work through one queue.
 
