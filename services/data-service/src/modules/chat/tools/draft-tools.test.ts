@@ -757,3 +757,53 @@ test("every tool the chat's PayLah guide names is a chat tool", () =>
     for (const name of ["restage_draft", "discard_draft", "check_statement_totals", "find_similar_transactions", "get_reimbursement_candidates"])
       assert.ok(names.has(name), name);
   }));
+
+test("the chat agent sees the reconcile plan and can change it with reconcile_staged_import", () =>
+  withChatDb((db) =>
+    withDatabase(db, async () => {
+      const { user, context } = await setup(db, "reconcile-tools");
+      await db.accountIdentifier.create({ data: { userId: user.id, accountIdentifier: "DBS-1" } });
+      const uob = await db.accountIdentifier.create({ data: { userId: user.id, accountIdentifier: "UOB-2" } });
+      const row = (date: string, description: string, amountOut: number) => ({
+        date, description, amountOut, accountIdentifier: "DBS-1", currency: "SGD", label: description,
+      });
+      const draft = await draftWithRows(db, user.id, [row("2026-09-03", "KOPITIAM", 4.5), row("2026-09-20", "GIRO RENT", 900)]);
+      const logged = (description: string, date: string, amountOut: number) =>
+        db.transaction.create({
+          data: { userId: user.id, date: new Date(date), description, amountOut, accountIdentifier: "DBS-1", entrySource: "assistant" },
+        });
+      const kopi = await logged("Kopitiam", "2026-09-02", 4.5);
+      const taxi = await logged("Taxi", "2026-09-10", 18);
+      const tools = createToolRegistry(db);
+      await withFetch(noParsers, async () => {
+        const summary = (await tools.execute(context, "inspect_staged_import", { draftId: draft.id })).model as any;
+        assert.equal(summary.reconcile.summary.matched, 1);
+        assert.equal(summary.reconcile.matched[0].entry.transactionId, kopi.id);
+        assert.deepEqual(summary.reconcile.gaps.map((g: any) => g.rowIndex), [1]);
+        assert.equal(summary.reconcile.leftovers[0].entry.transactionId, taxi.id);
+        assert.match(summary.reconcile.note, /reconcile_staged_import/);
+        const page = (await tools.execute(context, "inspect_staged_import", { draftId: draft.id, rowIds: [draft.rows[0].id] })).model as any;
+        assert.equal(page.rows[0].reconcile.status, "matched");
+
+        const changed = (await tools.execute(context, "reconcile_staged_import", {
+          draftId: draft.id,
+          expectedVersion: summary.version,
+          entries: [{ transactionId: taxi.id, action: "move", accountIdentifier: "UOB-2" }],
+        })).model as any;
+        assert.equal(changed.committed, false);
+        assert.equal(changed.reconcile.leftovers[0].action, "move");
+        assert.equal(changed.reconcile.leftovers[0].moveToAccountId, uob.accountId);
+        await assert.rejects(
+          tools.execute(context, "reconcile_staged_import", {
+            draftId: draft.id,
+            expectedVersion: summary.version,
+            rows: [{ rowId: draft.rows[0].id, transactionId: null }],
+          }),
+          /stale/,
+        );
+        const full = (await tools.execute(context, "inspect_staged_import", { draftId: draft.id, reconcile: true })).model as any;
+        assert.equal(full.version, changed.version);
+        assert.equal(full.reconcile.leftovers.length, 1);
+      });
+    }),
+  ));

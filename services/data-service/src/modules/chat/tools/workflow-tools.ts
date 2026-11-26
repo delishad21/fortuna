@@ -140,6 +140,45 @@ export const workflowDefinitions: ToolDefinition[] = [
     ),
   },
   {
+    name: "reconcile_staged_import",
+    description:
+      "Change how a staged bank statement reconciles against entries already logged (by the assistant, by hand or on the phone) for its account and period. inspect_staged_import's reconcile section shows the plan: matched rows (committing confirms the logged entry with the bank's data instead of adding a row), gaps (added as new rows) and leftovers (logged entries the statement doesn't show, with reasons: pending, possible_duplicate, wrong_amount, wrong_account). rows sets a row's match: a logged entry's transactionId, null for no match (the row is added as a new transaction), or 'auto' to let Fortuna match it again; matching an entry by hand also works for a wrong_amount leftover (use its suggestedRowId) and for an entry on another account (it moves to the statement's account). entries sets what happens to a leftover on commit: keep (default), delete (e.g. a duplicate), or move with accountId (wrong account). expectedVersion is the import's current version. Only change what the evidence supports or the user asked for; deleting an entry needs the user's say-so. Nothing is committed.",
+    inputSchema: obj(
+      {
+        draftId: str,
+        expectedVersion: { type: "integer" },
+        rows: {
+          type: "array",
+          maxItems: STAGED_EDIT_LIMIT,
+          items: obj(
+            {
+              rowId: str,
+              transactionId: {
+                type: ["string", "null"],
+                description: "A logged entry's id, null for no match, or 'auto'",
+              },
+            },
+            ["rowId", "transactionId"],
+          ),
+        },
+        entries: {
+          type: "array",
+          maxItems: STAGED_EDIT_LIMIT,
+          items: obj(
+            {
+              transactionId: str,
+              action: { enum: ["keep", "delete", "move"] },
+              accountId: { type: ["string", "null"], description: "For move: the account id (a wrong_account reason gives it)" },
+              accountIdentifier: { type: "string", description: "For move, instead of accountId: an accountIdentifier from get_context" },
+            },
+            ["transactionId", "action"],
+          ),
+        },
+      },
+      ["draftId", "expectedVersion"],
+    ),
+  },
+  {
     name: "add_staged_rows",
     description:
       "Add transactions to an existing staged import when its source shows them but the parser left them out (for example a cashback credit or a card repayment). Check the import first with inspect_staged_import and add only rows that are really missing; expectedVersion is the import's current version. Rows without an accountIdentifier get the account the import's rows share. The added rows are marked as added, with your reason, and the user reviews and commits them with the rest of the import; nothing is committed. Use stage_rows instead for a source that has no staged import.",
@@ -280,6 +319,7 @@ export async function executeWorkflowTool(
   if (name === "suggest_draft_labels") return imports.labels(context, raw);
   if (name === "update_staged_rows") return imports.editRows(context, raw);
   if (name === "add_staged_rows") return imports.addRows(context, raw);
+  if (name === "reconcile_staged_import") return imports.reconcile(context, raw);
   if (name === "check_statement_totals")
     return checkStatementTotals(db, context, raw);
   if (name === "inspect_statement") {

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { idSchema } from "../contracts";
 import { draftAmountIssues } from "../../imports/draft-review";
 import { paylahRowCounts } from "../../imports/paylah-emails";
+import type { ReconcilePlan } from "../../imports/reconcile-plan";
 
 /**
  * What inspect_staged_import returns. By default a summary of the draft, small enough to
@@ -25,6 +26,7 @@ export const ROW_FIELDS = [
   "proposals",
   "parsed",
   "payload",
+  "reconcile",
 ] as const;
 type RowField = (typeof ROW_FIELDS)[number];
 const DEFAULT_FIELDS: RowField[] = [
@@ -35,8 +37,10 @@ const DEFAULT_FIELDS: RowField[] = [
   "category",
   "linkage",
   "review",
+  "reconcile",
 ];
 export const PAGE_LIMIT = 100;
+const SUMMARY_RECONCILE_ITEMS = 25;
 const SUMMARY_REVIEW_ROWS = 15;
 const SUMMARY_AMOUNT_ISSUES = 20;
 
@@ -54,6 +58,7 @@ export const inspectSchema = z
     offset: z.number().int().min(0).optional(),
     limit: z.number().int().min(1).max(PAGE_LIMIT).optional(),
     fields: z.array(z.enum(ROW_FIELDS)).min(1).max(ROW_FIELDS.length).optional(),
+    reconcile: z.literal(true).optional(),
   })
   .strict();
 export type InspectInput = z.infer<typeof inspectSchema>;
@@ -101,7 +106,12 @@ export const inspectJsonSchema = {
       type: "array",
       items: { enum: [...ROW_FIELDS] },
       description:
-        "Row fields to return besides id, rowIndex and version. Default: date, description, amounts, label, category, linkage, review. Others: balance, account, status (reviewStatus, selected), metadata, links (reimbursement links), proposals (pending suggestions), parsed (the parser's original row), payload (the full current row).",
+        "Row fields to return besides id, rowIndex and version. Default: date, description, amounts, label, category, linkage, review, reconcile (matched or gap, when the import reconciles against logged entries). Others: balance, account, status (reviewStatus, selected), metadata, links (reimbursement links), proposals (pending suggestions), parsed (the parser's original row), payload (the full current row).",
+    },
+    reconcile: {
+      enum: [true],
+      description:
+        "Return the whole reconcile plan instead of rows: every matched row with its logged entry, every gap, and every logged entry the statement doesn't show with its reasons and action.",
     },
   },
   required: ["draftId"],
@@ -128,6 +138,7 @@ type DraftRow = {
     reason?: string | null;
   }>;
   review?: { needsReview: boolean; reasons: string[] };
+  reconcile?: { status: string; transactionId?: string; mode?: string; warnings?: string[]; errors?: string[] };
 };
 export type InspectableDraft = {
   id: string;
@@ -141,6 +152,7 @@ export type InspectableDraft = {
   expiresAt: Date;
   error: string | null;
   reviewSummary: unknown;
+  reconcile?: ReconcilePlan | null;
   rows: DraftRow[];
 };
 
@@ -205,6 +217,7 @@ function rowView(row: DraftRow, fields: Set<RowField>) {
         confidence: p.confidence === undefined ? null : Number(p.confidence),
         reason: p.reason ?? null,
       }));
+  if (fields.has("reconcile") && row.reconcile) view.reconcile = row.reconcile;
   if (fields.has("parsed")) view.parsed = row.parsedPayload ?? null;
   if (fields.has("payload")) view.payload = payload;
   return view;
@@ -321,6 +334,67 @@ function paylahSection(
   };
 }
 
+const entryView = (entry: ReconcilePlan["matched"][number]["entry"]) => ({
+  transactionId: entry.id,
+  date: entry.date,
+  description: clip(entry.description, 80),
+  label: entry.label ?? null,
+  ...amountsOf(entry as Payload),
+  account: entry.accountName,
+  entrySource: entry.entrySource,
+});
+
+/** The whole plan, compact, for inspect_staged_import with reconcile: true. */
+export function reconcileView(plan: ReconcilePlan, limit = Infinity) {
+  return {
+    summary: plan.summary,
+    accounts: plan.accounts,
+    matched: plan.matched.slice(0, limit).map((match) => ({
+      rowId: match.rowId,
+      rowIndex: match.rowIndex,
+      mode: match.mode,
+      score: match.score,
+      reasons: match.reasons,
+      entry: entryView(match.entry),
+      ...(match.amountDifference ? { amountDifference: match.amountDifference } : {}),
+      ...(match.warnings.length ? { warnings: match.warnings } : {}),
+      ...(match.errors.length ? { errors: match.errors } : {}),
+    })),
+    gaps: plan.gaps.slice(0, limit).map((gap) => ({
+      rowId: gap.rowId,
+      rowIndex: gap.rowIndex,
+      ...(gap.unmatched ? { unmatchedByUser: true } : {}),
+      ...(gap.candidates.length ? { candidates: gap.candidates.slice(0, 3) } : {}),
+    })),
+    leftovers: plan.leftovers.slice(0, limit).map((leftover) => ({
+      entry: entryView(leftover.entry),
+      reasons: leftover.reasons,
+      action: leftover.action,
+      ...(leftover.accountId ? { moveToAccountId: leftover.accountId } : {}),
+      suggestedAction: leftover.suggestedAction,
+      ...(leftover.suggestedRowId ? { suggestedRowId: leftover.suggestedRowId } : {}),
+      ...(leftover.errors.length ? { errors: leftover.errors } : {}),
+    })),
+  };
+}
+
+function reconcileSection(plan: ReconcilePlan | null | undefined) {
+  if (!plan) return {};
+  const view = reconcileView(plan, SUMMARY_RECONCILE_ITEMS);
+  const more =
+    plan.matched.length > SUMMARY_RECONCILE_ITEMS ||
+    plan.gaps.length > SUMMARY_RECONCILE_ITEMS ||
+    plan.leftovers.length > SUMMARY_RECONCILE_ITEMS;
+  return {
+    reconcile: {
+      ...view,
+      note:
+        "Entries were already logged for this statement's account and period. On commit, matched rows confirm their logged entry (it keeps its label, category, image and links and takes the statement's amount, posted date and description) instead of adding a row; gaps are added as new rows; leftovers are kept unless an action says otherwise. Change matches and leftover actions with reconcile_staged_import; tell the user about amount warnings and leftovers before they commit." +
+        (more ? " This lists the first items; inspect_staged_import with reconcile: true returns all." : ""),
+    },
+  };
+}
+
 /** The default inspect_staged_import result: counts, issues and pointers, no full rows. */
 export function draftSummary(
   draft: InspectableDraft,
@@ -388,6 +462,7 @@ export function draftSummary(
         }
       : {}),
     ...paylahSection(draft.rows, extras.gmailConnected, period),
+    ...reconcileSection(draft.reconcile),
     rowsNeedingReview: {
       total: reviewRows.length,
       first: reviewRows.slice(0, SUMMARY_REVIEW_ROWS).map((row) => {

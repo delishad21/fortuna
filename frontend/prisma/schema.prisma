@@ -143,6 +143,8 @@ model ImportDraft {
   commitTokenExpiresAt   DateTime?                @map("commit_token_expires_at")
   commitTokenUsedAt      DateTime?                @map("commit_token_used_at")
   committedImportBatchId String?                  @map("committed_import_batch_id")
+  /// Reconciling against logged entries: matches chosen by hand and what to do with entries the statement lacks.
+  reconcileOverrides     Json?                    @map("reconcile_overrides")
   error                  String?                  @db.Text
   expiresAt              DateTime                 @map("expires_at")
   committedAt            DateTime?                @map("committed_at")

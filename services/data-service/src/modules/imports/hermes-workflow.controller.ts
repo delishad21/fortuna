@@ -166,6 +166,31 @@ hermesWorkflowRouter.patch("/drafts/:draftId/rows/:rowId", requireAccountAuth(["
   }
 });
 
+const ReconcileSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  rows: z.array(z.object({
+    rowId: z.string().min(1),
+    /** An entry id, null for "no match", or "auto" to let Fortuna match it again. */
+    transactionId: z.string().min(1).nullable(),
+  }).strict()).max(500).optional(),
+  entries: z.array(z.object({
+    transactionId: z.string().min(1),
+    action: z.enum(["keep", "delete", "move"]),
+    accountId: z.string().min(1).nullable().optional(),
+  }).strict()).max(500).optional(),
+}).strict().refine((value) => value.rows?.length || value.entries?.length, "Send rows or entries to change");
+
+hermesWorkflowRouter.patch("/drafts/:draftId/reconcile", requireAccountAuth(["drafts:write"]), async (request, response) => {
+  try {
+    const input = ReconcileSchema.parse(request.body);
+    return response.json(await HermesWorkflowService.reconcileDraft(
+      authenticatedUserId(request), request.params.draftId, input, actor(request),
+    ));
+  } catch (error) {
+    return sendError(response, error);
+  }
+});
+
 hermesWorkflowRouter.patch("/drafts/:draftId/account", requireAccountAuth(["drafts:write", "accounts:read"]), async (request, response) => {
   try {
     const input = z.object({

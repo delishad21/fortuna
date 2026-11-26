@@ -7,6 +7,8 @@ export interface CommitTokenPayload {
   validationHash: string;
   expiresAt: string;
   nonce: string;
+  /** The reconcile plan the user validated; the commit applies only that one. */
+  reconcileHash?: string;
 }
 
 function signature(payload: string, secret: string) {

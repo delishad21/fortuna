@@ -32,6 +32,15 @@ import {
   validateDraftLinks,
 } from "../reimbursements/links.service";
 import { LinkError } from "../reimbursements/links.core";
+import {
+  ReconcileError,
+  applyReconcilePlan,
+  loadReconcilePlan,
+  nextOverrides,
+  reconcileRows,
+  type OverrideInput,
+} from "./reconcile.service";
+import { reconcileSignature, type ReconcilePlan } from "./reconcile-plan";
 
 const STORAGE_ROOT = path.resolve(
   process.env.STATEMENT_STORAGE_DIR || "/data/statements",
@@ -202,6 +211,51 @@ export async function applyTripAssignments(
     }
   }
   return { applied, skipped };
+}
+
+/** Where a row stands in its draft's reconcile plan. */
+function rowReconcile(plan: ReconcilePlan, rowId: string) {
+  const match = plan.matched.find((item) => item.rowId === rowId);
+  if (match)
+    return {
+      status: "matched" as const,
+      transactionId: match.transactionId,
+      mode: match.mode,
+      amountDifference: match.amountDifference,
+      warnings: match.warnings,
+      errors: match.errors,
+    };
+  const gap = plan.gaps.find((item) => item.rowId === rowId);
+  return gap ? { status: "gap" as const, unmatched: gap.unmatched } : { status: "not_selected" as const };
+}
+
+/**
+ * A matched row isn't saved: the logged entry keeps its own label and
+ * category, so the row only needs review for its amount or match problems.
+ */
+function reconciledReviews<R extends { id: string }>(
+  plan: ReconcilePlan,
+  rows: R[],
+  reviews: ReturnType<typeof reviewDraftRows>,
+) {
+  return rows.map((row, index) => {
+    const match = plan.matched.find((item) => item.rowId === row.id);
+    const review = reviews[index];
+    if (!match) return review;
+    const reasons = [
+      ...review.amountErrors,
+      ...match.errors,
+      ...match.warnings,
+    ];
+    return {
+      ...review,
+      labelling: false,
+      reconciliation: false,
+      needsReview: reasons.length > 0,
+      pendingProposals: 0,
+      reasons: [`Matches logged entry "${match.entry.label || match.entry.description}" (${match.entry.date})`, ...reasons],
+    };
+  });
 }
 
 export class HermesWorkflowService {
@@ -725,10 +779,19 @@ export class HermesWorkflowService {
         : decorated;
     const reviewOptions = { runningBalance: draft.mode === "main" };
     const reviews = reviewDraftRows(rows, reviewOptions);
+    const reconcile = await loadReconcilePlan(prisma, userId, draft);
+    const rowReviews = reconcile ? reconciledReviews(reconcile, rows, reviews) : reviews;
     return {
       ...draft,
-      reviewSummary: summarizeDraftReview(rows, reviewOptions),
-      rows: rows.map((row, index) => ({ ...row, review: reviews[index] })),
+      reviewSummary: reconcile
+        ? { ...summarizeDraftReview(rows, reviewOptions), needsReview: rowReviews.filter((r) => r.needsReview).length, ready: rowReviews.filter((r) => !r.needsReview).length }
+        : summarizeDraftReview(rows, reviewOptions),
+      reconcile,
+      rows: rows.map((row, index) => ({
+        ...row,
+        review: rowReviews[index],
+        ...(reconcile ? { reconcile: rowReconcile(reconcile, row.id) } : {}),
+      })),
     };
   }
 
@@ -850,6 +913,8 @@ export class HermesWorkflowService {
           data: {
             parserId,
             parserVersion: result.parserVersion || "registry-current",
+            // Overrides name rows by id; the parse replaced every row.
+            reconcileOverrides: Prisma.DbNull,
             status: "review",
             version: { increment: 1 },
             validationHash: null,
@@ -970,6 +1035,61 @@ export class HermesWorkflowService {
       });
       return { ...updated, linkWarnings };
     });
+  }
+
+  /**
+   * Override the reconcile plan: match a row to another logged entry (or to
+   * none, or back to automatic), and choose what happens to logged entries the
+   * statement doesn't show (keep, delete, move to another account). Nothing
+   * changes in the ledger until the draft is committed.
+   */
+  static async reconcileDraft(
+    userId: string,
+    draftId: string,
+    input: OverrideInput & { expectedVersion: number },
+    actor: Actor,
+  ) {
+    await runInTransaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM import_drafts WHERE id = ${draftId} AND user_id = ${userId} FOR UPDATE`;
+      const draft = await tx.importDraft.findFirst({
+        where: { id: draftId, userId },
+        include: { rows: { orderBy: { rowIndex: "asc" } } },
+      });
+      if (!draft)
+        throw Object.assign(new Error("Import draft not found"), { status: 404 });
+      if (["committed", "discarded", "expired"].includes(draft.status))
+        throw Object.assign(new Error("This draft is closed or expired"), { status: 409 });
+      if (draft.version !== input.expectedVersion)
+        throw Object.assign(new Error("Import draft is stale"), { status: 409 });
+      let overrides;
+      try {
+        overrides = await nextOverrides(tx, userId, draft, input);
+      } catch (error) {
+        if (error instanceof ReconcileError)
+          throw Object.assign(new Error(error.message), { status: error.status });
+        throw error;
+      }
+      await tx.importDraft.update({
+        where: { id: draft.id },
+        data: {
+          reconcileOverrides: overrides as Prisma.InputJsonValue,
+          version: { increment: 1 },
+          status: "review",
+          validationHash: null,
+          commitTokenHash: null,
+          commitTokenExpiresAt: null,
+        },
+      });
+      await audit(tx, userId, actor, {
+        toolName: "reconcile_import_draft",
+        targetType: "import_draft",
+        targetId: draft.id,
+        beforeValue: (draft.reconcileOverrides ?? null) as Prisma.InputJsonValue,
+        afterValue: overrides as Prisma.InputJsonValue,
+      });
+    });
+    const draft = await this.getDraft(userId, draftId);
+    return { draftId, version: draft.version, reconcile: draft.reconcile };
   }
 
   static async assignDraftAccount(
@@ -1509,7 +1629,7 @@ export class HermesWorkflowService {
   ) {
     const draft = await this.getDraft(userId, draftId);
     const selectedRows = draft.rows.filter((row) => row.selected);
-    const errors = selectedRows.flatMap((row) =>
+    const errors: Array<{ rowId: string; rowIndex?: number; message: string }> = selectedRows.flatMap((row) =>
       validateDraftTransaction(
         row.currentPayload as Record<string, unknown>,
       ).map((message) => ({ rowId: row.id, rowIndex: row.rowIndex, message })),
@@ -1561,10 +1681,20 @@ export class HermesWorkflowService {
     linkCheck.errors.forEach((issue) =>
       errors.push({ rowId: issue.rowId, rowIndex: issue.rowIndex, message: issue.message }),
     );
+    const reconcile = draft.reconcile;
+    const matchedRowIds = new Set((reconcile?.matched || []).map((match) => match.rowId));
+    for (const match of reconcile?.matched || [])
+      for (const message of match.errors)
+        errors.push({ rowId: match.rowId, rowIndex: match.rowIndex, message });
+    for (const leftover of reconcile?.leftovers || [])
+      for (const message of leftover.errors)
+        errors.push({ rowId: "", message: `${leftover.entry.label || leftover.entry.description} (${leftover.entry.date}): ${message}` });
     const selectedRowIds = new Set(selectedRows.map((row) => row.id));
+    // A matched row's proposals don't matter: the logged entry keeps its classification.
     const highImpact = draft.proposals.filter(
       (proposal) =>
         selectedRowIds.has(proposal.draftRowId) &&
+        !matchedRowIds.has(proposal.draftRowId) &&
         proposal.status === "proposed" &&
         (proposal.proposedLinkage ||
           proposal.proposedTripEntryType === "reimbursement" ||
@@ -1607,7 +1737,18 @@ export class HermesWorkflowService {
         unknownAccountIdentifiers: distinctAccountIdentifiers.filter(
           (value) => !knownIdentifiers.has(value),
         ),
+        ...(reconcile ? { reconcile: reconcile.summary } : {}),
       },
+      ...(reconcile
+        ? {
+            reconcile: {
+              ...reconcile.summary,
+              amountWarnings: reconcile.matched
+                .filter((match) => match.warnings.length)
+                .map((match) => ({ rowId: match.rowId, rowIndex: match.rowIndex, transactionId: match.transactionId, warnings: match.warnings })),
+            },
+          }
+        : {}),
     };
   }
 
@@ -1623,13 +1764,22 @@ export class HermesWorkflowService {
     const selected = draft.rows
       .filter((row) => row.selected)
       .map((row) => row.currentPayload as Record<string, unknown>);
-    const duplicates =
+    const found =
       draft.mode === "main"
         ? await TransactionService.checkImport(
             userId,
             selected.map(materializeDraftTransaction) as never[],
           )
         : { duplicates: [], cleanCount: selected.length };
+    // A matched row confirms its logged entry instead of adding a row, so it can't duplicate one.
+    const matchedRowIds = new Set((draft.reconcile?.matched || []).map((match) => match.rowId));
+    const selectedRowsList = draft.rows.filter((row) => row.selected);
+    const duplicates = {
+      ...found,
+      duplicates: found.duplicates.filter(
+        (item) => !matchedRowIds.has(selectedRowsList[item.index]?.id),
+      ),
+    };
     const validationHash = hashValue({
       draftId,
       draftVersion: draft.version,
@@ -1641,6 +1791,7 @@ export class HermesWorkflowService {
           payload: row.currentPayload,
         })),
       duplicates: duplicates.duplicates.map((item) => item.index),
+      reconcile: reconcileSignature(draft.reconcile),
     });
     const expiresAt = new Date(Date.now() + COMMIT_TOKEN_TTL_MS);
     const confirmationToken = createCommitToken(
@@ -1651,6 +1802,7 @@ export class HermesWorkflowService {
         validationHash,
         expiresAt: expiresAt.toISOString(),
         nonce: randomBytes(16).toString("base64url"),
+        reconcileHash: hashValue(reconcileSignature(draft.reconcile)),
       },
       commitSecret(),
     );
@@ -1723,6 +1875,30 @@ export class HermesWorkflowService {
       filename: draft.sourceFilename,
       validation: await this.prepareCommit(userId, draft.id, actor, draftIds),
     })));
+    // Two statements reviewed together can't both confirm one logged entry.
+    const matchedBy = new Map<string, string>();
+    for (const draft of drafts) {
+      for (const match of draft.reconcile?.matched || []) {
+        const other = matchedBy.get(match.transactionId);
+        if (!other) {
+          matchedBy.set(match.transactionId, draft.sourceFilename);
+          continue;
+        }
+        const item = validations.find((entry) => entry.draftId === draft.id)!;
+        item.validation = {
+          ...item.validation,
+          valid: false,
+          errors: [
+            ...item.validation.errors,
+            {
+              rowId: match.rowId,
+              rowIndex: match.rowIndex,
+              message: `Matches the same logged entry as a row of ${other}; unmatch one of them.`,
+            },
+          ],
+        };
+      }
+    }
     const savedDuplicates: DuplicateFinding[] = validations.flatMap(({ draftId, validation }) => {
       const draft = drafts.find((item) => item.id === draftId)!;
       const selected = draft.rows.filter((row) => row.selected);
@@ -1805,6 +1981,7 @@ export class HermesWorkflowService {
           draftVersion: number;
           validationHash: string;
           tokenHash: string;
+          reconcile: ReconcilePlan | null;
         }> = [];
         for (const item of items) {
           const payload = verifyCommitToken(item.confirmationToken, commitSecret());
@@ -1831,11 +2008,22 @@ export class HermesWorkflowService {
               { status: 409 },
             );
           }
+          // Entries logged or confirmed since validation change what the commit would do.
+          if (
+            payload.reconcileHash !== undefined &&
+            payload.reconcileHash !== hashValue(reconcileSignature(draft.reconcile))
+          ) {
+            throw Object.assign(
+              new Error(`${draft.sourceFilename}: logged entries changed since this import was checked. Review the matches and validate again.`),
+              { status: 409 },
+            );
+          }
           verified.push({
             draftId: item.draftId,
             draftVersion: payload.draftVersion,
             validationHash: payload.validationHash,
             tokenHash,
+            reconcile: draft.reconcile,
           });
         }
         for (const item of verified) {
@@ -1886,10 +2074,16 @@ export class HermesWorkflowService {
           );
           let result: Record<string, unknown>;
           if (draft.mode === "main") {
+            const plan = item.reconcile;
+            // Matched rows confirm their logged entries; only the rest are saved as new rows.
+            const matchedRowIds = new Set((plan?.matched || []).map((match) => match.rowId));
+            const createIndices = selectedIndices.filter(
+              (index) => !matchedRowIds.has(draft.rows[index].id),
+            );
             const committed = await TransactionService.commitImport(
               userId,
               rows.map(materializeDraftTransaction) as never[],
-              selectedIndices,
+              createIndices,
               {
                 filename: draft.sourceFilename,
                 fileType:
@@ -1903,15 +2097,41 @@ export class HermesWorkflowService {
                 `${draft.sourceFilename}: ${committed.error || "Import commit failed"}`,
               );
             (committed.transactionIds || []).forEach((transactionId, position) =>
-              rowToTransaction.set(draft.rows[selectedIndices[position]].id, transactionId),
+              rowToTransaction.set(draft.rows[createIndices[position]].id, transactionId),
             );
+            let reconciled: Record<string, unknown> | undefined;
+            if (plan) {
+              const accounts = new Map(
+                (await reconcileRows(tx, userId, draft)).map((row) => [row.rowId, row.accountId]),
+              );
+              const payloadById = new Map(draft.rows.map((row, index) => [row.id, rows[index]]));
+              try {
+                const applied = await applyReconcilePlan(tx, userId, plan, {
+                  batchId: committed.batchId || null,
+                  draft,
+                  payloadOf: (rowId) => payloadById.get(rowId) || {},
+                  accountOf: (rowId) => accounts.get(rowId) || null,
+                });
+                reconciled = applied;
+              } catch (error) {
+                if (error instanceof ReconcileError)
+                  throw Object.assign(new Error(error.message), { status: error.status });
+                throw error;
+              }
+              // The staged row's links move to the entry it confirms.
+              for (const match of plan.matched) rowToTransaction.set(match.rowId, match.transactionId);
+            }
             const tripAssignments = await applyTripAssignments(
               tx,
               userId,
               selectedIndices.map((index) => rows[index]),
-              committed.transactionIds || [],
+              selectedIndices.map((index) => rowToTransaction.get(draft.rows[index].id) || ""),
             );
-            result = { ...(committed as unknown as Record<string, unknown>), tripAssignments };
+            result = {
+              ...(committed as unknown as Record<string, unknown>),
+              tripAssignments,
+              ...(reconciled ? { reconciled } : {}),
+            };
           } else {
             if (!draft.targetTripId)
               throw new Error("Trip draft has no target trip");

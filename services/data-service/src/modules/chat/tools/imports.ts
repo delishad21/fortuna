@@ -12,6 +12,7 @@ import {
   draftRowsPage,
   draftSummary,
   inspectSchema,
+  reconcileView,
   wantsRows,
 } from "./draft-inspect";
 import { rowSchema } from "./documents";
@@ -190,8 +191,84 @@ export class ImportTools {
       userId,
       input.draftId,
     )) as unknown as InspectableDraft;
+    if (input.reconcile)
+      return {
+        draftId: draft.id,
+        version: draft.version,
+        reconcile: draft.reconcile ? reconcileView(draft.reconcile) : null,
+        ...(draft.reconcile ? {} : { note: "Nothing is logged for this statement's accounts and period: committing is a plain import." }),
+      };
     if (wantsRows(input)) return draftRowsPage(draft, input);
     return this.summary(userId, draft);
+  }
+  /**
+   * Change how a staged statement reconciles against logged entries: match a
+   * row to another entry, to none, or back to automatic, and choose what
+   * happens to entries the statement doesn't show. Nothing is committed.
+   */
+  async reconcile(context: ChatContext, raw: unknown) {
+    const input = z
+      .object({
+        draftId: idSchema,
+        expectedVersion: z.number().int().positive(),
+        rows: z
+          .array(z.object({ rowId: idSchema, transactionId: z.union([idSchema, z.literal("auto"), z.null()]) }).strict())
+          .max(STAGED_EDIT_LIMIT)
+          .optional(),
+        entries: z
+          .array(
+            z
+              .object({
+                transactionId: idSchema,
+                action: z.enum(["keep", "delete", "move"]),
+                accountId: idSchema.nullable().optional(),
+                accountIdentifier: z.string().trim().min(1).max(120).optional(),
+              })
+              .strict(),
+          )
+          .max(STAGED_EDIT_LIMIT)
+          .optional(),
+      })
+      .strict()
+      .refine((v) => v.rows?.length || v.entries?.length, "Send rows or entries to change")
+      .parse(raw);
+    // get_context names accounts by identifier; the plan's reasons by account id.
+    const identifiers = [
+      ...new Set((input.entries || []).flatMap((e) => (e.accountIdentifier && !e.accountId ? [e.accountIdentifier] : []))),
+    ];
+    const mapped = identifiers.length
+      ? await this.db.accountIdentifier.findMany({
+          where: { userId: context.userId, accountIdentifier: { in: identifiers } },
+          select: { accountIdentifier: true, accountId: true },
+        })
+      : [];
+    const entries = input.entries?.map(({ accountIdentifier, ...entry }) => {
+      if (entry.accountId || !accountIdentifier) return entry;
+      const found = mapped.find((m) => m.accountIdentifier === accountIdentifier);
+      if (!found?.accountId) throw new ChatError(404, `Unknown account "${accountIdentifier}"; use one from get_context`);
+      return { ...entry, accountId: found.accountId };
+    });
+    try {
+      const result = await withDatabase(this.db, () =>
+        workflow.reconcileDraft(context.userId, input.draftId, { ...input, entries }, actor),
+      );
+      return {
+        draftId: result.draftId,
+        version: result.version,
+        reconcile: result.reconcile ? reconcileView(result.reconcile, 50) : null,
+        committed: false,
+      };
+    } catch (error) {
+      const status = (error as { status?: number }).status;
+      if (status && status < 500)
+        throw new ChatError(
+          status,
+          (error as Error).message === "Import draft is stale"
+            ? "Import draft is stale. Inspect it again for the current version."
+            : (error as Error).message,
+        );
+      throw error;
+    }
   }
   private async summary(userId: string, draft: InspectableDraft) {
     const [hint, gmail] = await Promise.all([

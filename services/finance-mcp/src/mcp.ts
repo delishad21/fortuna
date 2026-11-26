@@ -560,7 +560,7 @@ export function createFinanceMcpServer(identity: AccountIdentity) {
     "get_import_draft",
     {
       title: "Get import draft",
-      description: "Return persisted rows, versions, proposals, and jobs for one account-owned draft.",
+      description: "Return persisted rows, versions, proposals, and jobs for one account-owned draft. A main-ledger draft whose account and period already have logged entries (assistant, manual or mobile entries not yet confirmed by a statement) also returns reconcile: matched rows (committing confirms the logged entry with the bank's data instead of adding a row), gaps (added as new rows) and leftovers (logged entries the statement lacks, with reasons pending, possible_duplicate, wrong_amount or wrong_account, and the action chosen); each row carries its reconcile status. reconcile is null for a plain import.",
       inputSchema: z.object({ draftId: z.string().min(1) }),
     },
     // data-service adds a paylahHint while the draft has PayLah rows left to name.
@@ -575,6 +575,21 @@ export function createFinanceMcpServer(identity: AccountIdentity) {
       inputSchema: z.object({ draftId: z.string(), rowId: z.string(), expectedVersion: z.number().int().positive(), currentPayload: z.record(z.string(), z.unknown()).optional(), selected: z.boolean().optional(), reviewStatus: z.enum(["unresolved", "proposed", "auto_applied", "accepted", "edited", "rejected"]).optional() }),
     },
     async ({ draftId, rowId, ...body }) => result(await dataServiceRequest(`/api/agent/drafts/${encodeURIComponent(draftId)}/rows/${encodeURIComponent(rowId)}`, { method: "PATCH", body: JSON.stringify(body) })),
+  );
+
+  server.registerTool(
+    "reconcile_import_draft",
+    {
+      title: "Change how a draft reconciles against logged entries",
+      description: "Override get_import_draft's reconcile plan, with optimistic draft versioning. rows sets a statement row's match: a logged entry's transactionId (also across accounts: it moves to the statement's account on commit), null for no match (the row is added as a new transaction), or \"auto\" to let Fortuna match it again. entries sets what happens on commit to a logged entry the statement doesn't show: keep (default), delete, or move with accountId. Nothing changes in the ledger until the draft is committed; delete only with the user's explicit confirmation.",
+      inputSchema: z.object({
+        draftId: z.string(),
+        expectedVersion: z.number().int().positive(),
+        rows: z.array(z.object({ rowId: z.string(), transactionId: z.string().nullable() })).max(500).optional(),
+        entries: z.array(z.object({ transactionId: z.string(), action: z.enum(["keep", "delete", "move"]), accountId: z.string().nullable().optional() })).max(500).optional(),
+      }),
+    },
+    async ({ draftId, ...body }) => result(await dataServiceRequest(`/api/agent/drafts/${encodeURIComponent(draftId)}/reconcile`, { method: "PATCH", body: JSON.stringify(body) })),
   );
 
   server.registerTool(
