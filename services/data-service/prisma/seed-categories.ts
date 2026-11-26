@@ -4,13 +4,13 @@ const prisma = new PrismaClient();
 
 const DEFAULT_CATEGORIES = [
   { name: "Food & Dining", color: "#ef4444", icon: "utensils" },
-  { name: "Transportation", color: "#3b82f6", icon: "car" },
+  { name: "Transportation", color: "#3b82f6", icon: "bus" },
   { name: "Shopping", color: "#8b5cf6", icon: "shopping-bag" },
   { name: "Entertainment", color: "#ec4899", icon: "film" },
-  { name: "Bills & Utilities", color: "#f97316", icon: "file-text" },
-  { name: "Income", color: "#22c55e", icon: "dollar-sign" },
-  { name: "Healthcare", color: "#14b8a6", icon: "heart" },
-  { name: "Education", color: "#f59e0b", icon: "book" },
+  { name: "Bills & Utilities", color: "#f97316", icon: "zap" },
+  { name: "Income", color: "#22c55e", icon: "banknote" },
+  { name: "Healthcare", color: "#14b8a6", icon: "heart-pulse" },
+  { name: "Education", color: "#f59e0b", icon: "graduation-cap" },
   { name: "Personal Care", color: "#a855f7", icon: "user" },
   { name: "Housing", color: "#06b6d4", icon: "home" },
 ];

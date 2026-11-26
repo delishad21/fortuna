@@ -33,9 +33,9 @@ import { TripRepository } from "../trips/trips.repository";
 
 // Reserved category names and colors
 const RESERVED_CATEGORIES = {
-  INTERNAL: { name: "Internal", color: "#9ca3af", icon: "arrow-left-right" },
+  INTERNAL: { name: "Internal", color: "#9ca3af", icon: "arrow-right-left" },
   REIMBURSEMENT: { name: "Reimbursement", color: "#22c55e", icon: "receipt" },
-  UNCATEGORIZED: { name: "Uncategorized", color: "#9ca3af", icon: "label" },
+  UNCATEGORIZED: { name: "Uncategorized", color: "#9ca3af", icon: "tag" },
 } as const;
 
 export interface ImportResult {

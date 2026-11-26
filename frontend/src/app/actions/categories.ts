@@ -3,12 +3,18 @@
 import { auth } from "@/lib/actionAuth";
 import { prisma } from "@/lib/db/client";
 import { TRIP_CATEGORY_DEFINITIONS } from "@/lib/tripCategories";
+import { CATEGORY_ICONS, CATEGORY_NAME_ICONS } from "@/lib/categoryIcons";
 
 export interface Category {
   id: string;
   name: string;
   color: string;
+  /** A key from shared/categoryIcons.ts (or an older name it resolves). */
+  icon: string;
 }
+
+const knownIcon = (icon: string | undefined) =>
+  icon !== undefined && CATEGORY_ICONS.some((option) => option.key === icon) ? icon : undefined;
 
 const TRIP_CATEGORY_NAME_SET = new Set(
   TRIP_CATEGORY_DEFINITIONS.map((item) => item.name.toLowerCase()),
@@ -33,7 +39,7 @@ async function ensureTripCategories(userId: string): Promise<void> {
           name: item.name,
           color: item.color,
           isDefault: true,
-          icon: "trip",
+          icon: CATEGORY_NAME_ICONS[item.name.toLowerCase()] || "tag",
         },
       }),
     ),
@@ -69,6 +75,7 @@ export async function getCategories(options?: {
       id: true,
       name: true,
       color: true,
+      icon: true,
     },
     orderBy: {
       name: "asc",
@@ -81,6 +88,7 @@ export async function getCategories(options?: {
 export async function createCategory(
   name: string,
   color: string,
+  icon?: string,
 ): Promise<Category> {
   const session = await auth();
 
@@ -99,11 +107,14 @@ export async function createCategory(
       userId: session.user.id,
       name,
       color,
+      // Unset ("category") shows the icon for the name, if it's a known one.
+      ...(knownIcon(icon) ? { icon } : {}),
     },
     select: {
       id: true,
       name: true,
       color: true,
+      icon: true,
     },
   });
 
@@ -145,6 +156,7 @@ export async function updateCategory(
   categoryId: string,
   name: string,
   color: string,
+  icon?: string,
 ): Promise<Category> {
   const session = await auth();
 
@@ -187,11 +199,13 @@ export async function updateCategory(
     data: {
       name: nextName,
       color,
+      ...(knownIcon(icon) ? { icon } : {}),
     },
     select: {
       id: true,
       name: true,
       color: true,
+      icon: true,
     },
   });
 
