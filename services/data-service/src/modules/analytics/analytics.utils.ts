@@ -9,8 +9,9 @@ export interface AnalyticsTransaction {
   amountOut?: AmountLike;
   linkage?: unknown;
   categoryId?: string | null;
-  category?: { id: string; name: string; color: string } | null;
+  category?: { id: string; name: string; color: string; icon?: string | null } | null;
   accountIdentifier?: string | null;
+  imageId?: string | null;
   source?: string | null;
   importBatchId?: string | null;
 }
@@ -168,8 +169,9 @@ export const serializeTransaction = (tx: AnalyticsTransaction) => ({
   amountIn: getEffectiveIn(tx),
   amountOut: getEffectiveOut(tx),
   category: tx.category
-    ? { id: tx.category.id, name: tx.category.name, color: tx.category.color }
+    ? { id: tx.category.id, name: tx.category.name, color: tx.category.color, icon: tx.category.icon ?? null }
     : null,
+  imageId: tx.imageId ?? null,
   merchant: normalizeMerchant(tx).name,
   merchantKey: normalizeMerchant(tx).key,
 });

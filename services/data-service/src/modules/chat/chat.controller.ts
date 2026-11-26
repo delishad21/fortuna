@@ -21,6 +21,7 @@ import { timingSafeEqual } from "node:crypto";
 import { z, ZodError } from "zod";
 import { ChatService } from "./chat.service";
 import { ChatError, idSchema } from "./contracts";
+import { transactionDisplayInclude } from "../transactions/transactions.repository";
 export function createChatRouter(
   db: PrismaClient,
   options: { mail?: MailConnectionService } = {},
@@ -118,7 +119,7 @@ export function createChatRouter(
     route(async (req, res) => {
       const item = await db.transaction.findFirst({
         where: { id: idSchema.parse(req.params.id), userId: res.locals.userId },
-        include: { category: true },
+        include: transactionDisplayInclude,
       });
       if (!item) throw new ChatError(404, "Transaction not found");
       return res.json(item);
