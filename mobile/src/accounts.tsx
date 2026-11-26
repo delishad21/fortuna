@@ -47,7 +47,7 @@ const checkColor = (color: string) => {
   if (!/^#[\da-f]{6}$/i.test(color)) throw new Error("Use a six-digit hex color, such as #5750F1");
 };
 
-function AccountThumb({ account, size = 36 }: { account: Account; size?: number }) {
+export function AccountThumb({ account, size = 36 }: { account: Account; size?: number }) {
   return (
     <RemoteImage
       path={account.imageUrl}
