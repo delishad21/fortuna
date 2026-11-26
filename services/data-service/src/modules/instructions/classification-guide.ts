@@ -15,12 +15,12 @@ const tools = {
     createInstruction: "create_classification_instruction",
     editInstruction: "update_classification_instruction (pass enabled: false to disable one)",
     precedents:
-      "find_similar_entries for daily entries (find_similar_transactions while working on a staged import): past labels and categories for the same merchant, on the same account, are the strongest evidence.",
+      "find_similar_entries for daily entries, with the merchant, amount and card (find_similar_transactions while working on a staged import): recent reviewed entries for the same merchant on the same card come first and are the strongest evidence. Send what you decided as create_transaction's decision (category, transactionType, label, merchant, reason, confidence, precedentIds).",
     learned: "list_classification_patterns",
     ask:
-      "Leave the entry to_review and ask the user in the review, naming the choices (e.g. 'Madeline's or yours?'); don't correct it or mark it reviewed until they answer.",
+      "Send questions with the entry (create_transaction's questions: field, prompt, options), naming the choices (e.g. 'Madeline's or yours?'); they show in the review card and on Fortuna's To review screen, and the answer comes back through answer_question. Don't correct the entry or mark it reviewed until the user answers.",
     createRule:
-      "correct_transactions with createRule { matchValue, confirmed: true } (matchValue must appear in every corrected description), or create_import_rule_disabled for the user to turn on.",
+      "create_rule with origin assistant_on_request (the user asked; reason is their words) or assistant_detected (reason, and exampleIds of 3+ consistent reviewed entries or a recurringBill); scope it with account or card and give a fixed bill amountMin/amountMax. No confirmed flag is needed.",
     reimbursable:
       "say it in the label the way past entries do (e.g. 'MRT/Bus (Madeline)') until Fortuna has a reimbursable field on entries.",
   },
@@ -55,11 +55,11 @@ export function classificationGuide(audience: ClassificationGuideAudience = "mcp
     decisionOrder: [
       {
         step: "structural",
-        what: "Fortuna detects these in code before anything else: internal transfers between the user's own accounts (PayLah top-ups and max-outs, Multiplier pairs), credit-card bill payments (both sides are internal transfers, not bills), and channel rules (e.g. UOB BUS/MRT is transport). Leave them as they are.",
+        what: "Fortuna detects these in code before anything else: internal transfers between the user's own accounts (PayLah top-ups and max-outs, Multiplier pairs), credit-card bill payments (both sides are internal transfers, not bills), and channel rules (e.g. UOB card BUS/MRT is Internal: SimplyGo holds the trips). Leave them as they are.",
       },
       {
         step: "rules",
-        what: "Then the user's import rules, by account or card whatever the source (a statement row and an alert email for the same card come out the same). A rule that decided stands; when it is wrong, correct the entry so the correction is recorded, and say which rule chose.",
+        what: "Then the user's import rules, by account or card whatever the source (a statement row and an alert email for the same card come out the same). A rule that decided stands: when your decision disagrees, the rule's result is kept and the entry gets a question for the user; when the rule is wrong, correct the entry so the correction is recorded, and say which rule chose. A rule whose amount range the entry is outside doesn't apply and asks instead.",
       },
       {
         step: "judgement",
@@ -67,7 +67,7 @@ export function classificationGuide(audience: ClassificationGuideAudience = "mcp
       },
       {
         step: "fallback",
-        what: `When you can't decide and nobody is there to ask, Fortuna's learned patterns and history fill in (${t.learned}); the entry stays to_review.`,
+        what: `Only when you send no decision at all, Fortuna's learned patterns and history fill in (${t.learned}); the entry stays to_review.`,
       },
     ],
     askInsteadOfGuessing: {
@@ -98,7 +98,7 @@ export function classificationGuide(audience: ClassificationGuideAudience = "mcp
         "A known recurring bill (the same payee and about the same amount every month).",
       ],
       notWhen: "A merchant whose classification depends on who, why or how much (shared meals, Madeline's journeys): that is an instruction or a precedent, not a rule.",
-      tell: "Say in the next review which rule you made, with what it matches and sets, so the user can undo it.",
+      tell: "Say in the next review which rule you made, with what it matches and sets, so the user can undo it (rules you detected also come back in the review queue's newRules, with Undo).",
     },
     reimbursable: {
       default: "When someone pays an entry back (e.g. Madeline), it keeps its real category; the person pays back the full amount by default.",
