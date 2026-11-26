@@ -98,7 +98,10 @@ Scopes (Settings → API Tokens, web or phone):
 The tools call the data service. The same routes are reachable through the
 frontend (`http://127.0.0.1:3040` on the home server) with
 `Authorization: Bearer pfa_…`; the frontend forwards only
-`/api/agent/transactions/*` and `/api/agent/analytics/spending`.
+`/api/agent/transactions/*`, `/api/agent/analytics/spending` and
+`/api/agent/analytics/month-to-date`. The web and phone apps' To review
+screen calls the same `/review` routes (as the trusted frontend), so twee and
+Fortuna work through one queue.
 
 | Method | Path | Scope | |
 |---|---|---|---|
@@ -116,6 +119,11 @@ frontend (`http://127.0.0.1:3040` on the home server) with
 | `POST` | `/api/agent/transactions/review/status` | review | `{ ids, status: "reviewed" \| "to_review" }` |
 | `POST` | `/api/agent/transactions/review/accounts/:account/confirm` | review | `{ label? }` |
 | `POST` | `/api/agent/transactions/review/accounts/:account/merge` | review | `{ into, confirmed: true }`; only for `autoCreated` accounts. |
+| `GET` | `/api/agent/analytics/spending?groupBy=category\|month\|merchant\|account&from=&to=&category=&limit=` | analytics:read | Money out per group. |
+| `GET` | `/api/agent/analytics/month-to-date?today=` | analytics:read | The dashboard's month so far: `spent`, `todaySpent`, `weekSpent` (from Monday), `previous.spentSameDay` and `spentTotal`, `projected` (month-end at this pace) and `categories`. `today` defaults to today in Singapore. |
+
+`account` in the review routes is an Account id, a statement identifier or an
+account name; accounts without a statement identifier are found by id or name.
 
 Body for `POST /api/agent/transactions` (`PATCH` takes the same fields, all
 optional, without `externalId`):

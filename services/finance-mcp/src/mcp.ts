@@ -388,7 +388,7 @@ export function createFinanceMcpServer(identity: AccountIdentity) {
         status: z.enum(["to_review", "reviewed", "all"]).default("to_review"),
         reasons: z.array(z.enum(["no_rule_matched", "assistant_category", "new_account", "possible_duplicate"])).optional(),
         entrySource: z.array(z.enum(["assistant", "manual", "statement", "mobile"])).optional(),
-        account: z.string().max(120).optional().describe("Account identifier"),
+        account: z.string().max(120).optional().describe("Account id or statement identifier"),
         dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         limit: z.number().int().min(1).max(200).default(50),
