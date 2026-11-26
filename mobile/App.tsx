@@ -21,7 +21,9 @@ import { DMSans_600SemiBold } from "@expo-google-fonts/dm-sans/600SemiBold";
 import { Montserrat_700Bold } from "@expo-google-fonts/montserrat/700Bold";
 import { Montserrat_800ExtraBold } from "@expo-google-fonts/montserrat/800ExtraBold";
 import { DMMono_400Regular } from "@expo-google-fonts/dm-mono/400Regular";
-import { ApiProvider, useApi, normalizeServer } from "./src/api";
+import { ApiProvider, useApi, useResource, normalizeServer } from "./src/api";
+import { WorkflowProvider, useWorkflow } from "./src/workflow";
+import { ReviewScreen } from "./src/review";
 import { BRAND, Button, Form, styles, ThemeProvider, Txt, useTheme } from "./src/ui";
 import { HomeScreen, AnalyticsScreen } from "./src/home";
 import { AccountsScreen, AccountScreen } from "./src/accounts";
@@ -82,8 +84,50 @@ const TAB_ICONS: Record<string, [string, string]> = {
   Trips: ["airplane", "airplane-outline"],
   Chat: ["chatbubble-ellipses", "chatbubble-ellipses-outline"],
 };
+const TAB_SCREENS: Record<string, React.ComponentType<any>> = {
+  Home: HomeScreen,
+  Transactions: TransactionsScreen,
+  Import: ImportsScreen,
+  Trips: TripsScreen,
+  Chat: ChatScreen,
+};
+/** Opens the To review screen; shows how many entries wait. */
+function ReviewHeaderButton({ navigation }: any) {
+  const { colors } = useTheme();
+  const queue = useResource("getReviewQueue", { limit: 1 });
+  const count = queue.data?.total || 0;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={count ? `To review, ${count} waiting` : "To review"}
+      onPress={() => navigation.navigate("Review")}
+      style={{ padding: 10 }}
+    >
+      <Ionicons name="checkmark-done-outline" size={22} color={colors.text} />
+      {count > 0 && (
+        <View
+          style={{
+            position: "absolute",
+            top: 4,
+            right: 2,
+            minWidth: 16,
+            paddingHorizontal: 4,
+            borderRadius: 8,
+            backgroundColor: colors.amber,
+            alignItems: "center",
+          }}
+        >
+          <Txt bold size={10} style={{ color: "#FFFFFF" }}>
+            {count > 99 ? "99+" : count}
+          </Txt>
+        </View>
+      )}
+    </Pressable>
+  );
+}
 function MainTabs() {
   const { colors } = useTheme();
+  const { tabOrder } = useWorkflow();
   return (
     <Tabs.Navigator
       screenOptions={({ route, navigation }) => ({
@@ -93,6 +137,7 @@ function MainTabs() {
         headerTitleStyle: { fontFamily: "DMSans_600SemiBold", fontSize: 18, color: colors.text },
         headerRight: () => (
           <View style={{ flexDirection: "row", paddingRight: 8 }}>
+            {route.name === "Home" && <ReviewHeaderButton navigation={navigation} />}
             {route.name === "Home" && (
               <Pressable
                 accessibilityRole="button"
@@ -131,11 +176,9 @@ function MainTabs() {
         ),
       })}
     >
-      <Tabs.Screen name="Home" component={HomeScreen} />
-      <Tabs.Screen name="Transactions" component={TransactionsScreen} />
-      <Tabs.Screen name="Import" component={ImportsScreen} />
-      <Tabs.Screen name="Trips" component={TripsScreen} />
-      <Tabs.Screen name="Chat" component={ChatScreen} />
+      {tabOrder.map((name) => (
+        <Tabs.Screen key={name} name={name} component={TAB_SCREENS[name]} />
+      ))}
     </Tabs.Navigator>
   );
 }
@@ -209,6 +252,7 @@ const SCREENS: Record<string, [React.ComponentType<any>, string]> = {
   ChatTransaction: [ChatTransactionScreen, "Transaction"],
   AIConnection: [AIConnectionScreen, "AI connection"],
   Analytics: [AnalyticsScreen, "Analytics"],
+  Review: [ReviewScreen, "To review"],
   Transaction: [TransactionScreen, "Transaction"],
   Split: [SplitScreen, "Split"],
   LinkPicker: [LinkPickerScreen, "Reimbursement links"],
@@ -310,7 +354,9 @@ export default function App() {
     <SafeAreaProvider>
       <ThemeProvider>
         <ApiProvider>
-          <Navigation />
+          <WorkflowProvider>
+            <Navigation />
+          </WorkflowProvider>
         </ApiProvider>
       </ThemeProvider>
     </SafeAreaProvider>

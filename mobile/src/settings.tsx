@@ -39,6 +39,8 @@ import {
 } from "./ui";
 import { accountDisplay } from "../../frontend/shared/accounts";
 import { CATEGORY_ICONS, categoryIconKey, categoryIonicon } from "../../frontend/shared/categoryIcons";
+import { WORKFLOW_OPTIONS } from "../../frontend/shared/workflow";
+import { useWorkflow } from "./workflow";
 
 const SCOPES = [
   "statements:write",
@@ -69,9 +71,42 @@ const DEFAULT_SCOPES = [
   "accounts:write",
 ];
 const TRIP_CATEGORY_NAMES = ["Flights", "Accommodation", "Attractions", "Fees"];
+/** "I mainly track daily" or "I mainly upload statements"; it only changes what comes first. */
+function WorkflowChoice() {
+  const { colors } = useTheme();
+  const workflow = useWorkflow();
+  return (
+    <Section
+      title="How you use Fortuna"
+      hint="This changes what the dashboard and tabs show first. Every screen stays available either way."
+    >
+      <Group>
+        {WORKFLOW_OPTIONS.map((option) => {
+          const on = workflow.chosen && workflow.mode === option.value;
+          return (
+            <ListItem
+              key={option.value}
+              icon={option.value === "daily" ? "today-outline" : "document-text-outline"}
+              title={option.label}
+              subtitle={option.description}
+              right={on ? <Ionicons name="checkmark" size={20} color={colors.purple} /> : undefined}
+              onPress={() =>
+                void workflow
+                  .choose(option.value)
+                  .then(() => toast("Saved"))
+                  .catch(notice)
+              }
+            />
+          );
+        })}
+      </Group>
+    </Section>
+  );
+}
 export function SettingsScreen({ navigation }: any) {
   const { signOut, session } = useApi();
   const { mode, setMode } = useTheme();
+  const workflow = useWorkflow();
   const user = useResource("getCurrentUser");
   const patterns = useResource("getClassificationPatterns");
   const u = user.data;
@@ -117,6 +152,12 @@ export function SettingsScreen({ navigation }: any) {
       </Section>
       <Section title="Preferences">
         <Group>
+          <ListItem
+            icon={workflow.mode === "daily" ? "today-outline" : "document-text-outline"}
+            title="How you use Fortuna"
+            subtitle={`${WORKFLOW_OPTIONS.find((o) => o.value === workflow.mode)?.label}${workflow.chosen ? "" : " (not chosen yet)"}`}
+            onPress={() => navigation.navigate("Preferences")}
+          />
           <ListItem icon="sparkles-outline" title="Auto-labeling & analytics" subtitle={u ? (u.autoLabelEnabled ? `Auto-apply at ${Math.round(u.autoLabelThreshold * 100)}% confidence` : "Suggestions only") : undefined} onPress={() => navigation.navigate("Preferences")} />
           <ListItem icon="chatbubbles-outline" title="AI connection" onPress={() => navigation.navigate("AIConnection")} />
         </Group>
@@ -214,6 +255,7 @@ export function PreferencesScreen() {
   return (
     <Screen>
       <Heading title="Preferences" />
+      <WorkflowChoice />
       <State {...user} />
       {user.data && (
         <>
