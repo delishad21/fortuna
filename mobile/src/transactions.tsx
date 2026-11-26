@@ -271,6 +271,10 @@ export function TransactionsScreen({ navigation, route }: any) {
   useEffect(() => {
     if (route.params?.search != null) setSearch(route.params.search);
   }, [route.params?.search]);
+  // The dashboard opens the list filtered, e.g. entries no statement has matched.
+  useEffect(() => {
+    if (route.params?.filters) setFilters(route.params.filters);
+  }, [route.params?.filters]);
   useEffect(() => {
     const timer = setTimeout(() => setQuery(search.trim()), 300);
     return () => clearTimeout(timer);

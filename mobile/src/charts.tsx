@@ -21,6 +21,10 @@ export type Datum = {
   /** Small line under the label in legends, e.g. a change vs last month. */
   note?: string;
   noteTone?: "red" | "green";
+  /** A period still running (the month so far): drawn lighter. */
+  partial?: boolean;
+  /** Where a running period is heading; a dashed outline above the bar. */
+  projected?: number | null;
 };
 const useWidth = () => {
   const [width, setWidth] = useState(0);
@@ -63,7 +67,7 @@ export function ColumnChart({
   const paired = data.some((d) => d.secondary != null);
   const max = Math.max(
     1,
-    ...data.map((d) => Math.max(Math.abs(d.value), Math.abs(d.secondary || 0))),
+    ...data.map((d) => Math.max(Math.abs(d.value), Math.abs(d.secondary || 0), Math.abs(d.projected || 0))),
   );
   const n = Math.max(1, data.length);
   const slot = width / n;
@@ -93,6 +97,7 @@ export function ColumnChart({
             <Txt mono size={13} style={{ color: paired ? main : colors.text }}>
               {primaryLabel ? `${primaryLabel} ` : ""}
               {money(current.value, currency)}
+              {current.partial ? " so far" : ""}
             </Txt>
           </View>
         </View>
@@ -128,6 +133,19 @@ export function ColumnChart({
                       fill={second}
                     />
                   )}
+                  {!!d.projected && d.projected > Math.abs(d.value) && (
+                    <Rect
+                      x={paired ? cx + 1 : cx - barW / 2}
+                      y={height - (Math.abs(d.projected) / max) * (height - 6)}
+                      width={barW}
+                      height={(Math.abs(d.projected) / max) * (height - 6)}
+                      rx={Math.min(5, barW / 2)}
+                      fill="none"
+                      stroke={d.color || main}
+                      strokeDasharray="3 3"
+                      strokeWidth={1}
+                    />
+                  )}
                   <Rect
                     x={paired ? cx + 1 : cx - barW / 2}
                     y={height - h}
@@ -135,6 +153,7 @@ export function ColumnChart({
                     height={h}
                     rx={Math.min(5, barW / 2)}
                     fill={d.color || main}
+                    fillOpacity={d.partial ? 0.55 : 1}
                   />
                 </G>
               );
