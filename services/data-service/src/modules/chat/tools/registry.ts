@@ -18,7 +18,7 @@ import { ApprovalService } from "../approvals.service";
 import { TransactionActions, json } from "./transactions";
 import { ReadTools } from "./read";
 import { documentDefinitions, executeDocumentTool } from "./documents";
-import { MemoryService, memoryDefinitions } from "../memories.service";
+import { executeInstructionTool, instructionDefinitions, instructionToolNames } from "./instructions";
 import { executeLedgerTool, ledgerDefinitions, ledgerToolNames } from "./ledger";
 import { executeRuleTool, ruleDefinitions, ruleToolNames } from "./import-rules";
 import {
@@ -231,8 +231,7 @@ export function createToolRegistry(
   });
   definitions.push(showComponentDefinition);
   definitions.push(...documentDefinitions);
-  definitions.push(...memoryDefinitions);
-  const memories = new MemoryService(db);
+  definitions.push(...instructionDefinitions);
   definitions.push(...workflowDefinitions);
   definitions.push(...mailDefinitions);
   definitions.push(...ledgerDefinitions);
@@ -313,35 +312,8 @@ export function createToolRegistry(
       const proposal = await approvals.proposeAction(context, action);
       return proposalResult(proposal);
     }
-    if (name === "remember") {
-      const note = await memories.save(context.userId, input);
-      return {
-        blocks: [
-          {
-            type: "memory",
-            id: note.id,
-            content: note.content,
-            action: "saved",
-          },
-        ],
-        model: { saved: note },
-      };
-    }
-    if (name === "forget") {
-      const { id } = z.object({ id: idSchema }).strict().parse(input);
-      const note = await memories.remove(context.userId, id);
-      return {
-        blocks: [
-          {
-            type: "memory",
-            id: note.id,
-            content: note.content,
-            action: "forgotten",
-          },
-        ],
-        model: { forgotten: note.id },
-      };
-    }
+    if (instructionToolNames.includes(name))
+      return executeInstructionTool(db, context, name, input);
     if (documentDefinitions.some((d) => d.name === name)) {
       const data = json(await executeDocumentTool(db, context, name, input));
       if (name === "stage_rows")
@@ -401,6 +373,7 @@ export function createToolRegistry(
         "inspect_staged_import",
         "inspect_statement",
         "get_paylah_email_guide",
+        "get_classification_guide",
         "search_paylah_emails",
         "find_similar_transactions",
         "get_reimbursement_candidates",

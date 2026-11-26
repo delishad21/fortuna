@@ -71,6 +71,9 @@ Scopes (Settings → API Tokens, web or phone):
   the guide and context.
 - `accounts:read` is enough to read what to watch (`get_entry_sources`);
   `accounts:write` manages sources through `/api/agent/sources`.
+- `instructions:read` lists the user's classification instructions (so do
+  `transactions:write`, `transactions:review` and `drafts:read`);
+  `instructions:write` adds, edits and disables them.
 
 ### MCP tools
 
@@ -88,6 +91,14 @@ Scopes (Settings → API Tokens, web or phone):
 - Context (either scope): `get_entry_accounts`, `get_entry_categories`,
   `get_entry_rules`, `find_similar_entries` (past labels and categories for the
   merchant, and possible duplicates when given a date and amount).
+- Classification: `get_classification_guide` (the one guide Hermes, twee and
+  Fortuna's own chat follow: decision order, when to ask, when to create a
+  rule, shared items, untrusted text), `list_classification_instructions`
+  (all, or only what applies to a transaction or an entry's facts),
+  `create_classification_instruction`, `update_classification_instruction`
+  (`enabled: false` disables). Entries from `list_review_queue`,
+  `create_transaction`, `get_transaction` and `update_transaction` come with
+  `instructions` and, per entry, `instructionIds`: only what applies.
 - Review (`transactions:review`): `list_review_queue`, `correct_transactions`
   (category, account or label on up to 200 rows; `createRule` with
   `confirmed: true` also saves an enabled import rule), `set_review_status`,
@@ -98,7 +109,8 @@ Scopes (Settings → API Tokens, web or phone):
 The tools call the data service. The same routes are reachable through the
 frontend (`http://127.0.0.1:3040` on the home server) with
 `Authorization: Bearer pfa_…`; the frontend forwards only
-`/api/agent/transactions/*`, `/api/agent/analytics/spending` and
+`/api/agent/transactions/*`, `/api/agent/instructions/*`,
+`/api/agent/classification-guide`, `/api/agent/analytics/spending` and
 `/api/agent/analytics/month-to-date`. The web and phone apps' To review
 screen calls the same `/review` routes (as the trusted frontend), so twee and
 Fortuna work through one queue.
@@ -119,6 +131,10 @@ Fortuna work through one queue.
 | `POST` | `/api/agent/transactions/review/status` | review | `{ ids, status: "reviewed" \| "to_review" }` |
 | `POST` | `/api/agent/transactions/review/accounts/:account/confirm` | review | `{ label? }` |
 | `POST` | `/api/agent/transactions/review/accounts/:account/merge` | review | `{ into, confirmed: true }`; only for `autoCreated` accounts. |
+| `GET` | `/api/agent/classification-guide` | `instructions:read`, either, or `drafts:read` | The classification guide. |
+| `GET` | `/api/agent/instructions?status=&transactionId=&accountId=&cardId=&accountIdentifier=&entrySource=&description=` | `instructions:read`, either, or `drafts:read` | Classification instructions; with an entry, only the active ones that apply to it. |
+| `POST` | `/api/agent/instructions` | `instructions:write` | `{ text, scope?, kind?, endsOn? }`; scope is `{type:"account",accountId}`, `{type:"card",cardId}`, `{type:"entry_source",entrySource}` or `{type:"merchant",pattern}`. |
+| `PATCH` | `/api/agent/instructions/:id` | `instructions:write` | Any of `text`, `scope`, `kind`, `endsOn`, `enabled`. |
 | `GET` | `/api/agent/analytics/spending?groupBy=category\|month\|merchant\|account&from=&to=&category=&limit=` | analytics:read | Money out per group. |
 | `GET` | `/api/agent/analytics/month-to-date?today=` | analytics:read | The dashboard's month so far: `spent`, `todaySpent`, `weekSpent` (from Monday), `previous.spentSameDay` and `spentTotal`, `projected` (month-end at this pace) and `categories`. `today` defaults to today in Singapore. |
 

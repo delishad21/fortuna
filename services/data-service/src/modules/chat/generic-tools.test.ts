@@ -12,7 +12,9 @@ import { findStagedDuplicates } from "../imports/staged-duplicates";
 import { ReviewService } from "./reviews.service";
 import { ComponentTools } from "./tools/components";
 import { ReadTools } from "./tools/read";
-import { MEMORY_LIMIT, MemoryService } from "./memories.service";
+import { InstructionService } from "../instructions/instructions.service";
+import { INSTRUCTION_LIMIT } from "../instructions/instructions";
+import { classificationGuide } from "../instructions/classification-guide";
 import { RunRepository } from "./run.repository";
 import { executeRun } from "./runner";
 import { ChatProvider, ProviderInput } from "./providers/provider";
@@ -509,46 +511,57 @@ test("comparison totals labelled series and tracks a running monthly difference"
     );
   }));
 
-test("memories are owned, capped, editable and given to every run", () =>
+test("the memory tools write classification instructions: owned, capped, editable, given to every run", () =>
   withChatDb(async (db) => {
     const { user, conversation, context } = await setup(db, "memory-owner");
     const other = await db.user.create({ data: { username: "memory-other" } });
     const tools = createToolRegistry(db);
     const saved = await tools.execute(context, "remember", {
-      content: "Simei to Townsville Pr Sch journeys are my partner's",
+      text: "Simei to Townsville Pr Sch journeys are my partner's",
+      scope: { type: "merchant", pattern: "SimplyGo" },
     });
     assert.deepEqual(
       saved.blocks.map((b: any) => [b.type, b.action]),
       [["memory", "saved"]],
     );
     const id = (saved.model as any).saved.id;
-    const service = new MemoryService(db);
-    await service.save(user.id, {
-      id,
-      content: "Townsville journeys are hers",
-    });
+    const stored = await db.classificationInstruction.findUniqueOrThrow({ where: { id } });
+    assert.equal(stored.author, "fortuna_chat");
+    assert.equal(stored.merchantPattern, "SimplyGo");
+    await tools.execute(context, "remember", { id, text: "Townsville journeys are hers" });
+    const service = new InstructionService(db);
     assert.deepEqual(
-      (await service.list(user.id)).map((n) => n.content),
-      ["Townsville journeys are hers"],
+      (await service.list(user.id)).map((n) => [n.text, n.scope?.type]),
+      [["Townsville journeys are hers", "merchant"]],
     );
     await assert.rejects(
-      service.save(other.id, { id, content: "hijack" }),
+      service.update(other.id, id, { text: "hijack" }),
       /not found/,
     );
-    await assert.rejects(service.remove(other.id, id), /not found/);
-    await db.chatMemory.createMany({
-      data: Array.from({ length: MEMORY_LIMIT - 1 }, (_, i) => ({
+    await assert.rejects(
+      tools.execute({ ...context, userId: other.id }, "forget", { id }),
+      /not found/,
+    );
+    await db.classificationInstruction.createMany({
+      data: Array.from({ length: INSTRUCTION_LIMIT - 1 }, (_, i) => ({
         userId: user.id,
-        content: `note ${i}`,
+        text: `note ${i}`,
+        author: "user",
       })),
     });
     await assert.rejects(
-      service.save(user.id, { content: "one too many" }),
-      /up to 100/,
+      tools.execute(context, "remember", { text: "one too many" }),
+      new RegExp(`up to ${INSTRUCTION_LIMIT}`),
     );
-    await db.chatMemory.deleteMany({
-      where: { userId: user.id, content: { startsWith: "note " } },
+    await db.classificationInstruction.deleteMany({
+      where: { userId: user.id, text: { startsWith: "note " } },
     });
+    // The chat reads the same guide finance-mcp serves, with its own tool names.
+    const guide = await tools.execute(context, "get_classification_guide", {});
+    assert.deepEqual(
+      (guide.model as any).decisionOrder.map((s: any) => s.step),
+      classificationGuide("mcp").decisionOrder.map((s) => s.step),
+    );
 
     // A run sees the notes first, and image attachments still land on their own message.
     await db.chatConnection.create({
@@ -603,30 +616,31 @@ test("memories are owned, capped, editable and given to every run", () =>
     await executeRun(db, run, provider, new AbortController().signal);
     assert.equal(seen.length, 2);
     const notes = JSON.parse(seen[0].content);
-    assert.equal(notes.type, "saved_notes");
-    // A note scoped to one task must not rescope a general question.
-    assert.match(
-      notes.note,
-      /only when the current request is about what it covers/,
-    );
-    assert.match(
-      notes.note,
-      /never narrows, filters or rescopes a general question/,
-    );
-    assert.match(notes.note, /mention the note that might be relevant/);
-    assert.deepEqual(notes.notes, [
-      { id, content: "Townsville journeys are hers" },
+    assert.equal(notes.type, "classification_instructions");
+    // An instruction must not rescope a general question.
+    assert.match(notes.note, /never narrow, filter or rescope a general question/);
+    assert.match(notes.note, /answer as asked and mention it/);
+    assert.deepEqual(notes.instructions, [
+      {
+        id,
+        text: "Townsville journeys are hers",
+        scope: { type: "merchant", pattern: "SimplyGo", label: 'Descriptions containing "SimplyGo"' },
+        kind: "lasting",
+      },
     ]);
     assert.equal(seen[0].images, undefined);
     assert.equal(seen[1].images?.[0].attachmentId, png.id);
 
+    // forget disables: every assistant stops getting it, and Settings can turn it back on.
     const forgotten = await tools.execute(context, "forget", { id });
     assert.deepEqual(
       forgotten.blocks.map((b: any) => b.action),
       ["forgotten"],
     );
-    assert.equal(await db.chatMemory.count({ where: { userId: user.id } }), 0);
+    assert.equal((await db.classificationInstruction.findUniqueOrThrow({ where: { id } })).enabled, false);
+    assert.equal(await service.forModel(user.id), null);
   }));
+
 
 test("reviews of staged rows read and write the draft, shared with the staged import page", () =>
   withChatDb(async (db) => {

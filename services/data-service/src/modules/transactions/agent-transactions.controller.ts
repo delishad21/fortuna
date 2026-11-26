@@ -22,6 +22,7 @@ import {
 } from "./entry-review";
 import { TransactionReview } from "./transaction-review.service";
 import { sourceWatchList } from "../sources/sources.service";
+import { withInstructions } from "../instructions/instructions.service";
 
 /**
  * Transactions written by the outside assistant. With transactions:write,
@@ -32,7 +33,8 @@ import { sourceWatchList } from "../sources/sources.service";
  * With transactions:review, /review lists the queue and corrects entries;
  * the apps' To review screen calls /review too, as the trusted frontend.
  * /guide and /context/* are open to either scope; /context/sources (what to
- * watch) also to accounts:read.
+ * watch) also to accounts:read. Entries come back with the classification
+ * instructions that apply to them (instructions, and instructionIds per entry).
  */
 export function createAgentTransactionsRouter(db: PrismaClient = prisma) {
   const router = Router();
@@ -73,6 +75,9 @@ export function createAgentTransactionsRouter(db: PrismaClient = prisma) {
       ? { externalId: ExternalIdSchema.parse(request.params.externalId) }
       : { id: request.params.id };
 
+  const withContext = <T extends { transaction?: unknown; transactions?: unknown }>(request: Request, body: T) =>
+    withInstructions(db, authenticatedUserId(request), body);
+
   router.get("/guide", either, handle(async (request, response) => {
     response.json(assistantEntryGuide(await sourceWatchList(prisma, authenticatedUserId(request))));
   }));
@@ -94,7 +99,8 @@ export function createAgentTransactionsRouter(db: PrismaClient = prisma) {
   }));
 
   router.get("/review", review, handle(async (request, response) => {
-    response.json(await TransactionReview.queue(authenticatedUserId(request), ReviewQueueQuerySchema.parse(request.query)));
+    const queue = await TransactionReview.queue(authenticatedUserId(request), ReviewQueueQuerySchema.parse(request.query));
+    response.json(await withContext(request, queue));
   }));
   router.post("/review/correct", review, handle(async (request, response) => {
     response.json(
@@ -128,7 +134,7 @@ export function createAgentTransactionsRouter(db: PrismaClient = prisma) {
     handle(async (request, response) => {
       const input = CreateEntrySchema.parse(request.body);
       const result = await AssistantEntries.upsert(authenticatedUserId(request), input, actor(request));
-      response.status(result.created ? 201 : 200).json(result);
+      response.status(result.created ? 201 : 200).json(await withContext(request, result));
     }),
   );
 
@@ -138,7 +144,7 @@ export function createAgentTransactionsRouter(db: PrismaClient = prisma) {
       write,
       handle(async (request, response) => {
         const transaction = await findEntry(authenticatedUserId(request), refOf(request));
-        response.json({ transaction: publicEntry(transaction) });
+        response.json(await withContext(request, { transaction: publicEntry(transaction) }));
       }),
     );
     router.patch(
@@ -147,7 +153,10 @@ export function createAgentTransactionsRouter(db: PrismaClient = prisma) {
       handle(async (request, response) => {
         const input = UpdateEntrySchema.parse(request.body);
         response.json(
-          await AssistantEntries.update(authenticatedUserId(request), refOf(request), input, actor(request)),
+          await withContext(
+            request,
+            await AssistantEntries.update(authenticatedUserId(request), refOf(request), input, actor(request)),
+          ),
         );
       }),
     );

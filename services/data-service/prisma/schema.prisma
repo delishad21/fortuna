@@ -90,7 +90,7 @@ model User {
   chatConnections ChatConnection[]
   mailConnection MailConnection?
   chatConversations ChatConversation[]
-  chatMemories ChatMemory[]
+  classificationInstructions ClassificationInstruction[]
   reimbursementLinks ReimbursementLink[]
 
   @@map("users")
@@ -440,6 +440,7 @@ model FinancialAccount {
   cards        Card[]
   transactions Transaction[]
   sources      TransactionSource[]
+  instructions ClassificationInstruction[]
 
   @@index([userId])
   @@index([userId, autoCreated])
@@ -464,6 +465,7 @@ model Card {
   image        StoredImage?     @relation("CardImage", fields: [imageId], references: [id], onDelete: SetNull)
   transactions Transaction[]
   sources      TransactionSource[]
+  instructions ClassificationInstruction[]
 
   @@unique([accountId, last4])
   @@index([userId, last4])
@@ -1024,15 +1026,41 @@ model ClassificationPattern {
 }
 
 /// Notes the user asked the chat assistant to remember across conversations.
-model ChatMemory {
-  id String @id @default(dbgenerated("gen_random_uuid()::text"))
-  userId String @map("user_id")
-  content String
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
-  @@index([userId, updatedAt])
-  @@map("chat_memories")
+// Johan's judgement about how to classify, in his words: one store shared by
+// Fortuna's chat agent, Hermes and twee (finance-mcp). An instruction can be
+// scoped to an account, a card, an entry source or a merchant pattern, so
+// each agent loads only what applies to the entry in front of it. A one-off
+// instruction stops being served after its end date. Replaces chat_memories.
+model ClassificationInstruction {
+  id              String    @id @default(dbgenerated("gen_random_uuid()::text"))
+  userId          String    @map("user_id")
+  text            String
+  /// account | card | entry_source | merchant; null applies everywhere.
+  scopeType       String?   @map("scope_type")
+  accountId       String?   @map("account_id")
+  cardId          String?   @map("card_id")
+  /// assistant | manual | statement | mobile, for scopeType entry_source.
+  entrySource     String?   @map("entry_source")
+  /// Text the description contains (case-insensitive), for scopeType merchant.
+  merchantPattern String?   @map("merchant_pattern")
+  /// lasting | one_off
+  kind            String    @default("lasting")
+  /// Last day a one-off instruction is served (calendar date, SGT).
+  endsOn          DateTime? @map("ends_on") @db.Date
+  /// user | fortuna_chat | assistant
+  author          String
+  enabled         Boolean   @default(true)
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account FinancialAccount? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  card    Card?             @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([userId, enabled])
+  @@index([accountId])
+  @@index([cardId])
+  @@map("classification_instructions")
 }
 
 model ChatConnection {

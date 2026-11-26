@@ -51,7 +51,7 @@ test("a stalled run stops on inactivity and keeps what it already prepared", () 
       async *run(input: ProviderInput, signal: AbortSignal) {
         await input.executeTool(
           "remember",
-          { content: "Townsville journeys are hers" },
+          { text: "Townsville journeys are hers" },
           "c1",
         );
         yield {

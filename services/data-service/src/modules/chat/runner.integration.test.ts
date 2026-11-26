@@ -119,7 +119,7 @@ test("calls past the tool budget are refused, recorded and counted in the reply"
           toolResultForModel(
             await input.executeTool(
               "remember",
-              { content: "Budget test note" },
+              { text: "Budget test note" },
               "write-1",
             ),
           ),

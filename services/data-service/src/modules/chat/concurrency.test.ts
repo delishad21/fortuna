@@ -5,7 +5,8 @@ import { withDatabase } from "../../lib/database-context";
 import { ChatService } from "./chat.service";
 import { RunRepository } from "./run.repository";
 import { ApprovalService } from "./approvals.service";
-import { MemoryService, MEMORY_LIMIT } from "./memories.service";
+import { InstructionService } from "../instructions/instructions.service";
+import { INSTRUCTION_LIMIT } from "../instructions/instructions";
 import { TransactionActions } from "./tools/transactions";
 import { createToolRegistry } from "./tools/registry";
 
@@ -194,23 +195,25 @@ test("an approval still queues its continuation while another conversation is re
     );
   }));
 
-test("notes saved from conversations at the same time never pass the limit", () =>
+test("instructions saved from conversations at the same time never pass the limit", () =>
   withChatDb(async (db) => {
     const user = await db.user.create({ data: { username: "notes" } });
-    await db.chatMemory.createMany({
-      data: Array.from({ length: MEMORY_LIMIT - 1 }, (_, i) => ({
+    await db.classificationInstruction.createMany({
+      data: Array.from({ length: INSTRUCTION_LIMIT - 1 }, (_, i) => ({
         userId: user.id,
-        content: `Note ${i}`,
+        text: `Note ${i}`,
+        author: "fortuna_chat",
       })),
     });
-    const memories = new MemoryService(db);
+    const instructions = new InstructionService(db);
     const results = await Promise.allSettled([
-      memories.save(user.id, { content: "From chat A" }),
-      memories.save(user.id, { content: "From chat B" }),
+      instructions.create(user.id, { text: "From chat A" }, "fortuna_chat"),
+      instructions.create(user.id, { text: "From chat B" }, "fortuna_chat"),
     ]);
     assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
     assert.equal(
-      await db.chatMemory.count({ where: { userId: user.id } }),
-      MEMORY_LIMIT,
+      await db.classificationInstruction.count({ where: { userId: user.id } }),
+      INSTRUCTION_LIMIT,
     );
   }));
+

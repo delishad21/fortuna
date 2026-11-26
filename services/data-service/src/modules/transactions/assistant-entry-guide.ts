@@ -69,6 +69,14 @@ export function assistantEntryGuide(watching?: ReturnType<typeof watchList>) {
       accounts: step("get_entry_accounts", "GET /api/agent/transactions/context/accounts"),
       categories: step("get_entry_categories", "GET /api/agent/transactions/context/categories"),
       rules: step("get_entry_rules", "GET /api/agent/transactions/context/rules"),
+      classification: {
+        ...step("get_classification_guide", "GET /api/agent/classification-guide"),
+        use: "How to classify and when to ask; the same guide Fortuna's own chat follows.",
+      },
+      instructions: {
+        ...step("list_classification_instructions", "GET /api/agent/instructions?transactionId=…"),
+        use: "The user's classification instructions. Entries from the review queue and every write already come with the ones that apply (instructions, and instructionIds per entry).",
+      },
       similar: {
         ...step("find_similar_entries", "GET /api/agent/transactions/context/similar?description=…&date=…&amount=…"),
         use: "Past labels and categories for the same merchant are the strongest evidence for a suggestion or a correction. With date and amount it also lists possible duplicates.",

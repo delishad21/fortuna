@@ -1,7 +1,7 @@
 import { ZodError } from "zod";
 import { compactBlocks } from "./tools/components";
 import { loadModelImages } from "./media";
-import { MemoryService } from "./memories.service";
+import { InstructionService } from "../instructions/instructions.service";
 import { pendingForModel } from "./pending";
 import { ProviderMessage } from "./providers/provider";
 import { safeChatError } from "./errors";
@@ -162,7 +162,7 @@ export async function executeRun(
     });
     if (!conversation) throw new ChatError(404, "Conversation not found");
     const history = conversation.messages.reverse();
-    const notes = await new MemoryService(db).forModel(run.userId);
+    const notes = await new InstructionService(db).forModel(run.userId);
     const messages: ProviderMessage[] = [
       ...(notes
         ? [{ role: "user" as const, content: JSON.stringify(notes) }]
