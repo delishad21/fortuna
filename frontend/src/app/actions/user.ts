@@ -3,6 +3,7 @@
 import { auth } from "@/lib/actionAuth";
 import { prisma } from "@/lib/db/client";
 import { compare, hash } from "bcryptjs";
+import { effectiveWorkflowMode, isWorkflowMode, type WorkflowMode } from "@/lib/workflow";
 
 export interface UserProfile {
   id: string;
@@ -238,4 +239,31 @@ export async function changePassword(
   });
 
   return { success: true };
+}
+
+/**
+ * How the user mainly works (Settings → Workflow): the mode chosen, or until
+ * then daily for someone with assistant entries and statements otherwise.
+ * It only changes emphasis; nothing is hidden.
+ */
+export async function getWorkflowPreference(): Promise<{ mode: WorkflowMode; chosen: boolean }> {
+  const session = await auth();
+  if (!session?.user?.id) throw new Error("Not authenticated");
+  const userId = session.user.id;
+  const settings = await prisma.userSettings.findUnique({ where: { userId }, select: { workflowMode: true } });
+  if (isWorkflowMode(settings?.workflowMode)) return { mode: settings.workflowMode, chosen: true };
+  const assistant = await prisma.transaction.findFirst({ where: { userId, entrySource: "assistant" }, select: { id: true } });
+  return { mode: effectiveWorkflowMode(null, Boolean(assistant)), chosen: false };
+}
+
+export async function setWorkflowMode(mode: WorkflowMode): Promise<{ mode: WorkflowMode; chosen: boolean }> {
+  const session = await auth();
+  if (!session?.user?.id) throw new Error("Not authenticated");
+  if (!isWorkflowMode(mode)) throw new Error("Choose daily or statements");
+  await prisma.userSettings.upsert({
+    where: { userId: session.user.id },
+    create: { userId: session.user.id, workflowMode: mode },
+    update: { workflowMode: mode },
+  });
+  return { mode, chosen: true };
 }

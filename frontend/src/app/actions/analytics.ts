@@ -25,9 +25,26 @@ async function fetchAnalytics(path: string) {
   return response.json();
 }
 
-export async function getDashboardOverview(month?: string) {
-  const query = month ? `?month=${encodeURIComponent(month)}` : "";
-  return fetchAnalytics(`/api/analytics/dashboard-overview${query}`);
+const queryString = (params: Record<string, string | undefined>) => {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) query.set(key, value);
+  });
+  return query.toString() ? `?${query.toString()}` : "";
+};
+
+/** `today` is the caller's calendar date (YYYY-MM-DD); it defaults to today in Singapore. */
+export async function getDashboardOverview(month?: string, today?: string) {
+  return fetchAnalytics(`/api/analytics/dashboard-overview${queryString({ month, today })}`);
+}
+
+/**
+ * The daily-tracking dashboard: today, this week, the month so far against
+ * last month at the same day with a projection, category progress, recent
+ * entries and what needs attention, plus the workflow preference.
+ */
+export async function getDailyOverview(today?: string) {
+  return fetchAnalytics(`/api/analytics/daily-overview${queryString({ today })}`);
 }
 
 export async function getDashboardReview() {
@@ -55,6 +72,12 @@ export interface AnalyticsReportParams {
   merchantKey?: string;
   /** Time-series bucket: "day" or "month" (defaults from groupBy). */
   interval?: string;
+  /** An Account id, or "none" for rows without one. */
+  accountId?: string;
+  /** A card id, or "none". */
+  cardId?: string;
+  /** The caller's calendar date, so the running month is "so far". */
+  today?: string;
 }
 
 export async function getAnalyticsReport(params: AnalyticsReportParams = {}) {
@@ -66,13 +89,12 @@ export async function getAnalyticsReport(params: AnalyticsReportParams = {}) {
   return fetchAnalytics(`/api/analytics/report${suffix}`);
 }
 
-export async function getAnalyticsOverview() {
-  return fetchAnalytics("/api/analytics/overview");
+export async function getAnalyticsOverview(today?: string) {
+  return fetchAnalytics(`/api/analytics/overview${queryString({ today })}`);
 }
 
-export async function getAnalyticsInsights(month?: string) {
-  const query = month ? `?month=${encodeURIComponent(month)}` : "";
-  return fetchAnalytics(`/api/analytics/insights${query}`);
+export async function getAnalyticsInsights(month?: string, today?: string) {
+  return fetchAnalytics(`/api/analytics/insights${queryString({ month, today })}`);
 }
 
 export async function getDashboardAnalytics(timeframeDays: number = 30) {

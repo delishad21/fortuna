@@ -55,6 +55,7 @@ import {
 import {
   getDashboardOverview,
   getDashboardReview,
+  getDailyOverview,
   getImportSummaries,
   getImportDetail,
   getAnalyticsReport,
@@ -175,7 +176,16 @@ import {
   updateAutoLabelSettings,
   updateAnalyticsExcludedCategories,
   changePassword,
+  getWorkflowPreference,
+  setWorkflowMode,
 } from "@/app/actions/user";
+import {
+  getReviewQueue,
+  correctReviewEntries,
+  setReviewEntriesStatus,
+  confirmReviewAccount,
+  mergeReviewAccount,
+} from "@/app/actions/review";
 import { getAvailableParsers } from "@/app/actions/parser";
 
 import { prepareReviewedTripRows } from "./tripImport";
@@ -263,6 +273,7 @@ export const mobileOperations = {
   bulkDeleteTripEntriesByFilter,
   getDashboardOverview,
   getDashboardReview,
+  getDailyOverview,
   getImportSummaries,
   getImportDetail,
   getAnalyticsReport,
@@ -359,5 +370,12 @@ export const mobileOperations = {
   updateAutoLabelSettings,
   updateAnalyticsExcludedCategories,
   changePassword,
+  getWorkflowPreference,
+  setWorkflowMode,
+  getReviewQueue,
+  correctReviewEntries,
+  setReviewEntriesStatus,
+  confirmReviewAccount,
+  mergeReviewAccount,
   getAvailableParsers,
 };
