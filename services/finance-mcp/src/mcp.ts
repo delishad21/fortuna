@@ -130,11 +130,11 @@ export function createFinanceMcpServer(identity: AccountIdentity) {
   );
 
   server.registerTool(
-    "merge_account",
+    "merge_accounts",
     {
-      title: "Merge an account into another",
+      title: "Merge any account into another",
       description:
-        "Move every identifier, card and transaction of accountId onto intoAccountId and delete accountId. Use for an automatically created account that turned out to be an existing one. Requires explicit user confirmation.",
+        "Move every identifier, card and transaction of accountId onto intoAccountId and delete accountId, for any two accounts (accounts:write). For an account Fortuna created from an assistant entry, prefer merge_account. Requires explicit user confirmation.",
       inputSchema: z.object({ accountId: z.string(), intoAccountId: z.string(), confirmed: z.literal(true) }),
     },
     async ({ accountId, ...body }) => result(await dataServiceRequest(accountPath(accountId, "merge"), json(body))),

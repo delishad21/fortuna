@@ -198,3 +198,33 @@ test("images are stored once per user, cards fall back to the account's, and unu
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("assistant entries find cards by last 4, and an unknown card gets a flagged account with that card", () =>
+  withChatDb(async (db) => {
+    const { withDatabase } = await import("../../lib/database-context");
+    const { resolveAccount: resolveEntryAccount } = await import("../transactions/assistant-entries.service");
+    const user = await db.user.create({ data: { username: "acct-entries" } });
+    // An account with no statement identifier, known only by its card.
+    const dbs = await createAccount(db, user.id, { name: "DBS Multiplier", type: "savings", color: "#000000" });
+    const debit = await addCard(db, user.id, dbs.id, { last4: "1234" });
+    await withDatabase(db, async () => {
+      const known = await resolveEntryAccount(user.id, { card: { last4: "1234" } });
+      assert.equal(known.accountId, dbs.id);
+      assert.equal(known.cardId, debit.id);
+      assert.equal(known.autoCreated, false);
+
+      const unknown = await resolveEntryAccount(user.id, { card: { last4: "7788" }, externalId: "n-1" });
+      assert.equal(unknown.autoCreated, true);
+      const created = await db.financialAccount.findUniqueOrThrow({ where: { id: unknown.accountId! }, include: { cards: true } });
+      assert.equal(created.autoCreated, true);
+      assert.match(created.autoCreatedFrom!, /card 7788/);
+      assert.deepEqual(created.cards.map((c) => c.last4), ["7788"]);
+      assert.equal(unknown.cardId, created.cards[0].id);
+
+      // Keeping it clears the flag on the account and its identifier.
+      await confirmAccount(db, user.id, created.id);
+      const again = await resolveEntryAccount(user.id, { card: { last4: "7788" } });
+      assert.equal(again.autoCreated, false);
+      assert.equal(again.cardId, created.cards[0].id);
+    });
+  }));

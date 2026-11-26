@@ -46,30 +46,64 @@ function record(value: unknown): Record<string, unknown> {
 export const RESERVED = { internal: "Internal", reimbursement: "Reimbursement" } as const;
 
 type AccountRow = {
+  /** The statement identifier's id. */
   id: string;
   accountIdentifier: string;
+  /** The account's name. */
   label: string | null;
+  /** The account still awaits review (FinancialAccount.autoCreated). */
   autoCreated: boolean;
+  accountId: string | null;
 };
 
 export type ResolvedAccount = {
-  accountIdentifier: string;
+  /** The statement identifier to book to; null for an account that has none (the card decides). */
+  accountIdentifier: string | null;
+  /** The FinancialAccount to book to. */
+  accountId: string | null;
   card: Card | null | undefined;
+  /** The Card row the entry was paid with, when one matched or was created. */
+  cardId: string | null;
   /** The account was created by Fortuna and nobody has confirmed it yet. */
   autoCreated: boolean;
   /** This request created it. */
   created: AccountRow | null;
 };
 
-const ACCOUNT_SELECT = { id: true, accountIdentifier: true, label: true, autoCreated: true } as const;
+/**
+ * The user's statement identifiers as accounts: each with its account's name
+ * and review flag (they live on FinancialAccount now).
+ */
+async function loadAccounts(userId: string): Promise<AccountRow[]> {
+  const rows = await prisma.accountIdentifier.findMany({
+    where: { userId },
+    select: {
+      id: true,
+      accountIdentifier: true,
+      label: true,
+      autoCreated: true,
+      accountId: true,
+      account: { select: { name: true, autoCreated: true } },
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  return rows.map((row) => ({
+    id: row.id,
+    accountIdentifier: row.accountIdentifier,
+    label: row.account?.name ?? row.label,
+    autoCreated: row.account ? row.account.autoCreated : row.autoCreated,
+    accountId: row.accountId,
+  }));
+}
 
-/** An existing account by identifier, id or label (case-insensitive). */
+/** An existing account by identifier, identifier id, account id or name (case-insensitive). */
 export async function findAccount(userId: string, ref: string) {
-  const accounts = await prisma.accountIdentifier.findMany({ where: { userId }, select: ACCOUNT_SELECT });
+  const accounts = await loadAccounts(userId);
   const wanted = ref.trim();
   const lower = wanted.toLowerCase();
   return (
     accounts.find((item) => item.accountIdentifier === wanted || item.id === wanted) ??
+    accounts.find((item) => item.accountId === wanted) ??
     accounts.find((item) => item.label?.trim().toLowerCase() === lower) ??
     null
   );
@@ -78,27 +112,26 @@ export async function findAccount(userId: string, ref: string) {
 /**
  * The account the entry is booked to, and the card it was paid with.
  *
- * An account the assistant names (identifier, id or label) wins, then a card
- * whose last 4 digits end exactly one account identifier. When nothing
- * matches, Fortuna creates the account itself, marked autoCreated with what
- * created it, and the entry is queued with reason new_account until the user
- * confirms or merges it. The assistant never has to invent one.
- *
- * Seam for Accounts and Cards (task fortu-6489): today an account is an
- * AccountIdentifier and a card is only recorded in metadata.card. Once Card
- * rows exist, resolve card.id / card.last4 to a Card here, take its account
- * from it, create a Card under an auto-created account, and store the card's
- * id on the row; autoCreated / autoCreatedFrom move to the Account.
+ * An account the assistant names (identifier, id or name) wins, then the
+ * user's card with those last 4 digits (or that card id), then a statement
+ * identifier ending in them, each only when exactly one matches. When nothing
+ * matches, Fortuna creates the account itself (an identifier whose trigger
+ * makes a FinancialAccount flagged autoCreated, with what created it) and a
+ * Card under it for the last 4 digits; the entry is queued with reason
+ * new_account until the user confirms or merges it. The assistant never has
+ * to invent one.
  */
 export async function resolveAccount(
   userId: string,
   input: { account?: string | null; accountName?: string | null; card?: Card | null; externalId?: string | null },
 ): Promise<ResolvedAccount> {
   const { account, accountName, card } = input;
-  const accounts = await prisma.accountIdentifier.findMany({ where: { userId }, select: ACCOUNT_SELECT });
-  const found = (row: AccountRow): ResolvedAccount => ({
+  const accounts = await loadAccounts(userId);
+  const found = (row: AccountRow, cardId: string | null = null): ResolvedAccount => ({
     accountIdentifier: row.accountIdentifier,
+    accountId: row.accountId,
     card,
+    cardId,
     autoCreated: row.autoCreated,
     created: null,
   });
@@ -110,8 +143,44 @@ export async function resolveAccount(
   if (account) {
     const wanted = account.trim();
     const match =
-      accounts.find((item) => item.accountIdentifier === wanted || item.id === wanted) ?? byName(wanted, accounts);
+      accounts.find((item) => item.accountIdentifier === wanted || item.id === wanted || item.accountId === wanted) ??
+      byName(wanted, accounts);
     if (match) return found(match);
+    // An account with no statement identifier yet, by id or name.
+    const bare = await prisma.financialAccount.findFirst({
+      where: { userId, OR: [{ id: wanted }, { name: { equals: wanted, mode: "insensitive" } }] },
+      select: { id: true, autoCreated: true },
+    });
+    if (bare)
+      return { accountIdentifier: null, accountId: bare.id, card, cardId: null, autoCreated: bare.autoCreated, created: null };
+  }
+  if (card?.id || card?.last4) {
+    const cards = await prisma.card.findMany({
+      where: { userId, ...(card.id ? { id: card.id } : { last4: card.last4 }) },
+      select: { id: true, accountId: true, account: { select: { name: true, autoCreated: true } } },
+    });
+    const pick = (match: (typeof cards)[number]): ResolvedAccount => {
+      const row = accounts.find((item) => item.accountId === match.accountId);
+      return row
+        ? found(row, match.id)
+        : {
+            accountIdentifier: null,
+            accountId: match.accountId,
+            card,
+            cardId: match.id,
+            autoCreated: match.account.autoCreated,
+            created: null,
+          };
+    };
+    if (cards.length === 1) return pick(cards[0]);
+    if (cards.length > 1) {
+      const lower = (accountName ?? account)?.trim().toLowerCase();
+      const named = lower ? cards.find((item) => item.account.name.trim().toLowerCase() === lower) : undefined;
+      if (named) return pick(named);
+      throw new EntryError(400, `Card ${card.last4 ?? card.id} matches more than one account; give the account`, {
+        accounts: cards.map((item) => ({ accountId: item.accountId, label: item.account.name })),
+      });
+    }
   }
   if (card?.last4) {
     const matches = accountsForLast4(accounts, card.last4);
@@ -137,7 +206,8 @@ export async function resolveAccount(
   const evidence = card?.last4 ? `card ${card.last4}` : account ? `account "${account.trim()}"` : "no account given";
   const existing = accounts.find((item) => item.accountIdentifier === identifier);
   if (existing) return found(existing);
-  const row = await prisma.accountIdentifier.upsert({
+  // The trigger on account_numbers creates the account and copies the flag.
+  const saved = await prisma.accountIdentifier.upsert({
     where: { userId_accountIdentifier: { userId, accountIdentifier: identifier } },
     update: {},
     create: {
@@ -147,9 +217,28 @@ export async function resolveAccount(
       autoCreated: true,
       autoCreatedFrom: `assistant entry${input.externalId ? ` ${input.externalId}` : ""} (${evidence})`,
     },
-    select: ACCOUNT_SELECT,
+    select: { id: true, accountIdentifier: true, label: true, autoCreated: true, accountId: true },
   });
-  return { accountIdentifier: row.accountIdentifier, card, autoCreated: row.autoCreated, created: row };
+  let cardId: string | null = null;
+  if (card?.last4 && /^[0-9]{4}$/.test(card.last4) && saved.accountId) {
+    await prisma.financialAccount.update({ where: { id: saved.accountId }, data: { type: "credit_card" } });
+    cardId = (
+      await prisma.card.upsert({
+        where: { accountId_last4: { accountId: saved.accountId, last4: card.last4 } },
+        update: {},
+        create: { userId, accountId: saved.accountId, last4: card.last4 },
+        select: { id: true },
+      })
+    ).id;
+  }
+  return {
+    accountIdentifier: saved.accountIdentifier,
+    accountId: saved.accountId,
+    card,
+    cardId,
+    autoCreated: saved.autoCreated,
+    created: saved,
+  };
 }
 
 /** Where entries go when the assistant gives neither an account nor a card. */
@@ -466,7 +555,7 @@ export const AssistantEntries = {
       label: input.label || null,
       amountIn: input.amountIn ?? null,
       amountOut: input.amountOut ?? null,
-      accountIdentifier: account.accountIdentifier,
+      accountIdentifier: account.accountIdentifier ?? "",
       suggestedCategory: input.suggestedCategory,
     });
     const transaction = await runInTransaction(async () => {
@@ -484,6 +573,8 @@ export const AssistantEntries = {
           amountOut: input.amountOut ?? null,
           currency: (input.currency || settings?.currency || "SGD").toUpperCase(),
           accountIdentifier: account.accountIdentifier,
+          accountId: account.accountId,
+          cardId: account.cardId,
           metadata: entryMetadata({}, parts, account.card ?? null, input.metadata ?? null, classified.decision),
           linkage: classified.linkage ? (classified.linkage as Prisma.InputJsonValue) : Prisma.DbNull,
         },
@@ -580,7 +671,9 @@ export const AssistantEntries = {
         ...(labelChange as { label?: string }),
         ...(amounts as { amountIn?: number | null; amountOut?: number | null }),
         ...(input.currency ? { currency: input.currency.toUpperCase() } : {}),
-        ...(resolved ? { accountIdentifier: resolved.accountIdentifier } : {}),
+        ...(resolved
+          ? { accountIdentifier: resolved.accountIdentifier, accountId: resolved.accountId, cardId: resolved.cardId }
+          : {}),
         ...(categoryChange as { categoryId?: string; linkage?: null }),
       });
       await prisma.transaction.update({
@@ -606,9 +699,9 @@ export const AssistantEntries = {
       const accountAutoCreated =
         resolved?.autoCreated ??
         Boolean(
-          updated.accountIdentifier &&
-            (await prisma.accountIdentifier.findFirst({
-              where: { userId, accountIdentifier: updated.accountIdentifier, autoCreated: true },
+          updated.accountId &&
+            (await prisma.financialAccount.findFirst({
+              where: { id: updated.accountId, autoCreated: true },
               select: { id: true },
             })),
         );

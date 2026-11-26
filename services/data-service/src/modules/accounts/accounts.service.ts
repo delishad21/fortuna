@@ -188,10 +188,30 @@ export async function updateAccount(db: Db, userId: string, accountId: string, i
   return getAccount(db, userId, accountId);
 }
 
+/**
+ * An account no longer needs review: clears its flag (and the legacy one on
+ * its identifiers) and the new_account review reason on its transactions.
+ * Returns how many transactions lost the reason.
+ */
+export async function markAccountReviewed(db: Db, userId: string, accountId: string) {
+  await db.financialAccount.update({ where: { id: accountId }, data: { autoCreated: false } });
+  await db.accountIdentifier.updateMany({ where: { userId, accountId, autoCreated: true }, data: { autoCreated: false } });
+  const flagged = await db.transaction.findMany({
+    where: { userId, accountId, reviewReasons: { has: "new_account" } },
+    select: { id: true, reviewReasons: true },
+  });
+  for (const row of flagged)
+    await db.transaction.update({
+      where: { id: row.id },
+      data: { reviewReasons: row.reviewReasons.filter((reason) => reason !== "new_account") },
+    });
+  return flagged.length;
+}
+
 /** Keeps an automatically created account as it is: it no longer needs review. */
 export async function confirmAccount(db: Db, userId: string, accountId: string) {
   await ownedAccount(db, userId, accountId);
-  await db.financialAccount.update({ where: { id: accountId }, data: { autoCreated: false } });
+  await markAccountReviewed(db, userId, accountId);
   return getAccount(db, userId, accountId);
 }
 
@@ -251,6 +271,8 @@ export async function mergeAccount(db: Db, userId: string, sourceId: string, tar
   if (!target.imageId && source.imageId)
     await db.financialAccount.update({ where: { id: target.id }, data: { imageId: source.imageId } });
   await db.financialAccount.delete({ where: { id: source.id } });
+  // Merging a created account into a real one settles its review.
+  if (source.autoCreated && !target.autoCreated) await markAccountReviewed(db, userId, target.id);
   return getAccount(db, userId, target.id);
 }
 
