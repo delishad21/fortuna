@@ -37,6 +37,29 @@ export function parseShare(input: unknown): Share {
   throw new ShareError(`Unknown share "${input}"; use full, half, 1/3, 50%, { amount } or { fraction }`);
 }
 
+const NOT_SHARED = new Set(["no", "none", "not shared", "not reimbursable", "mine", "just me", "only me", "nobody", "no one"]);
+
+/**
+ * Reads the answer to a reimbursable question: "Full", "Half", "1/3", "50%"
+ * or an amount ("12.50", "S$12.50") is a share; "Not shared", "No" or
+ * "Mine" means no one pays it back. A trailing note in brackets is ignored
+ * ("Half (S$48)"). Null when it says neither.
+ */
+export function shareFromAnswer(text: string): Share | "not_shared" | null {
+  const value = text.trim().toLowerCase().replace(/\s*\([^)]*\)\s*$/, "").replace(/[.!]+$/, "").trim();
+  if (!value) return null;
+  if (NOT_SHARED.has(value) || value.startsWith("not ")) return "not_shared";
+  if (value === "all" || value === "all of it" || value === "the full amount") return { kind: "full" };
+  const amount = /^(?:sgd\s*|s?\$\s*)?(\d+(?:\.\d{1,2})?)$/.exec(value);
+  try {
+    if (amount) return checkShare({ kind: "amount", amount: Number(amount[1]) });
+    return parseShare(value);
+  } catch (error) {
+    if (error instanceof ShareError) return null;
+    throw error;
+  }
+}
+
 function checkShare(share: Share): Share {
   if (share.kind === "fraction") {
     if (!Number.isFinite(share.fraction) || share.fraction <= 0 || share.fraction > 1)

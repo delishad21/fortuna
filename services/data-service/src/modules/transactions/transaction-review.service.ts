@@ -37,7 +37,7 @@ import { assertAssistantRule, freeRuleName, Rules } from "../rules/rules.service
 import { parseExternalId, SourceInputSchema } from "../sources/sources";
 import { createSource } from "../sources/sources.service";
 import { runInTransaction as runAccountTransaction } from "../accounts/accounts.service";
-import { proposeRepayments } from "../reimbursements/reimbursables.service";
+import { answerReimbursable, proposeRepayments } from "../reimbursements/reimbursables.service";
 
 /**
  * The review queue behind /api/agent/transactions/review (scope
@@ -75,7 +75,7 @@ async function loadOwned(userId: string, ids: string[]) {
   const unique = Array.from(new Set(ids));
   const rows = await prisma.transaction.findMany({
     where: { userId, id: { in: unique } },
-    include: { category: true },
+    include: { category: true, reimbursablePerson: { select: { id: true, name: true } } },
   });
   const missing = unique.filter((id) => !rows.some((row) => row.id === id));
   if (missing.length) throw new EntryError(404, "Transaction not found", { missing });
@@ -516,8 +516,9 @@ export const TransactionReview = {
   },
   /**
    * Answers a question on an entry: applies the answer (a category, label,
-   * merchant, transaction type, whether to apply a rule, or where an unknown
-   * card or account belongs) and removes the question. Entries asking the
+   * merchant, transaction type, whether to apply a rule, who pays it back and
+   * how much, or where an unknown card or account belongs) and removes the
+   * question. Entries asking the
    * same keyed question (one unknown card) are answered together.
    */
   async answer(userId: string, input: AnswerInput, actor: EntryActor) {
@@ -591,6 +592,16 @@ export const TransactionReview = {
         applied.account = { accountId: placed.accountId, cardId: placed.cardId, created: placed.created, sourceId: placed.sourceId };
         break;
       }
+      case "reimbursable":
+        // Set like set_reimbursable, so what the person owes updates now.
+        applied.reimbursable = await answerReimbursable(
+          userId,
+          entry.id,
+          asked,
+          chosen ? [chosen.id, chosen.label] : [answer],
+          actor,
+        );
+        break;
       default:
         applied[asked.field] = answer;
     }

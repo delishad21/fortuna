@@ -19,6 +19,7 @@ import {
   personNames,
   proposeAllocation,
   resolveShare,
+  shareFromAnswer,
   summarizeBalance,
 } from "./reimbursables.core";
 
@@ -450,6 +451,42 @@ export async function clearReimbursable(userId: string, ids: string[], actor: En
     for (const row of rows) saved.push(row.reimbursablePersonId ? await writeFlag(userId, row, null, actor, "clear_reimbursable") : row);
     return { transactions: saved.map((row) => withReimbursable(publicEntry(row), row, null)) };
   });
+}
+
+/**
+ * Applies the answer to a reimbursable question on an entry, like
+ * set_reimbursable: the share comes from the chosen option (Full, Half, an
+ * amount; "Not shared" clears the flag) and the person from the question's
+ * context.person, added to the people list when new. Without one, the person
+ * the prompt names is used; when it names no one (or several), nothing is set.
+ */
+export async function answerReimbursable(
+  userId: string,
+  transactionId: string,
+  question: { prompt: string; context?: Record<string, unknown> },
+  answers: string[],
+  actor: EntryActor,
+) {
+  const share = answers.map(shareFromAnswer).find((item) => item !== null);
+  if (!share)
+    throw new EntryError(400, "A reimbursable answer is a share (Full, Half, 1/3, 50% or an amount) or Not shared", {
+      answer: answers[0],
+    });
+  if (share === "not_shared") {
+    const [row] = await rowsFor(userId, { ids: [transactionId] });
+    if (row.reimbursablePersonId) await clearReimbursable(userId, [transactionId], actor);
+    return { applied: true, cleared: true };
+  }
+  const named = typeof question.context?.person === "string" ? question.context.person.trim() : "";
+  let person = named;
+  if (!person) {
+    const people = (await loadPeople(userId, false)).filter((item) => nameMatcher(item)(question.prompt));
+    if (people.length !== 1) return { applied: false, reason: "The question names no one person to pay it back" };
+    person = people[0].id;
+  }
+  const result = await setReimbursable(userId, { ids: [transactionId], person, createPerson: true, share }, actor);
+  if (!("transactions" in result)) throw new Error("unreachable: setReimbursable previewed");
+  return { applied: true, person: result.person, owed: result.owed, share: result.transactions[0].reimbursable?.share ?? null };
 }
 
 const withReimbursable = <T extends object>(entry: T, row: ItemRow, person: { id: string; name: string } | null) => ({

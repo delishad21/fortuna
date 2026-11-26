@@ -239,6 +239,10 @@ export function createFinanceMcpServer(identity: AccountIdentity) {
           prompt: z.string().min(1).max(500),
           options: z.array(z.string().min(1).max(120)).max(8).default([]),
           allowOther: z.boolean().optional(),
+          context: z
+            .object({ person: z.string().min(1).max(120).optional() })
+            .optional()
+            .describe("For field reimbursable: person, who would pay it back; the options are shares (Full, Half, an amount, Not shared)"),
         }),
       )
       .max(5)
@@ -568,7 +572,7 @@ export function createFinanceMcpServer(identity: AccountIdentity) {
     "answer_question",
     {
       title: "Answer a question on an entry",
-      description: "Answer one of an entry's open questions (from list_review_queue) with one of its option ids, or a free value where allowOther is set. Fortuna applies it (category, label, merchant, type, whether to apply a rule, or where an unknown card or account belongs: that creates the card or account, books every entry asking the same, and adds the entry source) and removes the question. markReviewed also marks the entry reviewed when it was its last question. Only answer with what the user said. Needs transactions:review.",
+      description: "Answer one of an entry's open questions (from list_review_queue) with one of its option ids, or a free value where allowOther is set. Fortuna applies it (category, label, merchant, type, whether to apply a rule, who pays it back and how much (a reimbursable question sets the flag for its context.person, like set_reimbursable), or where an unknown card or account belongs: that creates the card or account, books every entry asking the same, and adds the entry source) and removes the question. markReviewed also marks the entry reviewed when it was its last question. Only answer with what the user said. Needs transactions:review.",
       inputSchema: z.object({
         transactionId: z.string(),
         questionId: z.string(),

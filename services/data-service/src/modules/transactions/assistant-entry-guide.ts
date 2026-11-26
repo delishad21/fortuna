@@ -49,7 +49,7 @@ export function assistantEntryGuide(watching?: ReturnType<typeof watchList>) {
         precedentIds: "The ids of the past transactions you based it on (from find_similar_entries).",
       },
       questions:
-        "When unsure, add questions: [{ field, prompt, options, allowOther }] (field: category, label, merchant, transactionType, reimbursable or other). They show in the review card and on Fortuna's To review screen as choices. One clear thing per question, 2–4 options.",
+        "When unsure, add questions: [{ field, prompt, options, allowOther, context }] (field: category, label, merchant, transactionType, reimbursable or other). They show in the review card and on Fortuna's To review screen as choices. One clear thing per question, 2–4 options. For reimbursable, name who would pay it back in context: { person } (a name from list_reimbursement_people; someone new is added when the user answers) and make the options shares: Full, Half, 1/3, 50% or an amount like S$20, plus Not shared. The answer marks the entry reimbursable to that person with that share (as set_reimbursable does), so what they owe updates straight away; Not shared clears it.",
       ruleWins:
         "When your decision contradicts a rule's result, the rule's result stays, classification.conflict records both, and a question asks the user which is right. If the user says the rule is wrong, talk to them about updating or disabling it.",
     },

@@ -280,7 +280,13 @@ export function decideEntry(
 
 /** Questions the assistant sent, in the stored shape. */
 export function assistantQuestions(
-  input: Array<{ field: EntryQuestion["field"]; prompt: string; options: Array<string | { id?: string; label: string }>; allowOther?: boolean }>,
+  input: Array<{
+    field: EntryQuestion["field"];
+    prompt: string;
+    options: Array<string | { id?: string; label: string }>;
+    allowOther?: boolean;
+    context?: Record<string, unknown>;
+  }>,
   now = new Date(),
 ): EntryQuestion[] {
   return input.map((item) =>
@@ -292,6 +298,7 @@ export function assistantQuestions(
           typeof option === "string" ? { id: option, label: option } : { id: option.id || option.label, label: option.label },
         ),
         ...(item.allowOther !== undefined ? { allowOther: item.allowOther } : { allowOther: item.options.length === 0 }),
+        ...(item.context && Object.keys(item.context).length ? { context: item.context } : {}),
         source: "assistant",
       },
       now,

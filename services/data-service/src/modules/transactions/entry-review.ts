@@ -105,6 +105,8 @@ export const QuestionInputSchema = z
       .max(8)
       .default([]),
     allowOther: z.boolean().optional(),
+    /** What the question is about; for field reimbursable, person names who pays it back. */
+    context: z.object({ person: z.string().trim().min(1).max(120).optional() }).strict().optional(),
   })
   .strict();
 export type QuestionInput = z.infer<typeof QuestionInputSchema>;

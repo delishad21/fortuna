@@ -455,3 +455,93 @@ test("an unknown statement identifier on a draft is a question, answered by addi
       await assert.rejects(answerDraftAccountQuestion(user.id, { identifier: "OCBC 360 123", option: `link:${dbs.id}` }), /already belongs/);
     });
   }));
+
+test("answering a reimbursable question marks the entry for the person in its context", () =>
+  withChatDb(async (db) => {
+    const { user, writer, reviewer } = await setup(db, "reimbursable-answers");
+    const madeline = await db.reimbursementPerson.create({ data: { userId: user.id, name: "Madeline", aliases: ["Mads"] } });
+    const { server, call } = await serve(db);
+    const post = async (externalId: string, amountOut: number, question: Record<string, unknown>) => {
+      const sent = await call("POST", "/transactions", writer, entry(externalId, {
+        description: "TONKATSU BY MA MAISON",
+        amountOut,
+        card: { last4: "4591" },
+        decision: { category: "Food", reason: "dinner", confidence: 0.9 },
+        questions: [{ field: "reimbursable", ...question }],
+      }));
+      assert.equal(sent.status, 201, JSON.stringify(sent.body));
+      return sent.body.transaction;
+    };
+    const answer = (transaction: any, body: Record<string, unknown>) =>
+      call("POST", "/transactions/review/questions/answer", reviewer, {
+        transactionId: transaction.id,
+        questionId: transaction.questions[0].id,
+        ...body,
+      });
+    const options = ["Full", "Half", "Not shared"];
+    try {
+      // Half, for the person the question names in its context.
+      const dinner = await post("ra-1", 96, { prompt: "Shared with Madeline?", options, context: { person: "Mads" } });
+      assert.deepEqual(dinner.questions[0].context, { person: "Mads" });
+      const half = await answer(dinner, { option: "Half", markReviewed: true });
+      assert.equal(half.status, 200, JSON.stringify(half.body));
+      assert.equal(half.body.applied.reimbursable.applied, true);
+      assert.equal(half.body.applied.reimbursable.owed, 48);
+      assert.deepEqual(half.body.transaction.reimbursable, {
+        personId: madeline.id,
+        person: "Madeline",
+        owed: 48,
+        share: { kind: "fraction", fraction: 0.5 },
+        note: null,
+      });
+      assert.equal(half.body.transaction.reviewStatus, "reviewed");
+      const flagged = await db.transaction.findUniqueOrThrow({ where: { id: dinner.id } });
+      assert.equal(flagged.reimbursablePersonId, madeline.id);
+      assert.equal(Number(flagged.reimbursableAmount), 48);
+      const audit = await db.agentAuditEvent.findMany({ where: { userId: user.id, targetId: dinner.id } });
+      assert.ok(audit.some((event) => event.toolName === "set_reimbursable"));
+
+      // An amount, for someone not on the people list yet: they are added.
+      const groceries = await post("ra-2", 50, { prompt: "How much does Ken owe?", options: ["S$20", "Full", "Not shared"], context: { person: "Ken" } });
+      const amount = await answer(groceries, { option: "S$20" });
+      assert.equal(amount.status, 200, JSON.stringify(amount.body));
+      assert.equal(amount.body.transaction.reimbursable.person, "Ken");
+      assert.deepEqual(amount.body.transaction.reimbursable.share, { kind: "amount", amount: 20 });
+      assert.equal(await db.reimbursementPerson.count({ where: { userId: user.id, name: "Ken" } }), 1);
+
+      // Without a context, the one person the prompt names; option labels count too.
+      const lunch = await post("ra-3", 30, { prompt: "Did Madeline share this?", options: [{ id: "all", label: "Full" }, { id: "no", label: "Not shared" }] });
+      const full = await answer(lunch, { option: "all" });
+      assert.equal(full.status, 200, JSON.stringify(full.body));
+      assert.equal(full.body.transaction.reimbursable.owed, 30);
+
+      // Not shared clears a flag already set.
+      await db.transaction.update({ where: { id: lunch.id }, data: { questions: [{ ...lunch.questions[0], id: "again" }] } });
+      const cleared = await call("POST", "/transactions/review/questions/answer", reviewer, { transactionId: lunch.id, questionId: "again", option: "no" });
+      assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
+      assert.equal(cleared.body.applied.reimbursable.cleared, true);
+      assert.equal(cleared.body.transaction.reimbursable, null);
+
+      // No one named: the answer is recorded but nothing is set.
+      const taxi = await post("ra-4", 18, { prompt: "Was this shared?", options });
+      const unnamed = await answer(taxi, { option: "Half" });
+      assert.equal(unnamed.status, 200);
+      assert.equal(unnamed.body.applied.reimbursable.applied, false);
+      assert.equal(unnamed.body.transaction.reimbursable, null);
+
+      // A free answer that isn't a share is refused, and the question stays.
+      const coffee = await post("ra-5", 6, { prompt: "Shared with Madeline?", options: [], allowOther: true, context: { person: "Madeline" } });
+      const vague = await answer(coffee, { value: "maybe" });
+      assert.equal(vague.status, 400);
+      assert.equal((await db.transaction.findUniqueOrThrow({ where: { id: coffee.id } })).reimbursablePersonId, null);
+      const four = await answer(coffee, { value: "4" });
+      assert.equal(four.status, 200, JSON.stringify(four.body));
+      assert.equal(four.body.transaction.reimbursable.owed, 4);
+
+      // What Madeline owes now counts the answered entries.
+      const owed = await db.transaction.aggregate({ where: { userId: user.id, reimbursablePersonId: madeline.id }, _sum: { reimbursableAmount: true } });
+      assert.equal(Number(owed._sum.reimbursableAmount), 52);
+    } finally {
+      server.close();
+    }
+  }));

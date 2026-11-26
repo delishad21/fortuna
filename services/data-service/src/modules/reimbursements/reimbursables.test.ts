@@ -9,6 +9,7 @@ import {
   parseShare,
   proposeAllocation,
   resolveShare,
+  shareFromAnswer,
   summarizeBalance,
 } from "./reimbursables.core";
 import {
@@ -36,6 +37,16 @@ test("shares read as full, fractions, percentages or amounts", () => {
   assert.deepEqual(parseShare({ amount: 12.5 }), { kind: "amount", amount: 12.5 });
   assert.throws(() => parseShare("2/1"));
   assert.throws(() => parseShare({ amount: 0 }));
+
+  // Answers to a reimbursable question.
+  assert.deepEqual(shareFromAnswer("Full"), { kind: "full" });
+  assert.deepEqual(shareFromAnswer("Half (S$48)"), { kind: "fraction", fraction: 0.5 });
+  assert.deepEqual(shareFromAnswer("S$20"), { kind: "amount", amount: 20 });
+  assert.deepEqual(shareFromAnswer("12.5"), { kind: "amount", amount: 12.5 });
+  assert.equal(shareFromAnswer("Not shared"), "not_shared");
+  assert.equal(shareFromAnswer("No."), "not_shared");
+  assert.equal(shareFromAnswer("maybe"), null);
+  assert.equal(shareFromAnswer("0"), null);
 
   assert.deepEqual(resolveShare(30, { kind: "full" }), { amount: 30, fraction: 1 });
   assert.deepEqual(resolveShare(10, { kind: "fraction", fraction: 1 / 3 }), { amount: 3.33, fraction: 0.333333 });
