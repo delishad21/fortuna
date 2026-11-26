@@ -123,12 +123,15 @@ export function MonthSwitcher({
   value,
   onChange,
   loading,
+  currentMonth,
 }: {
   /** Month keys, newest first. */
   months: string[];
   value: string | null;
   onChange: (month: string) => void;
   loading?: boolean;
+  /** The running month, labelled "(so far)". */
+  currentMonth?: string | null;
 }) {
   const index = value ? months.indexOf(value) : -1;
   const older = index >= 0 ? months[index + 1] : undefined;
@@ -143,7 +146,10 @@ export function MonthSwitcher({
       <div className="w-44">
         <Select
           value={value || ""}
-          options={months.map((month) => ({ value: month, label: formatMonth(month, "MMMM yyyy") }))}
+          options={months.map((month) => ({
+            value: month,
+            label: `${formatMonth(month, month === currentMonth ? "MMMM" : "MMMM yyyy")}${month === currentMonth ? " (so far)" : ""}`,
+          }))}
           onChange={onChange}
           disabled={loading || months.length === 0}
           placeholder="Month"

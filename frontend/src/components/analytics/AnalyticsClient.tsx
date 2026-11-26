@@ -37,18 +37,25 @@ import {
   formatDay,
   formatMonth,
   isoDay,
-  type CompactTransaction,
+  type CardSource,
 } from "@/components/analytics/parts";
+import { localToday } from "@/lib/workflow";
 import { cn } from "@/lib/utils";
 
-type Transaction = CompactTransaction & {
+type Transaction = CardSource & {
   merchant: string;
   merchantKey: string;
-  accountIdentifier?: string | null;
-  linkage?: TransactionCardTransaction["linkage"];
-  originalAmountIn?: number | null;
-  originalAmountOut?: number | null;
 };
+
+/** Set while the period is still running (it contains today). */
+type RunningPeriod = {
+  asOf: string;
+  elapsedDays: number;
+  totalDays: number;
+  projected: { totalOut: number | null; totalIn: number | null };
+} | null;
+
+type BreakdownBy = "category" | "merchant" | "account" | "card";
 
 type Account = { accountIdentifier: string; label?: string | null; color: string };
 
@@ -79,18 +86,32 @@ type SeriesPoint = { key: string; label: string; totalIn: number; totalOut: numb
 type ReportData = {
   selectedMonth: string;
   importedMonths: string[];
-  controls: { range: string; metric: string; groupBy: string; categoryId?: string | null; merchantKey?: string | null };
+  currentMonth?: string | null;
+  controls: {
+    range: string;
+    metric: string;
+    groupBy: string;
+    categoryId?: string | null;
+    merchantKey?: string | null;
+    accountId?: string | null;
+    cardId?: string | null;
+  };
   period: { start: string; end: string };
+  partial?: RunningPeriod;
   summary: Totals;
-  previousPeriod?: { start: string; end: string; summary: Totals };
+  previousPeriod?: { start: string; end: string; sameDays?: boolean; summary: Totals };
   chartSeries: SeriesPoint[];
   timeSeries?: SeriesPoint[];
   breakdown: BreakdownRow[];
   categoryBreakdown?: BreakdownRow[];
   merchantBreakdown?: BreakdownRow[];
+  accountBreakdown?: BreakdownRow[];
+  cardBreakdown?: BreakdownRow[];
   transactions: Transaction[];
   categories: Array<{ id: string; name: string; color: string }>;
   merchants: Array<{ key: string; name: string }>;
+  accounts?: Array<{ id: string; name: string; color: string }>;
+  cards?: Array<{ id: string; name: string; color: string }>;
 };
 
 type RecurringPayment = {
@@ -107,6 +128,8 @@ type RecurringPayment = {
 type InsightsData = {
   selectedMonth: string | null;
   importedMonths: string[];
+  currentMonth?: string | null;
+  partial?: RunningPeriod;
   monthlySummary: Totals & {
     previousMonth: string | null;
     previousTotalOut: number | null;
@@ -126,8 +149,9 @@ type InsightsData = {
 
 type OverviewInsightsData = {
   importedMonths: string[];
+  currentMonth?: string | null;
   summary: Totals;
-  monthlyTrend: Array<{ month: string } & Totals>;
+  monthlyTrend: Array<{ month: string; partial?: boolean; projectedOut?: number | null } & Totals>;
   topCategories: Array<{ key: string; name: string; color?: string; totalIn: number; totalOut: number; transactionCount: number }>;
   topMerchants: Array<{ key: string; name: string; totalOut: number; transactionCount: number }>;
   recurringMerchants: RecurringPayment[];
@@ -174,7 +198,7 @@ export function AnalyticsClient({
   const loadInsights = async (month: string) => {
     setInsightsLoading(true);
     try {
-      setInsights(await getAnalyticsInsights(month));
+      setInsights(await getAnalyticsInsights(month, localToday()));
     } finally {
       setInsightsLoading(false);
     }
@@ -207,7 +231,7 @@ function ReportsTab({ initialReport, accounts }: { initialReport: ReportData; ac
   const [report, setReport] = useState(initialReport);
   const [loading, setLoading] = useState(false);
   const [custom, setCustom] = useState(false);
-  const [breakdownBy, setBreakdownBy] = useState<"category" | "merchant">("category");
+  const [breakdownBy, setBreakdownBy] = useState<BreakdownBy>("category");
   const [shownTransactions, setShownTransactions] = useState(25);
   const [ordering, setOrdering] = useState<Ordering>("newest");
 
@@ -226,6 +250,8 @@ function ReportsTab({ initialReport, accounts }: { initialReport: ReportData; ac
     interval: Interval;
     categoryId: string;
     merchantKey: string;
+    accountId: string;
+    cardId: string;
   }>;
 
   const load = async (next: Next, useCustomDates = custom) => {
@@ -244,6 +270,9 @@ function ReportsTab({ initialReport, accounts }: { initialReport: ReportData; ac
           interval: nextInterval,
           categoryId: next.categoryId === undefined ? report.controls.categoryId || undefined : next.categoryId || undefined,
           merchantKey: next.merchantKey === undefined ? report.controls.merchantKey || undefined : next.merchantKey || undefined,
+          accountId: next.accountId === undefined ? report.controls.accountId || undefined : next.accountId || undefined,
+          cardId: next.cardId === undefined ? report.controls.cardId || undefined : next.cardId || undefined,
+          today: localToday(),
         }),
       );
       setShownTransactions(25);
@@ -297,12 +326,39 @@ function ReportsTab({ initialReport, accounts }: { initialReport: ReportData; ac
 
   const categoryName = report.categories.find((item) => item.id === report.controls.categoryId)?.name;
   const merchantName = report.merchants.find((item) => item.key === report.controls.merchantKey)?.name;
+  const accountOptions = report.accounts ?? [];
+  const cardOptions = report.cards ?? [];
+  const filtered = categoryName || merchantName || report.controls.accountId || report.controls.cardId;
   const previous = report.previousPeriod?.summary;
   const hasPrevious = !!previous && previous.transactionCount > 0;
+  // A running period is compared with the same days of the one before.
+  const previousSuffix = report.previousPeriod?.sameDays
+    ? preset === "month"
+      ? "vs same days last month"
+      : "vs same days of the previous period"
+    : "vs previous period";
+  const partial = report.partial;
   const savingsRate = report.summary.totalIn > 0 ? Math.round((report.summary.net / report.summary.totalIn) * 100) : null;
-  const breakdownRows = (breakdownBy === "category" ? report.categoryBreakdown ?? report.breakdown : report.merchantBreakdown ?? []).filter(
-    (row) => Math.abs(row.metricValue) > 0.004,
-  );
+  const breakdownSource: Record<BreakdownBy, BreakdownRow[] | undefined> = {
+    category: report.categoryBreakdown ?? report.breakdown,
+    merchant: report.merchantBreakdown,
+    account: report.accountBreakdown,
+    card: report.cardBreakdown,
+  };
+  const breakdownRows = (breakdownSource[breakdownBy] ?? []).filter((row) => Math.abs(row.metricValue) > 0.004);
+  const selectedBreakdownKey = {
+    category: report.controls.categoryId,
+    merchant: report.controls.merchantKey,
+    account: report.controls.accountId,
+    card: report.controls.cardId,
+  }[breakdownBy];
+  const selectBreakdown = (key: string) => {
+    const next = key === selectedBreakdownKey ? "" : key;
+    if (breakdownBy === "category") return load({ categoryId: next });
+    if (breakdownBy === "merchant") return load({ merchantKey: next });
+    if (breakdownBy === "account") return load({ accountId: next });
+    return load({ cardId: next });
+  };
   const series = report.timeSeries ?? report.chartSeries;
   const valueTone = metric === "income" ? "good" : metric === "net" ? "default" : "bad";
   const metricWord = metric === "income" ? "Income" : metric === "net" ? "Net flow" : "Spending";
@@ -324,10 +380,16 @@ function ReportsTab({ initialReport, accounts }: { initialReport: ReportData; ac
               value={report.selectedMonth}
               onChange={(month) => void load({ month })}
               loading={loading}
+              currentMonth={report.currentMonth}
             />
           )}
           <span className="text-sm text-dark-5 dark:text-dark-6">
             {formatDay(dateFrom, "d MMM yyyy")} – {formatDay(dateTo, "d MMM yyyy")}
+            {partial
+              ? ` · Day ${partial.elapsedDays} of ${partial.totalDays}${
+                  partial.projected.totalOut !== null ? ` · projected ${formatCurrency(partial.projected.totalOut)} spending at this pace` : ""
+                }`
+              : ""}
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -352,6 +414,37 @@ function ReportsTab({ initialReport, accounts }: { initialReport: ReportData; ac
               buttonClassName="w-full min-w-0"
             />
           </div>
+          {accountOptions.length > 0 || report.controls.accountId ? (
+            <div className="w-52">
+              <Select
+                value={report.controls.accountId || ""}
+                options={[
+                  { value: "", label: "All accounts" },
+                  ...accountOptions.map((item) => ({
+                    value: item.id,
+                    label: item.name,
+                    color: item.color || "#9ca3af",
+                  })),
+                ]}
+                onChange={(accountId) => void load({ accountId, cardId: "" })}
+                buttonClassName="w-full min-w-0"
+              />
+            </div>
+          ) : null}
+          {cardOptions.length > 0 || report.controls.cardId ? (
+            <div className="w-48">
+              <Select
+                value={report.controls.cardId || ""}
+                options={[
+                  { value: "", label: "All cards" },
+                  ...cardOptions.map((item) => ({ value: item.id, label: item.name, color: item.color || "#9ca3af" })),
+                  { value: "none", label: "No card" },
+                ]}
+                onChange={(cardId) => void load({ cardId })}
+                buttonClassName="w-full min-w-0"
+              />
+            </div>
+          ) : null}
           {merchantName ? (
             <span className="inline-flex h-11 items-center gap-2 rounded-lg border border-stroke bg-white px-3 text-sm text-dark dark:border-dark-3 dark:bg-dark-2 dark:text-white">
               {merchantName}
@@ -360,10 +453,10 @@ function ReportsTab({ initialReport, accounts }: { initialReport: ReportData; ac
               </button>
             </span>
           ) : null}
-          {categoryName || merchantName ? (
+          {filtered ? (
             <button
               type="button"
-              onClick={() => void load({ categoryId: "", merchantKey: "" })}
+              onClick={() => void load({ categoryId: "", merchantKey: "", accountId: "", cardId: "" })}
               className="inline-flex items-center gap-1 text-sm font-medium text-primary"
             >
               <X className="size-4" /> Clear filters
@@ -380,13 +473,13 @@ function ReportsTab({ initialReport, accounts }: { initialReport: ReportData; ac
           label="Income"
           value={formatCurrency(report.summary.totalIn)}
           tone="good"
-          sub={hasPrevious ? <Delta value={report.summary.totalIn - previous.totalIn} previous={previous.totalIn} suffix="vs previous period" invert /> : "No previous period to compare"}
+          sub={hasPrevious ? <Delta value={report.summary.totalIn - previous.totalIn} previous={previous.totalIn} suffix={previousSuffix} invert /> : "No previous period to compare"}
         />
         <StatCard
           label="Spending"
           value={formatCurrency(report.summary.totalOut)}
           tone="bad"
-          sub={hasPrevious ? <Delta value={report.summary.totalOut - previous.totalOut} previous={previous.totalOut} suffix="vs previous period" /> : "No previous period to compare"}
+          sub={hasPrevious ? <Delta value={report.summary.totalOut - previous.totalOut} previous={previous.totalOut} suffix={previousSuffix} /> : "No previous period to compare"}
         />
         <StatCard
           label="Net flow"
@@ -397,7 +490,7 @@ function ReportsTab({ initialReport, accounts }: { initialReport: ReportData; ac
         <StatCard
           label="Transactions"
           value={String(report.summary.transactionCount)}
-          sub={hasPrevious ? `${previous.transactionCount} in the previous period` : undefined}
+          sub={hasPrevious ? `${previous.transactionCount} in the previous period${report.previousPeriod?.sameDays ? " (same days)" : ""}` : undefined}
         />
       </div>
 
@@ -422,6 +515,8 @@ function ReportsTab({ initialReport, accounts }: { initialReport: ReportData; ac
               options={[
                 { value: "category", label: "Category" },
                 { value: "merchant", label: "Merchant" },
+                { value: "account", label: "Account" },
+                { value: "card", label: "Card" },
               ]}
               value={breakdownBy}
               onChange={setBreakdownBy}
@@ -436,12 +531,8 @@ function ReportsTab({ initialReport, accounts }: { initialReport: ReportData; ac
               <BarList
                 limit={12}
                 valueTone={valueTone}
-                selectedKey={breakdownBy === "category" ? report.controls.categoryId : report.controls.merchantKey}
-                onSelect={(key) =>
-                  void (breakdownBy === "category"
-                    ? load({ categoryId: key === report.controls.categoryId ? "" : key })
-                    : load({ merchantKey: key === report.controls.merchantKey ? "" : key }))
-                }
+                selectedKey={selectedBreakdownKey}
+                onSelect={(key) => void selectBreakdown(key)}
                 rows={breakdownRows.map((row) => ({
                   key: row.key,
                   name: row.name,
@@ -627,9 +718,27 @@ function InsightsTab({
   return (
     <div className={cn("flex flex-col gap-6 transition-opacity", loading && "opacity-60")}>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-xl font-bold text-dark dark:text-white">{formatMonth(insights.selectedMonth, "MMMM yyyy")}</h2>
-        <MonthSwitcher months={insights.importedMonths} value={insights.selectedMonth} onChange={loadInsights} loading={loading} />
+        <h2 className="text-xl font-bold text-dark dark:text-white">
+          {formatMonth(insights.selectedMonth, "MMMM yyyy")}
+          {insights.partial ? <span className="ml-2 text-base font-medium text-dark-5 dark:text-dark-6">so far</span> : null}
+        </h2>
+        <MonthSwitcher
+          months={insights.importedMonths}
+          value={insights.selectedMonth}
+          onChange={loadInsights}
+          loading={loading}
+          currentMonth={insights.currentMonth}
+        />
       </div>
+      {insights.partial ? (
+        <p className="-mt-3 text-sm text-dark-5 dark:text-dark-6">
+          So far: day {insights.partial.elapsedDays} of {insights.partial.totalDays}
+          {insights.partial.projected.totalOut !== null
+            ? ` · projected ${formatCurrency(insights.partial.projected.totalOut)} spending at this pace`
+            : ""}
+          {previousLabel ? ` · compared with the same days of ${previousLabel} and earlier months` : ""}
+        </p>
+      ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
@@ -728,6 +837,7 @@ function OverallTab({ overview }: { overview: OverviewInsightsData }) {
   const trend: SeriesPoint[] = overview.monthlyTrend.map((item) => ({ ...item, key: item.month, label: item.month }));
   const first = overview.importedMonths[overview.importedMonths.length - 1];
   const last = overview.importedMonths[0];
+  const running = overview.monthlyTrend.find((item) => item.partial);
 
   return (
     <div className="flex flex-col gap-6">
@@ -750,6 +860,12 @@ function OverallTab({ overview }: { overview: OverviewInsightsData }) {
         <div className="h-[320px]">
           <SeriesChart data={trend} metric="inOut" interval="month" />
         </div>
+        {running ? (
+          <p className="mt-2 text-xs text-dark-5 dark:text-dark-6">
+            {formatMonth(running.month, "MMMM")} is so far
+            {running.projectedOut ? `; ${formatCurrency(running.projectedOut)} spending projected at this pace` : ""}.
+          </p>
+        ) : null}
       </SectionCard>
 
       <div className="grid gap-6 xl:grid-cols-2">
