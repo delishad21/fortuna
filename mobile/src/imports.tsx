@@ -64,6 +64,7 @@ import {
 import { ImportSummaryCard, Summary } from "./home";
 import { ColumnChart, Donut, RankBars } from "./charts";
 import { accountDisplay } from "../../frontend/shared/accounts";
+import { ReconcileCard } from "./reconcile";
 
 export const FILE_TYPES = [
   "application/pdf",
@@ -645,6 +646,7 @@ export function DraftReviewScreen({ route, navigation }: any) {
   const [newAccount, setNewAccount] = useState({ id: "", label: "", color: PALETTE[2] });
   const categories = useResource("getCategories", { scope: "settings" });
   const accounts = useResource("getAccountNumbers");
+  const financialAccounts = useResource("getAccounts");
   const setAll = (next: any[]) => {
     draftsRef.current = next;
     setDrafts(next);
@@ -832,6 +834,27 @@ export function DraftReviewScreen({ route, navigation }: any) {
       setBusy(false);
     }
   };
+  /** Change a draft's reconcile plan; retried once on a newer draft version. */
+  const changeReconcile = async (draftId: string, change: any) => {
+    setBusy(true);
+    setMessage("");
+    setPendingCommit(null);
+    try {
+      await Promise.all([...queues.current.values()].map((q) => q.catch(() => undefined)));
+      const save = (version: number) => call("reconcileAgentDraft", draftId, { expectedVersion: version, ...change });
+      try {
+        await save(draftsRef.current.find((d) => d.id === draftId)?.version);
+      } catch (e: any) {
+        if (e.message !== "Import draft is stale") throw e;
+        await save((await call("getAgentDraft", draftId)).draft.version);
+      }
+      replaceDraft((await call("getAgentDraft", draftId)).draft);
+    } catch (e: any) {
+      setMessage(e.message || "Could not change the match");
+    } finally {
+      setBusy(false);
+    }
+  };
   const commitValidated = async (selection: any) => {
     setBusy(true);
     setMessage("");
@@ -882,9 +905,16 @@ export function DraftReviewScreen({ route, navigation }: any) {
         return;
       }
       const n = selection.validations.reduce((s: number, v: any) => s + Number(v.validation.summary?.selected || 0), 0);
+      const plans = selection.validations.map((v: any) => v.validation.reconcile).filter(Boolean);
+      const total = (key: string) => plans.reduce((s: number, p: any) => s + Number(p[key] || 0), 0);
+      const reconcileNote = plans.length
+        ? ` ${total("matched")} confirm logged entries, ${total("gaps")} are new.` +
+          (total("toDelete") ? ` ${total("toDelete")} logged ${total("toDelete") === 1 ? "entry" : "entries"} deleted.` : "") +
+          (total("toMove") ? ` ${total("toMove")} logged ${total("toMove") === 1 ? "entry" : "entries"} moved to another account.` : "")
+        : "";
       confirm(
         "Save this import?",
-        `Commit ${n} selected rows${selection.validations.length > 1 ? ` across ${selection.validations.length} statements` : ""}.`,
+        `Commit ${n} selected rows${selection.validations.length > 1 ? ` across ${selection.validations.length} statements` : ""}.${reconcileNote}`,
         () => commitValidated(selection),
         "Commit",
       );
@@ -945,6 +975,12 @@ export function DraftReviewScreen({ route, navigation }: any) {
           <Stat tone="green" label="Ready" value={String(counts.Ready)} />
         </StatGrid>
       )}
+      <ReconcileCard
+        drafts={drafts}
+        accounts={financialAccounts.data || []}
+        busy={busy}
+        onChange={(draftId, change) => void changeReconcile(draftId, change)}
+      />
       {!!message && (
         <Banner
           tone="red"

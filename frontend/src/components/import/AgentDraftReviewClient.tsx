@@ -13,11 +13,16 @@ import {
   commitAgentDraftSelection,
   decideAgentProposal,
   getAgentDraft,
+  reconcileAgentDraft,
   updateAgentDraftRow,
   validateAgentDraftSelection,
 } from "@/app/actions/agentDrafts";
 import { getCategories } from "@/app/actions/categories";
 import { getAccountNumbers } from "@/app/actions/accountNumbers";
+import { getAccounts } from "@/app/actions/accounts";
+import type { Account } from "@/lib/accountTypes";
+import type { ReconcileChange } from "@/lib/reconcile";
+import { ReconcilePanel } from "./ReconcilePanel";
 
 type DraftRow = Record<string, any>;
 type Draft = Record<string, any> & { rows: DraftRow[] };
@@ -43,6 +48,19 @@ function rowTone(row: DraftRow) {
   )
     return "algorithm";
   return "";
+}
+
+/** What a commit does to logged entries, for the confirmation, e.g. "\n\n3 confirm logged entries, 2 are new. 1 logged entry is deleted." */
+function reconcileNote(selection: Record<string, any>) {
+  const plans = (selection.validations || [])
+    .map((item: Record<string, any>) => item.validation?.reconcile)
+    .filter(Boolean);
+  if (!plans.length) return "";
+  const sum = (key: string) => plans.reduce((total: number, plan: Record<string, number>) => total + Number(plan[key] || 0), 0);
+  const parts = [`${sum("matched")} confirm logged entries, ${sum("gaps")} are new.`];
+  if (sum("toDelete")) parts.push(`${sum("toDelete")} logged entr${sum("toDelete") === 1 ? "y is" : "ies are"} deleted.`);
+  if (sum("toMove")) parts.push(`${sum("toMove")} logged entr${sum("toMove") === 1 ? "y moves" : "ies move"} to another account.`);
+  return `\n\n${parts.join(" ")}`;
 }
 
 function tableTransaction(draft: Draft, row: DraftRow): Transaction {
@@ -98,6 +116,7 @@ export function AgentDraftReviewClient({
   const pendingUpdateCountRef = useRef(0);
   const [categories, setCategories] = useState<any[]>([]);
   const [accounts, setAccounts] = useState<any[]>([]);
+  const [financialAccounts, setFinancialAccounts] = useState<Account[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [pendingCommit, setPendingCommit] = useState<Record<string, any> | null>(null);
@@ -116,6 +135,10 @@ export function AgentDraftReviewClient({
         setAccounts(nextAccounts);
       })
       .catch((error) => setMessage(error.message));
+    // For moving logged entries the statement doesn't show to another account.
+    getAccounts()
+      .then(setFinancialAccounts)
+      .catch(() => setFinancialAccounts([]));
   }, []);
 
   useEffect(() => {
@@ -340,13 +363,40 @@ export function AgentDraftReviewClient({
       }
       if (
         !window.confirm(
-          `Commit ${selected} selected rows across ${selection.validations.length} staged import${selection.validations.length === 1 ? "" : "s"}?`,
+          `Commit ${selected} selected rows across ${selection.validations.length} staged import${selection.validations.length === 1 ? "" : "s"}?${reconcileNote(selection)}`,
         )
       )
         return;
       await commitValidated(selection);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Commit failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Change a draft's reconcile plan; retried once on a newer draft version. */
+  const changeReconcile = async (draftId: string, change: ReconcileChange) => {
+    setBusy(true);
+    setMessage("");
+    setPendingCommit(null);
+    try {
+      await Promise.all(
+        [...rowUpdateQueuesRef.current.values()].map((queued) => queued.catch(() => undefined)),
+      );
+      const save = (version: number) =>
+        reconcileAgentDraft(draftId, { expectedVersion: version, ...change });
+      const current = draftsRef.current.find((draft) => String(draft.id) === draftId);
+      try {
+        await save(Number(current?.version));
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== "Import draft is stale") throw error;
+        const latest = (await getAgentDraft(draftId)).draft as Draft;
+        await save(Number(latest.version));
+      }
+      replaceDraft(draftId, (await getAgentDraft(draftId)).draft as Draft);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not change the match");
     } finally {
       setBusy(false);
     }
@@ -519,6 +569,12 @@ export function AgentDraftReviewClient({
           </div>
         </section>
       )}
+      <ReconcilePanel
+        drafts={drafts}
+        accounts={financialAccounts}
+        busy={busy}
+        onChange={(draftId, change) => void changeReconcile(draftId, change)}
+      />
       {pendingCommit && (
         <section className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-dark dark:text-white" aria-label="Possible duplicate transactions">
           <h2 className="font-semibold">Review {pendingCommit.duplicates.length} possible duplicate{pendingCommit.duplicates.length === 1 ? "" : "s"}</h2>

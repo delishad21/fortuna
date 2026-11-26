@@ -1,6 +1,7 @@
 "use server";
 
 import { auth } from "@/lib/actionAuth";
+import type { ReconcileChange, ReconcilePlan } from "@/lib/reconcile";
 
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || "http://data-service:4001";
 
@@ -170,5 +171,20 @@ export async function discardAgentDraft(draftId: string) {
   return request<{ draft: Record<string, any> }>(
     `/api/agent/drafts/${encodeURIComponent(draftId)}`,
     { method: "DELETE" },
+  );
+}
+
+/**
+ * Change how a staged statement reconciles against logged entries: a row's match
+ * (an entry id, null for none, "auto"), and what happens to logged entries the
+ * statement doesn't show. Nothing is saved to the ledger until the commit.
+ */
+export async function reconcileAgentDraft(
+  draftId: string,
+  input: ReconcileChange & { expectedVersion: number },
+) {
+  return request<{ draftId: string; version: number; reconcile: ReconcilePlan | null }>(
+    `/api/agent/drafts/${encodeURIComponent(draftId)}/reconcile`,
+    { method: "PATCH", body: JSON.stringify(input) },
   );
 }

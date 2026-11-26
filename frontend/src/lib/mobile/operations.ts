@@ -130,6 +130,7 @@ import {
   commitAgentDraft,
   commitAgentDraftSelection,
   discardAgentDraft,
+  reconcileAgentDraft,
 } from "@/app/actions/agentDrafts";
 import {
   getReimbursementCandidates,
@@ -321,6 +322,7 @@ export const mobileOperations = {
   commitAgentDraft,
   commitAgentDraftSelection,
   discardAgentDraft,
+  reconcileAgentDraft,
   getReimbursementCandidates,
   setReimbursementLinks,
   getTripWallets,
