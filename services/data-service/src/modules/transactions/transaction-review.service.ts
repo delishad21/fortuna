@@ -36,7 +36,8 @@ function queueWhere(userId: string, query: ReviewQueueQuery): Prisma.Transaction
     ...(query.status !== "all" ? { reviewStatus: query.status } : {}),
     ...(query.reasons?.length ? { reviewReasons: { hasSome: query.reasons } } : {}),
     ...(query.entrySource?.length ? { entrySource: { in: query.entrySource } } : {}),
-    ...(query.account ? { accountIdentifier: query.account } : {}),
+    // An account by statement identifier or by its Account id.
+    ...(query.account ? { OR: [{ accountIdentifier: query.account }, { accountId: query.account }] } : {}),
     ...(query.dateFrom || query.dateTo
       ? {
           date: {
@@ -158,7 +159,11 @@ export const TransactionReview = {
         await TransactionService.updateTransaction(existing.id, userId, {
           ...(category ? { categoryId: category.id } : {}),
           ...(linkage ? { linkage: linkage as never } : category && reservedBefore ? { linkage: null } : {}),
-          ...(account ? { accountIdentifier: account.accountIdentifier } : {}),
+          ...(account
+            ? account.accountIdentifier
+              ? { accountIdentifier: account.accountIdentifier }
+              : { accountId: account.accountId }
+            : {}),
           ...(input.label !== undefined ? { label: (input.label || null) as string } : {}),
         });
         const metadata = record(existing.metadata);
@@ -329,7 +334,7 @@ export const TransactionReview = {
       if (from.accountIdentifier === UNASSIGNED_ACCOUNT) {
         await prisma.transaction.updateMany({
           where: { userId, accountIdentifier: UNASSIGNED_ACCOUNT },
-          data: { accountIdentifier: target.accountIdentifier },
+          data: target.accountIdentifier ? { accountIdentifier: target.accountIdentifier } : { accountId: targetId },
         });
         await prisma.accountIdentifier.deleteMany({ where: { userId, accountIdentifier: UNASSIGNED_ACCOUNT } });
       }

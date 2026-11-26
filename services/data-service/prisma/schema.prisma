@@ -379,6 +379,8 @@ model UserSettings {
   analyticsExcludedCategoryIds Json?    @map("analytics_excluded_category_ids")
   dateFormat                   String   @default("MM/dd/yyyy")
   defaultTimeframe             String   @default("month") @map("default_timeframe")
+  /// daily | statements; null until chosen (then derived from assistant entries).
+  workflowMode                 String?  @map("workflow_mode")
   createdAt                    DateTime @default(now()) @map("created_at")
   updatedAt                    DateTime @updatedAt @map("updated_at")
 

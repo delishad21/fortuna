@@ -14,6 +14,10 @@ export interface AnalyticsTransaction {
   imageId?: string | null;
   source?: string | null;
   importBatchId?: string | null;
+  accountId?: string | null;
+  cardId?: string | null;
+  account?: { id: string; name: string; color: string; imageId?: string | null } | null;
+  card?: { id: string; last4: string; nickname?: string | null; network?: string | null; imageId?: string | null } | null;
 }
 
 export const REIMBURSEMENT_LEFTOVER_CATEGORY = {
@@ -232,6 +236,54 @@ export const buildCategoryBreakdown = (transactions: AnalyticsTransaction[]) => 
   }
 
   return Array.from(map.values()).sort((a, b) => b.totalOut - a.totalOut);
+};
+
+export const NO_ACCOUNT = { key: "none", name: "No account", color: "#9ca3af" };
+export const NO_CARD = { key: "none", name: "No card", color: "#9ca3af" };
+
+const NETWORK_LABELS: Record<string, string> = {
+  visa: "Visa",
+  mastercard: "Mastercard",
+  amex: "Amex",
+  unionpay: "UnionPay",
+  jcb: "JCB",
+  discover: "Discover",
+  nets: "NETS",
+};
+
+/** "Nickname ·· 1234" or "Visa ·· 1234", like the apps' cardDisplay. */
+export const cardName = (card: { last4: string; nickname?: string | null; network?: string | null }) =>
+  `${card.nickname?.trim() || (card.network && NETWORK_LABELS[card.network]) || "Card"} ·· ${card.last4}`;
+
+/** Where a transaction is grouped by account: its Account, else "No account". */
+export const getAccountInfo = (tx: AnalyticsTransaction) =>
+  tx.account
+    ? { key: tx.account.id, name: tx.account.name, color: tx.account.color }
+    : tx.accountId
+      ? { key: tx.accountId, name: "Account", color: NO_ACCOUNT.color }
+      : NO_ACCOUNT;
+
+/** Where a transaction is grouped by card: its card (in its account's colour), else "No card". */
+export const getCardInfo = (tx: AnalyticsTransaction) =>
+  tx.card
+    ? { key: tx.card.id, name: cardName(tx.card), color: tx.account?.color || NO_CARD.color }
+    : NO_CARD;
+
+/** Money in and out per Account (or per card), largest spending first. */
+export const buildAccountBreakdown = (transactions: AnalyticsTransaction[], by: "account" | "card" = "account") => {
+  const map = new Map<
+    string,
+    { key: string; name: string; color: string; totalIn: number; totalOut: number; transactionCount: number }
+  >();
+  for (const tx of transactions) {
+    const info = by === "card" ? getCardInfo(tx) : getAccountInfo(tx);
+    const current = map.get(info.key) || { ...info, totalIn: 0, totalOut: 0, transactionCount: 0 };
+    current.totalIn += getEffectiveIn(tx);
+    current.totalOut += getEffectiveOut(tx);
+    current.transactionCount += 1;
+    map.set(info.key, current);
+  }
+  return Array.from(map.values()).sort((a, b) => b.totalOut - a.totalOut || a.name.localeCompare(b.name));
 };
 
 export const shiftMonthKey = (monthKey: string, offset: number) => {

@@ -3,7 +3,12 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import { ZodError } from "zod";
 import prisma from "../../lib/prisma";
 import { withDatabase } from "../../lib/database-context";
-import { authenticatedUserId, requireApiToken, requireApiTokenAnyOf } from "../auth/auth.middleware";
+import {
+  authenticatedUserId,
+  requireAccountAuth,
+  requireApiToken,
+  requireApiTokenAnyOf,
+} from "../auth/auth.middleware";
 import { CreateEntrySchema, ExternalIdSchema, UpdateEntrySchema } from "./assistant-entries";
 import { AssistantEntries, EntryError, findEntry, publicEntry, type EntryActor } from "./assistant-entries.service";
 import { assistantEntryGuide } from "./assistant-entry-guide";
@@ -24,7 +29,8 @@ import { sourceWatchList } from "../sources/sources.service";
  * classifies them, books the account (creating one when none matches) and
  * queues them for review. The same externalId updates instead of adding a
  * row, and possible duplicates come back with each write rather than refused.
- * With transactions:review, /review lists the queue and corrects entries.
+ * With transactions:review, /review lists the queue and corrects entries;
+ * the apps' To review screen calls /review too, as the trusted frontend.
  * /guide and /context/* are open to either scope; /context/sources (what to
  * watch) also to accounts:read.
  */
@@ -32,7 +38,9 @@ export function createAgentTransactionsRouter(db: PrismaClient = prisma) {
   const router = Router();
   router.use((_request, _response, next) => void withDatabase(db, async () => next()));
   const write = requireApiToken(["transactions:write"]);
-  const review = requireApiToken(["transactions:review"]);
+  // The web and phone apps' To review screen uses these same routes (as the
+  // trusted frontend), so Fortuna and twee work through one queue.
+  const review = requireAccountAuth(["transactions:review"]);
   const either = requireApiTokenAnyOf(["transactions:write", "transactions:review"]);
   // What to watch is also open to accounts:read, for a job that only reads.
   const watching = requireApiTokenAnyOf(["transactions:write", "transactions:review", "accounts:read"]);

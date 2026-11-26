@@ -104,17 +104,32 @@ async function loadAccounts(userId: string): Promise<AccountRow[]> {
   }));
 }
 
-/** An existing account by identifier, identifier id, account id or name (case-insensitive). */
-export async function findAccount(userId: string, ref: string) {
+/**
+ * An existing account by identifier, identifier id, account id or name
+ * (case-insensitive). An account with no statement identifier (one made in
+ * Settings with only cards, say) is found by id or name too; its
+ * accountIdentifier is then null.
+ */
+export async function findAccount(
+  userId: string,
+  ref: string,
+): Promise<(Omit<AccountRow, "accountIdentifier"> & { accountIdentifier: string | null }) | null> {
   const accounts = await loadAccounts(userId);
   const wanted = ref.trim();
   const lower = wanted.toLowerCase();
-  return (
+  const byIdentifier =
     accounts.find((item) => item.accountIdentifier === wanted || item.id === wanted) ??
     accounts.find((item) => item.accountId === wanted) ??
-    accounts.find((item) => item.label?.trim().toLowerCase() === lower) ??
-    null
-  );
+    accounts.find((item) => item.label?.trim().toLowerCase() === lower);
+  if (byIdentifier) return byIdentifier;
+  const account = await prisma.financialAccount.findFirst({
+    where: { userId, OR: [{ id: wanted }, { name: { equals: wanted, mode: "insensitive" } }] },
+    select: { id: true, name: true, autoCreated: true },
+    orderBy: { createdAt: "asc" },
+  });
+  return account
+    ? { id: account.id, accountIdentifier: null, label: account.name, autoCreated: account.autoCreated, accountId: account.id }
+    : null;
 }
 
 /**
@@ -403,8 +418,18 @@ export function publicEntry(transaction: Stored) {
     amountIn: money(transaction.amountIn),
     amountOut: money(transaction.amountOut),
     currency: transaction.currency,
-    category: transaction.category ? { id: transaction.category.id, name: transaction.category.name } : null,
+    category: transaction.category
+      ? {
+          id: transaction.category.id,
+          name: transaction.category.name,
+          color: transaction.category.color,
+          icon: transaction.category.icon ?? null,
+        }
+      : null,
     account: transaction.accountIdentifier,
+    accountId: transaction.accountId,
+    cardId: transaction.cardId,
+    imageId: transaction.imageId,
     card: metadata.card ?? null,
     entrySource: transaction.entrySource,
     reconciled: transaction.reconciled,

@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import prisma from "../../lib/prisma";
 import {
   AnalyticsTransaction,
+  buildAccountBreakdown,
   buildCategoryBreakdown as buildAnalyticsCategoryBreakdown,
   buildDailySeries as buildAnalyticsDailySeries,
   buildMonthSeries,
@@ -20,6 +21,8 @@ import {
   summarizeTransactions,
 } from "./analytics.utils";
 import { inferImportSourceFilename } from "../imports/import-source";
+import { dayDate, partialPeriod, resolveToday, sameDayIn, shiftDayKey } from "./month-to-date";
+import { loadMonthToDate, resolveWorkflowMode } from "./month-to-date.service";
 
 export const analyticsRouter = Router();
 
@@ -54,8 +57,8 @@ const buildDailySeries = (start: Date, end: Date) => {
   return days;
 };
 
-const getImportedMonthGroups = (transactions: AnalyticsTransaction[]) => {
-  const groups = new Map<string, AnalyticsTransaction[]>();
+const getImportedMonthGroups = <T extends AnalyticsTransaction>(transactions: T[]) => {
+  const groups = new Map<string, T[]>();
   for (const tx of transactions) {
     const month = formatMonthKey(tx.date);
     const current = groups.get(month) || [];
@@ -91,6 +94,17 @@ const buildMerchantBreakdown = (transactions: AnalyticsTransaction[]) => {
 
   return Array.from(map.values()).sort((a, b) => b.totalOut - a.totalOut);
 };
+
+/** What the apps need to show a transaction's account and card. */
+const LEDGER_INCLUDE = {
+  category: true,
+  account: { select: { id: true, name: true, color: true, imageId: true } },
+  card: { select: { id: true, last4: true, nickname: true, network: true, imageId: true } },
+} as const;
+
+/** Calendar date of a Date built from local parts (getMonthRange, the report's range). */
+const localDayKey = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 
 type CategoryExcludableTransaction = {
   categoryId?: string | null;
@@ -344,10 +358,31 @@ const buildRecurringMerchantInsights = (
     .slice(0, limit);
 };
 
-/** A serialized transaction plus what the web's transaction cards need. */
-const serializeForCard = (tx: AnalyticsTransaction & { accountIdentifier?: string | null; linkage?: unknown }) => ({
+type CardTransaction = AnalyticsTransaction & {
+  accountIdentifier?: string | null;
+  linkage?: unknown;
+  entrySource?: string;
+  reviewStatus?: string;
+  reviewReasons?: string[];
+  reconciled?: boolean;
+  createdAt?: Date;
+};
+
+/** A serialized transaction plus what the apps' transaction cards need. */
+const serializeForCard = (tx: CardTransaction) => ({
   ...serializeTransaction(tx),
   accountIdentifier: tx.accountIdentifier ?? null,
+  accountId: tx.accountId ?? null,
+  account: tx.account
+    ? { id: tx.account.id, name: tx.account.name, color: tx.account.color, imageId: tx.account.imageId ?? null }
+    : null,
+  card: tx.card
+    ? { id: tx.card.id, last4: tx.card.last4, nickname: tx.card.nickname ?? null, network: tx.card.network ?? null, imageId: tx.card.imageId ?? null }
+    : null,
+  entrySource: tx.entrySource ?? null,
+  reviewStatus: tx.reviewStatus ?? null,
+  reviewReasons: tx.reviewReasons ?? [],
+  reconciled: tx.reconciled ?? null,
   linkage: tx.linkage ?? null,
   originalAmountIn: tx.amountIn === null || tx.amountIn === undefined ? null : Number(tx.amountIn),
   originalAmountOut: tx.amountOut === null || tx.amountOut === undefined ? null : Number(tx.amountOut),
@@ -417,11 +452,11 @@ const getRangeForQuery = (range: string, month: string) => {
   return selected;
 };
 
-const findLatestImportedMonth = async (userId: string) => {
+const findLatestImportedMonth = async (userId: string, today: string) => {
   const [rawTransactions, excludedCategoryIds] = await Promise.all([
     prisma.transaction.findMany({
       where: { userId },
-      include: { category: true },
+      include: LEDGER_INCLUDE,
       orderBy: { date: "desc" },
     }),
     getAnalyticsExcludedCategoryIds(userId),
@@ -431,13 +466,39 @@ const findLatestImportedMonth = async (userId: string) => {
     excludedCategoryIds,
   );
   const importedMonthGroups = getImportedMonthGroups(allTransactions);
+  const currentMonth = today.slice(0, 7);
+  // The running month can be analysed "so far" as soon as it has anything in
+  // it, not only once it looks like a whole statement (a day after the 15th).
+  const hasCurrentMonth = allTransactions.some((tx) => formatMonthKey(tx.date) === currentMonth);
+  const months = importedMonthGroups.map(([monthKey]) => monthKey).filter((monthKey) => monthKey !== currentMonth);
+  if (hasCurrentMonth) months.unshift(currentMonth);
+  months.sort((a, b) => b.localeCompare(a));
+  const monthGroup = (monthKey: string) =>
+    importedMonthGroups.find(([key]) => key === monthKey)?.[1] ||
+    (monthKey === currentMonth ? allTransactions.filter((tx) => formatMonthKey(tx.date) === currentMonth) : []);
+  /** Whole months (newest first) plus the running month when it has transactions. */
+  const monthGroups: Array<[string, typeof allTransactions]> = months.map((monthKey) => [monthKey, monthGroup(monthKey)]);
+  const completedMonth = months.find((monthKey) => monthKey < currentMonth) || null;
   return {
     allTransactions,
     excludedCategoryIds,
     importedMonthGroups,
+    monthGroups,
+    months,
+    currentMonth: hasCurrentMonth ? currentMonth : null,
+    /** The latest month that is over: what a statement upload covers. */
+    completedMonth,
     latestMonth: importedMonthGroups[0]?.[0] || null,
   };
 };
+
+/** The newest month with statement rows, so the apps can ask for the next upload. */
+const latestStatementMonth = (transactions: Array<AnalyticsTransaction & { entrySource?: string }>) =>
+  transactions.reduce<string | null>((latest, tx) => {
+    if (tx.entrySource !== "statement") return latest;
+    const month = formatMonthKey(tx.date);
+    return !latest || month > latest ? month : latest;
+  }, null);
 
 /**
  * GET /api/analytics/dashboard
@@ -550,9 +611,16 @@ analyticsRouter.get("/dashboard-overview", async (req: Request, res: Response) =
       return res.status(400).json({ error: "userId is required" });
     }
 
-    const { allTransactions, importedMonthGroups, latestMonth } =
-      await findLatestImportedMonth(userId as string);
-    const selectedMonth = (month as string | undefined) || latestMonth;
+    const today = resolveToday(req.query.today);
+    const { allTransactions, importedMonthGroups, latestMonth, completedMonth } =
+      await findLatestImportedMonth(userId as string, today);
+    // Leads with the last month that is over (what the latest statement
+    // covers), not the running month.
+    const defaultMonth =
+      importedMonthGroups.find(([monthKey]) => monthKey === completedMonth)?.[0] ||
+      importedMonthGroups.find(([monthKey]) => monthKey < today.slice(0, 7))?.[0] ||
+      latestMonth;
+    const selectedMonth = (month as string | undefined) || defaultMonth;
     const selectedTransactions = selectedMonth
       ? importedMonthGroups.find(([monthKey]) => monthKey === selectedMonth)?.[1] || []
       : [];
@@ -640,6 +708,88 @@ analyticsRouter.get("/dashboard-overview", async (req: Request, res: Response) =
       },
       recentTransactions: recentTransactions.map(serializeTransaction),
       hasTransactions: allTransactions.length > 0,
+      today,
+      latestStatementMonth: latestStatementMonth(allTransactions),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/analytics/daily-overview
+ * The dashboard for daily tracking: today and this week, the month so far
+ * against last month at the same day with a month-end projection, category
+ * progress, the latest entries, and what needs attention. `today` is the
+ * client's calendar date (YYYY-MM-DD); it defaults to today in Singapore.
+ */
+analyticsRouter.get("/daily-overview", async (req: Request, res: Response) => {
+  try {
+    const userId = req.query.userId as string | undefined;
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const today = resolveToday(req.query.today);
+    const monthStart = dayDate(`${today.slice(0, 7)}-01`);
+    const [workflow, monthToDate, recent, toReview, autoCreatedAccounts, uncategorizedCount, unreconciled, openDrafts, transactionCount] =
+      await Promise.all([
+        resolveWorkflowMode(userId),
+        loadMonthToDate(userId, today),
+        prisma.transaction.findMany({
+          where: { userId },
+          include: LEDGER_INCLUDE,
+          orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+          take: 12,
+        }),
+        prisma.transaction.count({ where: { userId, reviewStatus: "to_review" } }),
+        prisma.financialAccount.findMany({
+          where: { userId, autoCreated: true },
+          select: { id: true, name: true, color: true, imageId: true, autoCreatedFrom: true, _count: { select: { transactions: true } } },
+          orderBy: { createdAt: "desc" },
+        }),
+        prisma.transaction.count({
+          where: { userId, OR: [{ categoryId: null }, { category: { name: { equals: "Uncategorized", mode: "insensitive" } } }] },
+        }),
+        prisma.transaction.findMany({
+          where: { userId, reconciled: false, date: { lt: monthStart } },
+          select: { date: true },
+        }),
+        listOpenStatementDrafts(userId),
+        prisma.transaction.count({ where: { userId } }),
+      ]);
+
+    const unreconciledByMonth = new Map<string, number>();
+    for (const tx of unreconciled) {
+      const month = formatMonthKey(tx.date);
+      unreconciledByMonth.set(month, (unreconciledByMonth.get(month) || 0) + 1);
+    }
+
+    res.json({
+      workflow,
+      today,
+      monthToDate,
+      recent: recent.map(serializeForCard),
+      attention: {
+        toReview,
+        autoCreatedAccounts: autoCreatedAccounts.map((account) => ({
+          id: account.id,
+          name: account.name,
+          color: account.color,
+          imageId: account.imageId,
+          autoCreatedFrom: account.autoCreatedFrom,
+          transactionCount: account._count.transactions,
+        })),
+        uncategorizedCount,
+        unreconciledPastMonths: {
+          count: unreconciled.length,
+          months: Array.from(unreconciledByMonth.entries())
+            .sort(([a], [b]) => b.localeCompare(a))
+            .map(([month, count]) => ({ month, count })),
+        },
+        stagedImports: openDrafts.length,
+      },
+      hasTransactions: transactionCount > 0,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -701,9 +851,9 @@ analyticsRouter.get("/dashboard-review", async (req: Request, res: Response) => 
     const [ruleCount, openDrafts, accounts] = await Promise.all([
       prisma.importRule.count({ where: { userId: userId as string } }),
       listOpenStatementDrafts(userId as string),
-      prisma.accountIdentifier.findMany({
+      prisma.financialAccount.findMany({
         where: { userId: userId as string },
-        select: { accountIdentifier: true, label: true, color: true },
+        select: { id: true, name: true, color: true },
       }),
     ]);
     const categorizedCount = transactions.filter((tx) => !isUncategorized(tx)).length;
@@ -721,7 +871,14 @@ analyticsRouter.get("/dashboard-review", async (req: Request, res: Response) => 
         rowCount: draft._count.rows,
         updatedAt: draft.updatedAt,
       })),
-      coverage: buildStatementCoverage(transactions, accounts),
+      // Per Account, from statement rows only: entries the assistant logged
+      // don't stand in for a missing statement.
+      coverage: buildStatementCoverage(
+        transactions
+          .filter((tx) => tx.entrySource === "statement")
+          .map((tx) => ({ date: tx.date, accountIdentifier: tx.accountId })),
+        accounts.map((account) => ({ accountIdentifier: account.id, label: account.name, color: account.color })),
+      ),
       importSummaries,
       dataHealth: {
         transactionCount: transactions.length,
@@ -828,14 +985,22 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
       categoryId,
       merchantKey,
       interval,
+      accountId,
+      cardId,
     } = req.query;
     if (!userId) {
       return res.status(400).json({ error: "userId is required" });
     }
 
-    const { latestMonth, importedMonthGroups, excludedCategoryIds } =
-      await findLatestImportedMonth(userId as string);
-    const selectedMonth = (month as string | undefined) || latestMonth || formatMonthKey(new Date());
+    const today = resolveToday(req.query.today);
+    const [{ latestMonth, months, currentMonth, excludedCategoryIds }, workflow] = await Promise.all([
+      findLatestImportedMonth(userId as string, today),
+      resolveWorkflowMode(userId as string),
+    ]);
+    // Daily trackers start on the running month; statement uploaders on the
+    // latest statement month, as before.
+    const defaultMonth = workflow.mode === "daily" && currentMonth ? currentMonth : latestMonth;
+    const selectedMonth = (month as string | undefined) || defaultMonth || today.slice(0, 7);
     const explicitStart = typeof dateFrom === "string" && dateFrom
       ? new Date(`${dateFrom}T00:00:00`)
       : null;
@@ -855,7 +1020,7 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
         userId: userId as string,
         date: { gte: start, lte: end },
       },
-      include: { category: true },
+      include: LEDGER_INCLUDE,
       orderBy: { date: "asc" },
     });
     const baseTransactions = filterAnalyticsExcludedCategories(
@@ -863,11 +1028,18 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
       excludedCategoryIds,
     );
 
-    const categoryWhere = categoryId
-      ? categoryId === "uncategorized"
-        ? { categoryId: null }
-        : { categoryId: categoryId as string }
-      : {};
+    // Filters on the Account model and its cards; "none" is rows without one.
+    const categoryWhere = {
+      ...(categoryId
+        ? categoryId === "uncategorized"
+          ? { categoryId: null }
+          : { categoryId: categoryId as string }
+        : {}),
+      ...(typeof accountId === "string" && accountId
+        ? { accountId: accountId === "none" ? null : accountId }
+        : {}),
+      ...(typeof cardId === "string" && cardId ? { cardId: cardId === "none" ? null : cardId } : {}),
+    };
     const filtered = (rows: typeof rawBaseTransactions) => {
       const kept = filterAnalyticsExcludedCategories(rows, excludedCategoryIds);
       return merchantKey ? kept.filter((tx) => normalizeMerchant(tx).key === merchantKey) : kept;
@@ -879,7 +1051,7 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
         date: { gte: start, lte: end },
         ...categoryWhere,
       },
-      include: { category: true },
+      include: LEDGER_INCLUDE,
       orderBy: { date: "asc" },
     });
     const transactions = filtered(rawTransactions);
@@ -895,18 +1067,35 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
     const previousStart = monthAligned && monthSpan > 0
       ? new Date(start.getFullYear(), start.getMonth() - monthSpan, 1)
       : new Date(previousEnd.getTime() - (end.getTime() - start.getTime()));
+    const summary = summarizeTransactions(transactions);
+    // A period that is still running (it contains today) is compared with
+    // the same number of days of the previous one: the month so far against
+    // last month to the same day.
+    const startKey = localDayKey(start);
+    const endKey = localDayKey(end);
+    const partial = partialPeriod(startKey, endKey, today, summary);
+    const comparedEnd = partial
+      ? (() => {
+          const sameDay =
+            monthAligned && monthSpan === 1
+              ? sameDayIn(localDayKey(previousStart).slice(0, 7), Number(today.slice(8, 10)))
+              : shiftDayKey(localDayKey(previousStart), partial.elapsedDays - 1);
+          const [year, monthNumber, day] = sameDay.split("-").map(Number);
+          const cutoff = new Date(year, monthNumber - 1, day, 23, 59, 59, 999);
+          return cutoff < previousEnd ? cutoff : previousEnd;
+        })()
+      : previousEnd;
     const previousTransactions = filtered(
       await prisma.transaction.findMany({
         where: {
           userId: userId as string,
-          date: { gte: previousStart, lte: previousEnd },
+          date: { gte: previousStart, lte: comparedEnd },
           ...categoryWhere,
         },
-        include: { category: true },
+        include: LEDGER_INCLUDE,
       }),
     );
 
-    const summary = summarizeTransactions(transactions);
     const monthSeries = buildMonthSeries(start, end).map((monthKey) => ({
       key: monthKey,
       label: monthKey,
@@ -958,20 +1147,45 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
         percentOfTotal: totalForPercent ? Math.round((Math.abs(getMetricValue(item)) / totalForPercent) * 1000) / 10 : 0,
       }));
     };
-    const breakdown = groupBy === "merchant" ? merchantBreakdown : categoryBreakdown;
+    const accountBreakdown = buildAccountBreakdown(transactions, "account");
+    const cardBreakdown = buildAccountBreakdown(transactions, "card");
+    const breakdown =
+      groupBy === "merchant"
+        ? merchantBreakdown
+        : groupBy === "account"
+          ? accountBreakdown
+          : groupBy === "card"
+            ? cardBreakdown
+            : categoryBreakdown;
 
     res.json({
       selectedMonth,
-      importedMonths: importedMonthGroups.map(([monthKey]) => monthKey),
-      controls: { range, metric, groupBy, categoryId: categoryId || null, merchantKey: merchantKey || null },
+      importedMonths: months,
+      /** The running month, listed in importedMonths when it has transactions. */
+      currentMonth,
+      today,
+      workflow,
+      controls: {
+        range,
+        metric,
+        groupBy,
+        categoryId: categoryId || null,
+        merchantKey: merchantKey || null,
+        accountId: accountId || null,
+        cardId: cardId || null,
+      },
       period: { start, end },
+      /** Set while the period is still running: how far in, and its totals at this pace. */
+      partial,
       summary,
       previousPeriod: {
         start: previousStart,
-        end: previousEnd,
+        end: comparedEnd,
+        /** True when only the same days of the previous period are counted. */
+        sameDays: Boolean(partial),
         summary: summarizeTransactions(previousTransactions),
       },
-      chartSeries: groupBy === "category" || groupBy === "merchant"
+      chartSeries: groupBy === "category" || groupBy === "merchant" || groupBy === "account" || groupBy === "card"
         ? breakdown.map((item: any) => ({
             key: item.key,
             label: item.name,
@@ -987,9 +1201,15 @@ analyticsRouter.get("/report", async (req: Request, res: Response) => {
       breakdown: withMetricPercent(breakdown),
       categoryBreakdown: withMetricPercent(categoryBreakdown),
       merchantBreakdown: withMetricPercent(merchantBreakdown),
+      accountBreakdown: withMetricPercent(accountBreakdown),
+      cardBreakdown: withMetricPercent(cardBreakdown),
       transactions: [...transactions].reverse().map(serializeForCard),
       categories: availableCategories.map((item) => ({ id: item.key, name: item.name, color: item.color })),
       merchants: availableMerchants.map((item) => ({ key: item.key, name: item.name })),
+      accounts: buildAccountBreakdown(baseTransactions, "account").map((item) => ({ id: item.key, name: item.name, color: item.color })),
+      cards: buildAccountBreakdown(baseTransactions, "card")
+        .filter((item) => item.key !== "none")
+        .map((item) => ({ id: item.key, name: item.name, color: item.color })),
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -1007,15 +1227,25 @@ analyticsRouter.get("/overview", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "userId is required" });
     }
 
-    const { allTransactions, importedMonthGroups } =
-      await findLatestImportedMonth(userId as string);
+    const today = resolveToday(req.query.today);
+    const { allTransactions, importedMonthGroups, monthGroups, months, currentMonth } =
+      await findLatestImportedMonth(userId as string, today);
     const categoryBreakdown = buildAnalyticsCategoryBreakdown(allTransactions);
     const merchantBreakdown = buildMerchantBreakdown(allTransactions);
-    const monthsAscending = [...importedMonthGroups].reverse();
-    const monthlyTrend = monthsAscending.slice(-12).map(([monthKey, monthTransactions]) => ({
-      month: monthKey,
-      ...summarizeTransactions(monthTransactions),
-    }));
+    const monthsAscending = [...monthGroups].reverse();
+    // The running month is in the trend "so far", with its projection.
+    const monthlyTrend = monthsAscending.slice(-12).map(([monthKey, monthTransactions]) => {
+      const summary = summarizeTransactions(monthTransactions);
+      return {
+        month: monthKey,
+        ...summary,
+        partial: monthKey === currentMonth,
+        projectedOut:
+          monthKey === currentMonth
+            ? partialPeriod(`${monthKey}-01`, sameDayIn(monthKey, 31), today, summary)?.projected.totalOut ?? null
+            : null,
+      };
+    });
     const averageOut = allTransactions.length
       ? allTransactions.reduce((sum, tx) => sum + getAnalyticsEffectiveOut(tx), 0) / allTransactions.length
       : 0;
@@ -1026,7 +1256,8 @@ analyticsRouter.get("/overview", async (req: Request, res: Response) => {
       .map(serializeTransaction);
 
     res.json({
-      importedMonths: importedMonthGroups.map(([monthKey]) => monthKey),
+      importedMonths: months,
+      currentMonth,
       summary: summarizeTransactions(allTransactions),
       monthlyTrend,
       topCategories: categoryBreakdown.slice(0, 8),
@@ -1051,17 +1282,32 @@ analyticsRouter.get("/insights", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "userId is required" });
     }
 
-    const { allTransactions, importedMonthGroups, latestMonth } =
-      await findLatestImportedMonth(userId as string);
-    const selectedMonth = (month as string | undefined) || latestMonth;
+    const today = resolveToday(req.query.today);
+    const [{ allTransactions, importedMonthGroups, monthGroups, months, currentMonth, latestMonth }, workflow] =
+      await Promise.all([findLatestImportedMonth(userId as string, today), resolveWorkflowMode(userId as string)]);
+    const defaultMonth = workflow.mode === "daily" && currentMonth ? currentMonth : latestMonth;
+    const selectedMonth = (month as string | undefined) || defaultMonth;
     const selectedTransactions = selectedMonth
-      ? importedMonthGroups.find(([monthKey]) => monthKey === selectedMonth)?.[1] || []
+      ? monthGroups.find(([monthKey]) => monthKey === selectedMonth)?.[1] || []
       : [];
-    const monthsAscending = [...importedMonthGroups].reverse();
+    // While the selected month is running, earlier months count only up to
+    // the same day, so "vs last month" compares like with like.
+    const isPartial = !!selectedMonth && selectedMonth === currentMonth;
+    const dayOfMonth = Number(today.slice(8, 10));
+    const toSameDay = <T extends AnalyticsTransaction>([monthKey, monthTransactions]: [string, T[]]): [string, T[]] =>
+      isPartial
+        ? [monthKey, monthTransactions.filter((tx) => formatAnalyticsDayKey(tx.date) <= sameDayIn(monthKey, dayOfMonth))]
+        : [monthKey, monthTransactions];
+    const monthsAscending = [...monthGroups].reverse();
     const selectedIndex = monthsAscending.findIndex(([monthKey]) => monthKey === selectedMonth);
-    const previousMonth = selectedIndex > 0 ? monthsAscending[selectedIndex - 1] : null;
-    const priorThree = selectedIndex > 0 ? monthsAscending.slice(Math.max(0, selectedIndex - 3), selectedIndex) : [];
+    const previousMonth = selectedIndex > 0 ? toSameDay(monthsAscending[selectedIndex - 1]) : null;
+    const priorThree = selectedIndex > 0
+      ? monthsAscending.slice(Math.max(0, selectedIndex - 3), selectedIndex).map(toSameDay)
+      : [];
     const currentSummary = summarizeTransactions(selectedTransactions);
+    const partial = isPartial && selectedMonth
+      ? partialPeriod(`${selectedMonth}-01`, sameDayIn(selectedMonth, 31), today, currentSummary)
+      : null;
     const previousSummary = previousMonth ? summarizeTransactions(previousMonth[1]) : null;
     const threeMonthAverage = priorThree.length
       ? priorThree.reduce((sum, [, monthTransactions]) => sum + summarizeTransactions(monthTransactions).totalOut, 0) / priorThree.length
@@ -1085,7 +1331,9 @@ analyticsRouter.get("/insights", async (req: Request, res: Response) => {
       .slice(0, 8);
 
     const merchantBreakdown = buildMerchantBreakdown(selectedTransactions);
-    const previousMerchantKeys = new Set(previousMonth ? buildMerchantBreakdown(previousMonth[1]).map((item) => item.key) : []);
+    // New merchants: not seen at all last month (the whole month, even while this one runs).
+    const wholePreviousMonth = selectedIndex > 0 ? monthsAscending[selectedIndex - 1] : null;
+    const previousMerchantKeys = new Set(wholePreviousMonth ? buildMerchantBreakdown(wholePreviousMonth[1]).map((item) => item.key) : []);
     const newMerchants = merchantBreakdown.filter((item) => !previousMerchantKeys.has(item.key)).slice(0, 8);
     const averageSelectedOut = selectedTransactions.length
       ? selectedTransactions.reduce((sum, tx) => sum + getAnalyticsEffectiveOut(tx), 0) / selectedTransactions.length
@@ -1098,7 +1346,10 @@ analyticsRouter.get("/insights", async (req: Request, res: Response) => {
 
     res.json({
       selectedMonth,
-      importedMonths: importedMonthGroups.map(([monthKey]) => monthKey),
+      importedMonths: months,
+      currentMonth,
+      /** Set while the selected month is running; comparisons then use the same days of earlier months. */
+      partial,
       monthlySummary: {
         ...currentSummary,
         previousMonth: previousMonth ? previousMonth[0] : null,

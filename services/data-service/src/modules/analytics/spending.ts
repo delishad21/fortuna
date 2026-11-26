@@ -1,13 +1,14 @@
 import {
   AnalyticsTransaction,
   formatMonthKey,
+  getAccountInfo,
   getCategoryInfo,
   getEffectiveOut,
   normalizeMerchant,
   shiftMonthKey,
 } from "./analytics.utils";
 
-export const SPENDING_GROUPS = ["category", "month", "merchant"] as const;
+export const SPENDING_GROUPS = ["category", "month", "merchant", "account"] as const;
 export type SpendingGroup = (typeof SPENDING_GROUPS)[number];
 
 export const MAX_SPENDING_ROWS = 500;
@@ -32,7 +33,7 @@ export const parseSpendingQuery = (
   const text = (key: string) => (typeof query[key] === "string" ? (query[key] as string).trim() : "");
   const groupBy = text("groupBy");
   if (!SPENDING_GROUPS.includes(groupBy as SpendingGroup)) {
-    return { ok: false, error: "groupBy must be category, month or merchant" };
+    return { ok: false, error: "groupBy must be category, month, merchant or account" };
   }
   const from = text("from");
   const to = text("to");
@@ -64,10 +65,10 @@ export const matchesCategory = (tx: AnalyticsTransaction, category: string) => {
 const round = (value: number) => Number(value.toFixed(2));
 
 /**
- * Money out per category, month or merchant, using the same effective
+ * Money out per category, month, merchant or account, using the same effective
  * spending as the app (reimbursed parts and internal transfers left out).
  * Months cover every month from `from` to `to`, oldest first, including empty
- * ones; categories and merchants are largest first and leave out zeros.
+ * ones; categories, merchants and accounts are largest first and leave out zeros.
  * `limit` keeps the largest rows, or the most recent months.
  */
 export const buildSpendingRows = (
@@ -97,6 +98,9 @@ export const buildSpendingRows = (
     } else if (query.groupBy === "category") {
       const category = getCategoryInfo(tx);
       add(category.id, category.name, amount);
+    } else if (query.groupBy === "account") {
+      const account = getAccountInfo(tx);
+      add(account.key, account.name, amount);
     } else {
       const merchant = normalizeMerchant(tx);
       add(merchant.key, merchant.name, amount);
