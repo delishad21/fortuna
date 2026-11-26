@@ -1037,7 +1037,7 @@ test("reviews show pre-filled suggestions with a short header", async ({
   await page.screenshot({ path: "/tmp/fortuna-review-prefilled.png" });
 });
 
-test("saved notes, comparisons and unsure review rows work end to end", async ({
+test("classification instructions, comparisons and unsure review rows work end to end", async ({
   page,
   request,
 }) => {
@@ -1053,63 +1053,37 @@ test("saved notes, comparisons and unsure review rows work end to end", async ({
   await page.getByRole("button", { name: "Sign In", exact: true }).click();
   await expect(page).toHaveURL(/dashboard/, { timeout: 30000 });
 
-  // Real memory API through the authenticated proxy.
-  const api = await page.evaluate(async () => {
-    const call = (path: string, method = "GET", body?: unknown) =>
-      fetch(`/api/chat${path}`, {
-        method,
-        headers: body ? { "Content-Type": "application/json" } : {},
-        body: body ? JSON.stringify(body) : undefined,
-      }).then(async (r) => ({ status: r.status, body: await r.json() }));
-    const created = await call("/memories", "POST", {
-      content: "Townsville journeys are hers",
-    });
-    const updated = await call(`/memories/${created.body.id}`, "PUT", {
-      content: "Simei–Townsville journeys are hers",
-    });
-    const listed = await call("/memories");
-    return {
-      created: created.status,
-      updated: updated.body.content,
-      listed: listed.body.map((n: any) => n.content),
-    };
-  });
-  expect(api).toEqual({
-    created: 201,
-    updated: "Simei–Townsville journeys are hers",
-    listed: ["Simei–Townsville journeys are hers"],
-  });
-
-  // Settings panel lists, adds, edits and deletes notes.
-  await page.goto("/settings?tab=ai");
-  const panel = page.getByRole("region", { name: "Saved notes" });
+  // Settings lists, adds, edits and disables classification instructions.
+  await page.goto("/settings?tab=rules");
+  const panel = page.getByRole("region", { name: "Classification instructions" });
+  await expect(panel.getByText("No instructions yet.", { exact: false })).toBeVisible();
+  await panel.getByRole("button", { name: "Add", exact: true }).click();
+  await panel
+    .getByLabel("Instruction", { exact: true })
+    .fill("Simei–Townsville journeys are hers");
+  await panel.getByRole("button", { name: "Add instruction" }).click();
   await expect(
     panel.getByText("Simei–Townsville journeys are hers"),
   ).toBeVisible();
-  await panel
-    .getByLabel("New note", { exact: true })
-    .fill("She repays me at the end of each month");
-  await panel.getByRole("button", { name: "Add note" }).click();
-  await expect(
-    panel.getByText("She repays me at the end of each month"),
-  ).toBeVisible();
+  await expect(panel.getByText("Every entry · Lasting · By You")).toBeVisible();
   await panel
     .getByRole("button", {
-      name: "Edit note: She repays me at the end of each month",
+      name: "Edit instruction: Simei–Townsville journeys are hers",
     })
     .click();
   await panel
-    .getByLabel("Edit note", { exact: true })
+    .getByLabel("Instruction", { exact: true })
     .fill("She repays me monthly");
-  await panel.getByRole("button", { name: "Save" }).click();
+  await panel.getByRole("button", { name: "Save changes" }).click();
   await expect(panel.getByText("She repays me monthly")).toBeVisible();
-  page.once("dialog", (d) => d.accept());
   await panel
-    .getByRole("button", { name: "Delete note: She repays me monthly" })
+    .getByLabel("Disable instruction: She repays me monthly")
     .click();
-  await expect(panel.getByText("She repays me monthly")).toHaveCount(0);
+  await expect(
+    panel.getByText("Every entry · Lasting · By You · Disabled"),
+  ).toBeVisible();
   await page.screenshot({
-    path: "/tmp/fortuna-saved-notes.png",
+    path: "/tmp/fortuna-classification-instructions.png",
     fullPage: true,
   });
 
@@ -1238,7 +1212,7 @@ test("saved notes, comparisons and unsure review rows work end to end", async ({
     await route.fulfill({ json: body });
   });
   await page.goto("/chat?conversation=c1");
-  await expect(page.getByText("Remembered:")).toBeVisible();
+  await expect(page.getByText("Saved instruction:")).toBeVisible();
   await expect(
     page.getByText("Simei–Townsville journeys are hers"),
   ).toBeVisible();

@@ -478,7 +478,7 @@ test("phone chat attaches photos and shows sent images", async ({ page }) => {
   await page.screenshot({ path: "/tmp/fortuna-mobile-chat-image.png" });
 });
 
-test("phone chat shows comparisons, saved notes and unsure review rows", async ({
+test("phone chat shows comparisons, saved instructions and unsure review rows", async ({
   page,
 }) => {
   const server = "http://chat-fixture.local";
@@ -604,7 +604,7 @@ test("phone chat shows comparisons, saved notes and unsure review rows", async (
     .getByRole("button", { name: "August transit", exact: true })
     .click();
   await expect(
-    page.getByText("Remembered: Townsville journeys are hers"),
+    page.getByText("Saved instruction: Townsville journeys are hers"),
   ).toBeVisible();
   await expect(page.getByText("SimplyGo vs card")).toBeVisible();
   await expect(

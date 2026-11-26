@@ -141,7 +141,12 @@ function InstructionForm({
         {kind === "one_off" && (
           <label className="flex flex-col gap-1 text-sm font-medium text-dark dark:text-white">
             Last day it applies
-            <input type="date" value={endsOn} onChange={(e) => setEndsOn(e.target.value)} className={`${field} font-normal`} />
+            <input
+              type="date"
+              value={endsOn}
+              onChange={(e) => setEndsOn(e.target.value)}
+              className={`${field} font-normal`}
+            />
           </label>
         )}
       </div>
@@ -189,105 +194,109 @@ export function InstructionsPanel({ accounts }: { accounts: Account[] }) {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <div id="instructions" className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <BookOpenText className="h-6 w-6 shrink-0 text-primary" />
-            <div className="min-w-0">
-              <CardTitle>Classification instructions</CardTitle>
-              <p className="text-sm text-dark-5 dark:text-dark-6 mt-1">
-                How you want things classified, in your words. Fortuna&apos;s chat and your other assistants all follow
-                these, each only where it applies.
-              </p>
+    <section id="instructions" aria-label="Classification instructions">
+      <Card>
+        <CardHeader>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <BookOpenText className="h-6 w-6 shrink-0 text-primary" />
+              <div className="min-w-0">
+                <CardTitle>Classification instructions</CardTitle>
+                <p className="text-sm text-dark-5 dark:text-dark-6 mt-1">
+                  How you want things classified, in your words. Fortuna&apos;s chat and your other assistants all
+                  follow these, each only where it applies.
+                </p>
+              </div>
             </div>
+            {editing === null && (
+              <Button size="sm" variant="secondary" leftIcon={<Plus size={14} />} onClick={() => setEditing("new")}>
+                Add
+              </Button>
+            )}
           </div>
-          {editing === null && (
-            <Button size="sm" variant="secondary" leftIcon={<Plus size={14} />} onClick={() => setEditing("new")}>
-              Add
-            </Button>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {editing === "new" && (
+            <InstructionForm
+              instruction={null}
+              accounts={accounts}
+              onCancel={() => setEditing(null)}
+              onSaved={async () => {
+                setEditing(null);
+                await load();
+              }}
+            />
           )}
-        </div>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {editing === "new" && (
-          <InstructionForm
-            instruction={null}
-            accounts={accounts}
-            onCancel={() => setEditing(null)}
-            onSaved={async () => {
-              setEditing(null);
-              await load();
-            }}
-          />
-        )}
-        {instructions === null && !error && (
-          <p role="status" className="text-sm text-dark-5 dark:text-dark-6">
-            Loading…
-          </p>
-        )}
-        {instructions?.length === 0 && editing !== "new" && (
-          <p className="text-sm text-dark-5 dark:text-dark-6">
-            No instructions yet. Add one here, or tell Fortuna&apos;s chat what to remember.
-          </p>
-        )}
-        <ul className="divide-y divide-stroke dark:divide-dark-3">
-          {instructions?.map((instruction) =>
-            editing !== "new" && editing?.id === instruction.id ? (
-              <li key={instruction.id} className="py-3">
-                <InstructionForm
-                  instruction={instruction}
-                  accounts={accounts}
-                  onCancel={() => setEditing(null)}
-                  onSaved={async () => {
-                    setEditing(null);
-                    await load();
-                  }}
-                />
-              </li>
-            ) : (
-              <li key={instruction.id} className="flex items-start gap-3 py-3">
-                <div className={`min-w-0 flex-1 ${instruction.active ? "" : "opacity-60"}`}>
-                  <p className="whitespace-pre-wrap break-words text-sm text-dark dark:text-white">{instruction.text}</p>
-                  <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
-                    {[
-                      scopeLabel(instruction),
-                      kindLabel(instruction),
-                      `By ${AUTHOR_LABELS[instruction.author] ?? instruction.author}`,
-                      !instruction.enabled ? "Disabled" : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  aria-label={`Edit instruction: ${instruction.text}`}
-                  className="rounded p-1.5 text-dark-5 hover:bg-gray-2 dark:hover:bg-dark-3"
-                  onClick={() => setEditing(instruction)}
-                >
-                  <Pencil size={15} />
-                </button>
-                <label className="flex shrink-0 items-center gap-2 text-xs text-dark-5 dark:text-dark-6">
-                  <input
-                    type="checkbox"
-                    checked={instruction.enabled}
-                    onChange={() => void toggle(instruction)}
-                    aria-label={`${instruction.enabled ? "Disable" : "Enable"} instruction: ${instruction.text}`}
-                    className="h-4 w-4 accent-primary"
+          {instructions === null && !error && (
+            <p role="status" className="text-sm text-dark-5 dark:text-dark-6">
+              Loading…
+            </p>
+          )}
+          {instructions?.length === 0 && editing !== "new" && (
+            <p className="text-sm text-dark-5 dark:text-dark-6">
+              No instructions yet. Add one here, or tell Fortuna&apos;s chat what to remember.
+            </p>
+          )}
+          <ul className="divide-y divide-stroke dark:divide-dark-3">
+            {instructions?.map((instruction) =>
+              editing !== "new" && editing?.id === instruction.id ? (
+                <li key={instruction.id} className="py-3">
+                  <InstructionForm
+                    instruction={instruction}
+                    accounts={accounts}
+                    onCancel={() => setEditing(null)}
+                    onSaved={async () => {
+                      setEditing(null);
+                      await load();
+                    }}
                   />
-                  On
-                </label>
-              </li>
-            ),
+                </li>
+              ) : (
+                <li key={instruction.id} className="flex items-start gap-3 py-3">
+                  <div className={`min-w-0 flex-1 ${instruction.active ? "" : "opacity-60"}`}>
+                    <p className="whitespace-pre-wrap break-words text-sm text-dark dark:text-white">
+                      {instruction.text}
+                    </p>
+                    <p className="mt-1 text-xs text-dark-5 dark:text-dark-6">
+                      {[
+                        scopeLabel(instruction),
+                        kindLabel(instruction),
+                        `By ${AUTHOR_LABELS[instruction.author] ?? instruction.author}`,
+                        !instruction.enabled ? "Disabled" : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={`Edit instruction: ${instruction.text}`}
+                    className="rounded p-1.5 text-dark-5 hover:bg-gray-2 dark:hover:bg-dark-3"
+                    onClick={() => setEditing(instruction)}
+                  >
+                    <Pencil size={15} />
+                  </button>
+                  <label className="flex shrink-0 items-center gap-2 text-xs text-dark-5 dark:text-dark-6">
+                    <input
+                      type="checkbox"
+                      checked={instruction.enabled}
+                      onChange={() => void toggle(instruction)}
+                      aria-label={`${instruction.enabled ? "Disable" : "Enable"} instruction: ${instruction.text}`}
+                      className="h-4 w-4 accent-primary"
+                    />
+                    On
+                  </label>
+                </li>
+              ),
+            )}
+          </ul>
+          {error && (
+            <p role="alert" className="text-sm text-red">
+              {error}
+            </p>
           )}
-        </ul>
-        {error && (
-          <p role="alert" className="text-sm text-red">
-            {error}
-          </p>
-        )}
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+    </section>
   );
 }
