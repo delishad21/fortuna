@@ -3,6 +3,7 @@ import multer from "multer";
 import { z } from "zod";
 import { authenticatedUserId, requireAccountAuth } from "../auth/auth.middleware";
 import { HermesWorkflowService } from "./hermes-workflow.service";
+import { answerDraftAccountQuestion, DraftAccountAnswerSchema } from "./draft-account-questions";
 import { paylahEmailGuide, paylahHint } from "./paylah-emails";
 import { unlockStatement } from "./statement-unlock";
 
@@ -221,6 +222,23 @@ hermesWorkflowRouter.patch("/drafts/:draftId/account", requireAccountAuth(["draf
     return sendError(response, error);
   }
 });
+
+// The answer to a draft's accountQuestions (from validate): add the card,
+// link the identifier, or create the account it belongs to.
+hermesWorkflowRouter.post(
+  "/drafts/:draftId/account-questions/answer",
+  requireAccountAuth(["drafts:write", "accounts:write"]),
+  async (request, response) => {
+    try {
+      const userId = authenticatedUserId(request);
+      await HermesWorkflowService.getDraft(userId, request.params.draftId);
+      const answered = await answerDraftAccountQuestion(userId, DraftAccountAnswerSchema.parse(request.body));
+      return response.json({ answered });
+    } catch (error) {
+      return sendError(response, error);
+    }
+  },
+);
 
 hermesWorkflowRouter.post("/drafts/:draftId/proposals", requireAccountAuth(["classification:write"]), async (request, response) => {
   try {

@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import prisma from "../../lib/prisma";
 import { addCard, createAccount, runInTransaction as runAccountTransaction } from "../accounts/accounts.service";
 import { DuplicateDetector } from "../duplicates/duplicate-detector";
-import { classifyRows } from "../imports/import-enrichment";
+import { autoCategorizeRows } from "../imports/import-enrichment";
 import { runInTransaction } from "../reimbursements/links.service";
 import {
   accountsForLast4,
@@ -11,11 +11,25 @@ import {
   type UpdateEntryInput,
 } from "./assistant-entries";
 import {
-  classificationDecision,
   reviewReasonsFor,
+  type AssistantDecision,
   type ClassificationDecision,
+  type EntryQuestion,
+  type QuestionInput,
   type ReviewReason,
 } from "./entry-review";
+import {
+  assistantQuestions,
+  assistantSentDecision,
+  decideEntry,
+  mergeQuestions,
+  question,
+  storedQuestions,
+  type PatternResult,
+  type RuleAmountMiss,
+  type RuleResult,
+} from "./entry-decision";
+import { detectStructural, markCounterpart, type StructuralMatch } from "./structural-detection";
 import { TransactionService } from "./transactions.service";
 import { parseExternalId, type ParsedExternalId, type SourceRow } from "../sources/sources";
 import {
@@ -79,7 +93,12 @@ export type ResolvedAccount = {
   autoCreated: boolean;
   /** This request created it. */
   created: AccountRow | null;
+  /** The card or account the entry names isn't one Fortuna knows; a question asks where it belongs. */
+  unknown: UnknownAccount | null;
 };
+
+/** What an entry said about a card or account Fortuna doesn't know. */
+export type UnknownAccount = { last4?: string; identifier?: string; name?: string };
 
 /**
  * The user's statement identifiers as accounts: each with its account's name
@@ -138,16 +157,18 @@ export async function findAccount(
  *
  * An account the assistant names (identifier, id or name) wins, then the
  * user's card with those last 4 digits (or that card id), then a statement
- * identifier ending in them, each only when exactly one matches. When nothing
- * matches, Fortuna creates the account itself (flagged autoCreated, with what
- * created it, through the accounts service) and a Card under it for the last 4
- * digits; the entry is queued with reason
- * new_account until the user confirms or merges it. The assistant never has
- * to invent one.
+ * identifier ending in them, each only when exactly one matches. A card or
+ * account the entry names that matches nothing is unknown: the entry is
+ * booked to no account and a question asks where it belongs (a card under an
+ * existing account, a new account, or linking the identifier to one), unless
+ * unknown is "create" (then Fortuna creates it, flagged autoCreated, as it
+ * used to). Only when the entry names neither does Fortuna fall back to one
+ * shared unassigned account it creates itself.
  */
 export async function resolveAccount(
   userId: string,
   input: { account?: string | null; accountName?: string | null; card?: Card | null; externalId?: string | null },
+  unknown: "ask" | "create" = "ask",
 ): Promise<ResolvedAccount> {
   const { account, accountName, card } = input;
   const accounts = await loadAccounts(userId);
@@ -158,6 +179,7 @@ export async function resolveAccount(
     cardId,
     autoCreated: row.autoCreated,
     created: null,
+    unknown: null,
   });
   const byName = (name: string | null | undefined, among: AccountRow[]) => {
     const lower = name?.trim().toLowerCase();
@@ -176,7 +198,7 @@ export async function resolveAccount(
       select: { id: true, autoCreated: true },
     });
     if (bare)
-      return { accountIdentifier: null, accountId: bare.id, card, cardId: null, autoCreated: bare.autoCreated, created: null };
+      return { accountIdentifier: null, accountId: bare.id, card, cardId: null, autoCreated: bare.autoCreated, created: null, unknown: null };
   }
   if (card?.id || card?.last4) {
     const cards = await prisma.card.findMany({
@@ -194,6 +216,7 @@ export async function resolveAccount(
             cardId: match.id,
             autoCreated: match.account.autoCreated,
             created: null,
+            unknown: null,
           };
     };
     if (cards.length === 1) return pick(cards[0]);
@@ -221,6 +244,22 @@ export async function resolveAccount(
     const named = byName(accountName, accounts);
     if (named) return found(named);
   }
+
+  // Something usable that matches nothing: ask where it belongs.
+  if (unknown === "ask" && (card?.last4 || account?.trim()))
+    return {
+      accountIdentifier: null,
+      accountId: null,
+      card,
+      cardId: null,
+      autoCreated: false,
+      created: null,
+      unknown: {
+        ...(card?.last4 ? { last4: card.last4 } : {}),
+        ...(account?.trim() ? { identifier: account.trim() } : {}),
+        ...(accountName?.trim() ? { name: accountName.trim() } : {}),
+      },
+    };
 
   // Nothing matched: Fortuna creates the account from what the entry shows.
   const identifier = account?.trim() || (card?.last4 ? `****${card.last4}` : UNASSIGNED_ACCOUNT);
@@ -264,6 +303,7 @@ export async function resolveAccount(
     cardId: created.cardId,
     autoCreated: true,
     created: row,
+    unknown: null,
   };
 }
 
@@ -298,73 +338,170 @@ async function suggestedCategoryMatch(userId: string, suggestion: string | null 
   }
 }
 
+/** The question for a card or account Fortuna doesn't know: add the card, make a new account, or link it. */
+export async function accountQuestion(userId: string, unknown: UnknownAccount, now = new Date()): Promise<EntryQuestion> {
+  const accounts = await prisma.financialAccount.findMany({
+    where: { userId, archived: false, autoCreated: false },
+    select: { id: true, name: true, type: true },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: 6,
+  });
+  const name = unknown.name ? ` “${unknown.name}”` : "";
+  if (unknown.last4)
+    return question(
+      {
+        key: `unknown_card:${unknown.last4}`,
+        field: "account",
+        prompt: `Card ending ${unknown.last4}${unknown.name ? ` (${unknown.name})` : ""} isn't one Fortuna knows. Where does it belong?`,
+        options: [
+          ...accounts.map((account) => ({ id: `add_card:${account.id}`, label: `Add it to ${account.name}` })),
+          { id: "new_account:credit_card", label: `New credit card account${name}` },
+          { id: "new_account:savings", label: `New bank account${name}` },
+        ],
+        source: "unknown_account",
+        context: unknown,
+      },
+      now,
+    );
+  const identifier = unknown.identifier ?? "";
+  return question(
+    {
+      key: `unknown_account:${identifier.toLowerCase()}`,
+      field: "account",
+      prompt: `The account “${identifier}” isn't one Fortuna knows. Which account is it?`,
+      options: [
+        ...accounts.map((account) => ({ id: `link:${account.id}`, label: `Link it to ${account.name}` })),
+        { id: "new_account:other", label: `New account “${unknown.name || identifier}”` },
+      ],
+      source: "unknown_account",
+      context: unknown,
+    },
+    now,
+  );
+}
+
 type EntryFacts = {
+  /** The entry's id when it is saved already (structural pairs never match it). */
+  id?: string | null;
   date: Date;
   description: string;
   label: string | null;
   amountIn: number | null;
   amountOut: number | null;
   accountIdentifier: string;
+  accountId: string | null;
+  cardId: string | null;
   suggestedCategory: string | null | undefined;
+  decision: AssistantDecision | null | undefined;
 };
 
-/**
- * Fortuna's classification of an entry: its import rules and auto-categorization
- * first (as for statement rows), the assistant's suggestion only when none of
- * them chose a category, Uncategorized otherwise.
- */
-async function classifyEntry(userId: string, entry: EntryFacts) {
-  const [row] = await classifyRows(userId, undefined, [
+/** What the rules did to the entry: the rule that decided it, and rules whose amount range it missed. */
+async function ruleStep(userId: string, entry: EntryFacts) {
+  await TransactionService.bootstrapDefaultImportRules(userId);
+  const [row] = (await TransactionService.applyImportRules(userId, undefined, [
     {
-      date: entry.date.toISOString().slice(0, 10),
+      date: entry.date,
       description: entry.description,
-      label: entry.label || undefined,
-      amountIn: entry.amountIn ?? undefined,
-      amountOut: entry.amountOut ?? undefined,
-      accountIdentifier: entry.accountIdentifier,
+      amountIn: entry.amountIn,
+      amountOut: entry.amountOut,
+      accountIdentifier: entry.accountIdentifier || null,
+      accountId: entry.accountId,
+      cardId: entry.cardId,
       metadata: { accountIdentifier: entry.accountIdentifier },
     },
-  ]);
+  ])) as Array<Record<string, any>>;
+  const metadata = (row.metadata || {}) as Record<string, any>;
+  const misses: RuleAmountMiss[] = Array.isArray(metadata.ruleAmountMisses) ? metadata.ruleAmountMisses : [];
+  let rule: RuleResult | null = null;
+  if (typeof metadata.fixedRuleId === "string") {
+    const category = row.categoryId
+      ? await prisma.category.findFirst({ where: { id: row.categoryId, userId }, select: { name: true } })
+      : null;
+    rule = {
+      ruleId: metadata.fixedRuleId,
+      ruleName: String(metadata.fixedRuleName ?? "a rule"),
+      ...(row.categoryId ? { categoryId: row.categoryId, categoryName: category?.name } : {}),
+      ...(row.label ? { label: row.label } : {}),
+      internal: row.linkage?.type === "internal",
+    };
+  }
+  return { row, rule, misses };
+}
+
+/** A learned pattern or history match (only asked when the assistant sent nothing). */
+async function patternStep(userId: string, row: Record<string, any>): Promise<PatternResult | null> {
+  const { linkage: _linkage, ...rest } = row;
+  const [out] = await autoCategorizeRows(userId, undefined, [{ ...rest, linkage: null }]);
+  if (!out?.suggestionApplied) return null;
+  const source = out.suggestionSource;
+  return {
+    source: source === "learned_pattern" || source === "history" ? source : "heuristic",
+    ...(out.categoryId ? { categoryId: out.categoryId } : {}),
+    ...(out.label && out.label !== row.label ? { label: out.label } : {}),
+    internal: out.linkage?.type === "internal",
+    ...(typeof out.metadata?.classificationPatternId === "string" ? { patternId: out.metadata.classificationPatternId } : {}),
+  };
+}
+
+/**
+ * Fortuna's classification of an assistant entry, in this order: structural
+ * detection, enabled rules, the assistant's decision, and a learned pattern
+ * or history match only when the assistant sent nothing (entry-decision.ts).
+ */
+async function classifyEntry(userId: string, entry: EntryFacts) {
   const reserved = await TransactionService.ensureReservedCategories(userId);
   const warnings: string[] = [];
-  let categoryId: string | undefined = row.categoryId || undefined;
-  let linkage: Record<string, unknown> | null = null;
-  const ruleLinkage = row.linkage?.type as string | undefined;
-  const reason = typeof row.linkage?.detectionReason === "string" ? row.linkage.detectionReason : "Matched a rule";
-  if (ruleLinkage === "internal") {
-    categoryId = reserved.internal.id;
-    linkage = { type: "internal", autoDetected: true, detectionReason: reason };
-  } else if (ruleLinkage === "reimbursement" && (entry.amountIn ?? 0) > 0) {
-    categoryId = reserved.reimbursement.id;
-    linkage = { type: "reimbursement", leftoverCategoryId: null, autoDetected: true, detectionReason: reason };
-  } else if (categoryId === reserved.reimbursement.id) {
-    categoryId = undefined;
-  }
+  const structural = await detectStructural(userId, {
+    id: entry.id,
+    accountId: entry.accountId,
+    date: entry.date,
+    description: entry.description,
+    amountIn: entry.amountIn,
+    amountOut: entry.amountOut,
+  });
+  const { row, rule, misses } = await ruleStep(userId, entry);
 
-  let usedSuggestion = false;
-  if (!categoryId && entry.suggestedCategory) {
-    const match = await suggestedCategoryMatch(userId, entry.suggestedCategory);
-    if (!match) warnings.push(`Unknown category "${entry.suggestedCategory}"; the entry stays Uncategorized`);
+  const decision = entry.decision ?? null;
+  const wanted = decision?.category || entry.suggestedCategory || null;
+  let category: { id: string; name: string } | null = null;
+  if (wanted) {
+    const match = await suggestedCategoryMatch(userId, wanted);
+    if (!match) warnings.push(`Unknown category "${wanted}"; the entry stays Uncategorized`);
     else if (match.name === RESERVED.reimbursement && !((entry.amountIn ?? 0) > 0))
       warnings.push("Only money in can be a Reimbursement; the entry stays Uncategorized");
-    else {
-      categoryId = match.id;
-      linkage = linkageFor(match.name, entry.amountIn);
-      usedSuggestion = true;
-    }
+    else category = match;
   }
-  const decision = classificationDecision(
-    { label: entry.label },
-    { ...row, categoryId: categoryId && !usedSuggestion ? categoryId : undefined, linkage: usedSuggestion ? null : row.linkage },
-    { suggestedCategory: entry.suggestedCategory, usedSuggestion },
+  const assistant = { decision, suggestedCategory: entry.suggestedCategory ?? null, category };
+  const pattern =
+    !structural?.internal && !(rule && (rule.internal || rule.categoryId)) && !assistantSentDecision(assistant)
+      ? await patternStep(userId, row)
+      : null;
+  const decided = decideEntry(
+    { amountIn: entry.amountIn, amountOut: entry.amountOut, label: entry.label },
+    { structural, rule, ruleAmountMisses: misses, assistant, pattern },
+    reserved,
   );
-  return {
-    categoryId: categoryId || reserved.uncategorized.id,
-    linkage,
-    label: (row.label as string | undefined) || entry.label || null,
-    decision,
-    warnings,
-  };
+  return { ...decided, structural, warnings };
+}
+
+type Classified = Awaited<ReturnType<typeof classifyEntry>>;
+
+/** The rule that decided (or labelled) the entry counts a hit. */
+async function recordRuleHit(userId: string, decision: ClassificationDecision, previousRuleId?: string) {
+  if (!decision.ruleId || decision.ruleId === previousRuleId) return;
+  await prisma.importRule.updateMany({
+    where: { id: decision.ruleId, userId },
+    data: { hitCount: { increment: 1 }, lastHitAt: new Date() },
+  });
+}
+
+/** After saving: the other side of a structural pair, and the rule's hit. */
+async function afterClassified(userId: string, entryId: string, classified: Classified, previousRuleId?: string) {
+  if (classified.structural?.counterpartId) {
+    const reserved = await TransactionService.ensureReservedCategories(userId);
+    await markCounterpart(userId, classified.structural as StructuralMatch, entryId, reserved.internal.id);
+  }
+  await recordRuleHit(userId, classified.decision, previousRuleId);
 }
 
 /** Linkage that matches a reserved category, the way imports set it. */
@@ -385,9 +522,15 @@ function entryMetadata(
   card: Card | null | undefined,
   assistant: Record<string, unknown> | null | undefined,
   classification?: ClassificationDecision,
+  decided?: { merchant: string | null; transactionType: string | null },
 ) {
   const next: Record<string, unknown> = { ...record(previous) };
   if (classification) next.classification = classification;
+  if (decided) {
+    if (decided.merchant) next.merchant = decided.merchant;
+    if (decided.transactionType) next.transactionType = decided.transactionType;
+    else delete next.transactionType;
+  }
   if (parts) {
     if (parts.time) next.time = parts.time;
     else delete next.time;
@@ -438,7 +581,14 @@ export function publicEntry(transaction: Stored) {
     reviewStatus: transaction.reviewStatus,
     reviewReasons: transaction.reviewReasons,
     reviewedAt: transaction.reviewedAt,
+    /** Which step decided (decidedBy) and with what; the assistant's own decision is in classification.assistant. */
     classification: metadata.classification ?? null,
+    /** The assistant's decision as it sent it: category, type, label, merchant, reason, confidence, precedentIds. */
+    decision: record(metadata.classification).assistant ?? null,
+    merchant: typeof metadata.merchant === "string" ? metadata.merchant : null,
+    transactionType: typeof metadata.transactionType === "string" ? metadata.transactionType : null,
+    /** Open questions for the review; answer them with /review/questions/answer. */
+    questions: storedQuestions(transaction.questions),
     /** The messages behind it (metadata.sources): the primary one, and backups merged into it. */
     sources: Array.isArray(metadata.sources) ? metadata.sources : [],
     metadata: metadata.assistant ?? null,
@@ -522,25 +672,31 @@ export async function findEntry(userId: string, ref: { id?: string; externalId?:
 }
 
 /**
- * Sets the entry's review reasons from its classification, its account and the
- * possible duplicates found for it, and builds the write response.
+ * Sets the entry's review reasons from its classification, its account, its
+ * open questions and the possible duplicates found for it, and builds the
+ * write response.
  */
 async function withReview(
   userId: string,
   transaction: Stored,
   facts: {
-    decision: Pick<ClassificationDecision, "decidedBy"> | undefined;
+    decision: (Pick<ClassificationDecision, "decidedBy"> & { assistant?: AssistantDecision | null }) | undefined;
     accountAutoCreated: boolean;
     accountCreated: { id: string; accountIdentifier: string; label: string | null } | null;
     warnings: string[];
+    keepReasons?: ReviewReason[];
   },
 ) {
   const duplicates = await possibleDuplicates(userId, transaction);
+  const questions = storedQuestions(transaction.questions);
   const reasons: ReviewReason[] = reviewReasonsFor({
     decision: facts.decision ?? { decidedBy: "correction" },
     accountAutoCreated: facts.accountAutoCreated,
+    accountUnknown: questions.some((item) => item.source === "unknown_account"),
     possibleDuplicates: duplicates.length,
+    questions: questions.length,
   });
+  for (const reason of facts.keepReasons ?? []) if (!reasons.includes(reason)) reasons.push(reason);
   const saved = await prisma.transaction.update({
     where: { id: transaction.id },
     data: { reviewReasons: reasons },
@@ -762,7 +918,16 @@ export const AssistantEntries = {
       amountIn: input.amountIn ?? null,
       amountOut: input.amountOut ?? null,
       accountIdentifier: account.accountIdentifier ?? "",
+      accountId: account.accountId,
+      cardId: account.cardId,
       suggestedCategory: input.suggestedCategory,
+      decision: input.decision,
+    });
+    const now = new Date();
+    const questions = mergeQuestions([], {
+      system: classified.questions,
+      assistant: assistantQuestions((input.questions ?? []) as QuestionInput[], now),
+      account: account.unknown ? await accountQuestion(userId, account.unknown, now) : null,
     });
     const transaction = await runInTransaction(async () => {
       const created = await prisma.transaction.create({
@@ -781,8 +946,9 @@ export const AssistantEntries = {
           accountIdentifier: account.accountIdentifier,
           accountId: account.accountId,
           cardId: account.cardId,
+          questions: questions as unknown as Prisma.InputJsonValue,
           metadata: withSourceEntry(
-            entryMetadata({}, parts, account.card ?? null, input.metadata ?? null, classified.decision),
+            entryMetadata({}, parts, account.card ?? null, input.metadata ?? null, classified.decision, classified),
             sourceEntry(input.externalId, parsed.kind, source, true),
           ),
           linkage: classified.linkage ? (classified.linkage as Prisma.InputJsonValue) : Prisma.DbNull,
@@ -804,6 +970,7 @@ export const AssistantEntries = {
       await audit(userId, actor, "create_transaction", created.id, { afterValue: publicEntry(created) });
       return created;
     });
+    await afterClassified(userId, transaction.id, classified);
     return {
       created: true,
       ...(await withReview(userId, transaction, {
@@ -820,6 +987,7 @@ export const AssistantEntries = {
     ref: { id?: string; externalId?: string },
     input: UpdateEntryInput,
     actor: EntryActor,
+    options: { reclassify?: boolean; keepReasons?: ReviewReason[]; auditAs?: string } = {},
   ) {
     const changed = await runInTransaction(async () => {
       const existing = await findEntry(userId, ref);
@@ -849,36 +1017,47 @@ export const AssistantEntries = {
             : {};
       const nextAmountIn = "amountIn" in amounts ? (amounts.amountIn ?? null) : money(existing.amountIn);
       const nextAmountOut = "amountOut" in amounts ? (amounts.amountOut ?? null) : money(existing.amountOut);
-      const accountIdentifier = resolved?.accountIdentifier ?? existing.accountIdentifier ?? "";
+      const accountIdentifier = resolved ? (resolved.accountIdentifier ?? "") : (existing.accountIdentifier ?? "");
 
       // Fortuna classifies again when what it classifies on changed, unless a
       // review has corrected the entry: a person's correction stands.
       const previous = record(record(existing.metadata).classification) as Partial<ClassificationDecision>;
       const relevant =
+        options.reclassify ||
         input.description !== undefined ||
         "amountIn" in amounts ||
         resolved !== null ||
-        input.suggestedCategory !== undefined;
+        input.suggestedCategory !== undefined ||
+        input.decision !== undefined;
       let decision = (previous.decidedBy ? previous : undefined) as ClassificationDecision | undefined;
       let warnings: string[] = [];
       let categoryChange: { categoryId?: string; linkage?: unknown } = {};
       let labelChange: { label?: string | null } =
         input.label !== undefined ? { label: input.label || null } : {};
+      let classified: Classified | null = null;
+      const now = new Date();
+      const previousQuestions = storedQuestions(existing.questions);
+      let systemQuestions = previousQuestions.filter((item) => item.source === "rule_conflict" || item.source === "amount_range");
       if (relevant && previous.decidedBy !== "correction") {
         const currentLabel =
           input.label !== undefined ? input.label || null : previous.labelFromRule ? null : existing.label;
-        const classified = await classifyEntry(userId, {
+        classified = await classifyEntry(userId, {
+          id: existing.id,
           date: dateParts?.date ?? existing.date,
           description: input.description ?? existing.description,
           label: currentLabel,
           amountIn: nextAmountIn,
           amountOut: nextAmountOut,
           accountIdentifier,
+          accountId: resolved ? resolved.accountId : existing.accountId,
+          cardId: resolved ? resolved.cardId : existing.cardId,
           suggestedCategory:
             input.suggestedCategory !== undefined ? input.suggestedCategory : (previous.suggestedCategory ?? null),
+          decision: input.decision !== undefined ? input.decision : (previous.assistant ?? null),
         });
         decision = classified.decision;
         warnings = classified.warnings;
+        systemQuestions = classified.questions;
         const existingType = record(existing.linkage).type;
         const reservedBefore = existingType === "internal" || existingType === "reimbursement";
         if (classified.categoryId !== existing.categoryId || (classified.linkage?.type ?? null) !== (reservedBefore ? existingType : null))
@@ -888,6 +1067,11 @@ export const AssistantEntries = {
           };
         if (classified.label !== existing.label) labelChange = { label: classified.label };
       }
+      const questions = mergeQuestions(previousQuestions, {
+        system: systemQuestions,
+        ...(input.questions !== undefined ? { assistant: assistantQuestions((input.questions ?? []) as QuestionInput[], now) } : {}),
+        ...(resolved ? { account: resolved.unknown ? await accountQuestion(userId, resolved.unknown, now) : null } : {}),
+      });
 
       await TransactionService.updateTransaction(existing.id, userId, {
         ...(dateParts ? { date: dateParts.date } : {}),
@@ -896,27 +1080,31 @@ export const AssistantEntries = {
         ...(amounts as { amountIn?: number | null; amountOut?: number | null }),
         ...(input.currency ? { currency: input.currency.toUpperCase() } : {}),
         ...(resolved
-          ? { accountIdentifier: resolved.accountIdentifier, accountId: resolved.accountId, cardId: resolved.cardId }
+          ? resolved.accountIdentifier
+            ? { accountIdentifier: resolved.accountIdentifier, accountId: resolved.accountId, cardId: resolved.cardId }
+            : { accountIdentifier: null, accountId: resolved.accountId, cardId: resolved.cardId }
           : {}),
         ...(categoryChange as { categoryId?: string; linkage?: null }),
-      });
+      } as never);
       await prisma.transaction.update({
         where: { id: existing.id },
         data: {
           // A change from the assistant goes back into the queue.
           reviewStatus: "to_review",
           reviewedAt: null,
+          questions: questions as unknown as Prisma.InputJsonValue,
           metadata: entryMetadata(
             existing.metadata,
             dateParts,
             resolved ? resolved.card : input.card,
             input.metadata,
             decision,
+            classified ?? undefined,
           ),
         },
       });
       const updated = (await load(userId, existing.id))!;
-      await audit(userId, actor, "update_transaction", existing.id, {
+      await audit(userId, actor, options.auditAs ?? "update_transaction", existing.id, {
         beforeValue: publicEntry(existing),
         afterValue: publicEntry(updated),
       });
@@ -929,14 +1117,34 @@ export const AssistantEntries = {
               select: { id: true },
             })),
         );
-      return { updated, decision, warnings, accountAutoCreated, accountCreated: resolved?.created ?? null };
+      return {
+        updated,
+        decision,
+        warnings,
+        accountAutoCreated,
+        accountCreated: resolved?.created ?? null,
+        classified,
+        previousRuleId: previous.ruleId,
+      };
     });
+    if (changed.classified) await afterClassified(userId, changed.updated.id, changed.classified, changed.previousRuleId);
     return withReview(userId, changed.updated, {
       decision: changed.decision,
       accountAutoCreated: changed.accountAutoCreated,
       accountCreated: changed.accountCreated,
       warnings: changed.warnings,
+      keepReasons: options.keepReasons,
     });
+  },
+
+  /**
+   * Classifies an assistant entry again from what it already holds (its
+   * facts and the assistant's stored decision), e.g. after the rule that
+   * decided it was undone or its account was settled. A corrected entry keeps
+   * its correction. The entry goes back into the queue.
+   */
+  async reclassify(userId: string, id: string, actor: EntryActor, keepReasons: ReviewReason[] = []) {
+    return AssistantEntries.update(userId, { id }, {}, actor, { reclassify: true, keepReasons, auditAs: "reclassify_transaction" });
   },
 
   /**

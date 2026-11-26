@@ -1,3 +1,4 @@
+import { createRulesRouter } from "./modules/rules/rules.controller";
 import { createChatRouter } from "./modules/chat/chat.controller";
 import prisma from "./lib/prisma";
 import express from "express";
@@ -54,6 +55,7 @@ app.use("/api/images", imagesRouter);
 app.use("/api/agent/analytics", agentAnalyticsRouter);
 app.use("/api/agent/transactions", createAgentTransactionsRouter(prisma));
 app.use("/api/agent/reimbursables", createReimbursablesRouter(prisma));
+app.use("/api/agent/rules", createRulesRouter());
 
 // Error handling
 app.use(

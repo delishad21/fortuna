@@ -114,7 +114,19 @@ export interface ImportRulePayload {
   setCategoryName?: string | null;
   markInternal?: boolean;
   sortOrder?: number;
+  /** Scope to an account (any source) or one card. */
+  accountId?: string | null;
+  cardId?: string | null;
+  amountMin?: number | null;
+  amountMax?: number | null;
+  origin?: RuleOrigin;
+  reason?: string | null;
+  exampleTransactionIds?: string[];
+  recurringBill?: Record<string, unknown> | null;
 }
+
+export const RULE_ORIGINS = ["user", "assistant_on_request", "assistant_detected"] as const;
+export type RuleOrigin = (typeof RULE_ORIGINS)[number];
 
 export interface ClassificationPatternFilters {
   status?: ClassificationPatternStatus;
@@ -273,9 +285,65 @@ export class TransactionService {
     };
   }
 
+  /** The newer rule fields, only those given (so an update leaves the rest alone). */
+  private static ruleExtras(payload: Partial<ImportRulePayload>) {
+    return {
+      ...(payload.accountId !== undefined ? { accountId: payload.accountId || null } : {}),
+      ...(payload.cardId !== undefined ? { cardId: payload.cardId || null } : {}),
+      ...(payload.amountMin !== undefined ? { amountMin: payload.amountMin } : {}),
+      ...(payload.amountMax !== undefined ? { amountMax: payload.amountMax } : {}),
+      ...(payload.origin !== undefined ? { origin: payload.origin } : {}),
+      ...(payload.reason !== undefined ? { reason: payload.reason?.trim() || null } : {}),
+      ...(payload.exampleTransactionIds !== undefined ? { exampleTransactionIds: payload.exampleTransactionIds } : {}),
+      ...(payload.recurringBill !== undefined
+        ? { recurringBill: (payload.recurringBill ?? Prisma.DbNull) as Prisma.InputJsonValue }
+        : {}),
+    };
+  }
+
+  /**
+   * The rule's account and card scope, checked against the user's own: a card
+   * scopes to its account too, and a statement identifier scopes to its account.
+   */
+  private static async ruleScope(
+    userId: string,
+    scope: { accountIdentifier: string | null; accountId?: string | null; cardId?: string | null },
+  ) {
+    let accountId = scope.accountId ?? null;
+    if (scope.cardId) {
+      const card = await prisma.card.findFirst({ where: { id: scope.cardId, userId }, select: { accountId: true } });
+      if (!card) throw new Error("Card not found");
+      if (accountId && accountId !== card.accountId) throw new Error("That card belongs to another account");
+      accountId = card.accountId;
+    }
+    if (accountId && !(await prisma.financialAccount.findFirst({ where: { id: accountId, userId }, select: { id: true } })))
+      throw new Error("Account not found");
+    if (!accountId && scope.accountIdentifier && scope.accountId === undefined) {
+      const identifier = await prisma.accountIdentifier.findFirst({
+        where: { userId, accountIdentifier: scope.accountIdentifier },
+        select: { accountId: true },
+      });
+      accountId = identifier?.accountId ?? null;
+    }
+    return { accountId };
+  }
+
+  private static assertAmountRange(rule: { amountMin?: unknown; amountMax?: unknown }) {
+    if (rule.amountMin != null && rule.amountMax != null && Number(rule.amountMin) > Number(rule.amountMax))
+      throw new Error("amountMin must not be above amountMax");
+  }
+
+  /**
+   * Whether a rule's scope and text match a transaction (the amount range is
+   * checked apart: see ruleAmountFits). A rule on an account matches that
+   * account's transactions whatever their source: by account id, or by a
+   * statement identifier of that account (accountIds maps them).
+   */
   static ruleMatches(
     rule: {
       accountIdentifier?: string | null;
+      accountId?: string | null;
+      cardId?: string | null;
       matchType: string;
       matchValue: string | null;
       caseSensitive: boolean;
@@ -283,15 +351,24 @@ export class TransactionService {
     tx: {
       description?: string | null;
       accountIdentifier?: string | null;
+      accountId?: string | null;
+      cardId?: string | null;
       metadata?: unknown;
     },
+    accountIds?: Map<string, string>,
   ) {
-    if (rule.accountIdentifier) {
-      const account =
-        tx.accountIdentifier ||
-        (tx.metadata as { accountIdentifier?: string } | null)
-          ?.accountIdentifier;
-      if (account !== rule.accountIdentifier) return false;
+    const identifier =
+      tx.accountIdentifier ||
+      (tx.metadata as { accountIdentifier?: string } | null)?.accountIdentifier ||
+      null;
+    const accountId = tx.accountId || (identifier ? accountIds?.get(identifier) : undefined) || null;
+    // A card scope is enough on its own (the card may have moved accounts).
+    if (rule.cardId) {
+      if (tx.cardId !== rule.cardId) return false;
+    } else if (rule.accountId) {
+      if (accountId !== rule.accountId && !(rule.accountIdentifier && identifier === rule.accountIdentifier)) return false;
+    } else if (rule.accountIdentifier) {
+      if (identifier !== rule.accountIdentifier) return false;
     }
     const description = tx.description || "";
     if (rule.matchType === "always") {
@@ -308,6 +385,50 @@ export class TransactionService {
     return false;
   }
 
+  /** The transaction's amount is inside the rule's range (a rule without one fits any amount). */
+  static ruleAmountFits(
+    rule: { amountMin?: Prisma.Decimal | number | null; amountMax?: Prisma.Decimal | number | null },
+    tx: { amountIn?: number | null; amountOut?: number | null },
+  ) {
+    const amount = Number(tx.amountOut || 0) || Number(tx.amountIn || 0);
+    if (rule.amountMin != null && amount < Number(rule.amountMin)) return false;
+    if (rule.amountMax != null && amount > Number(rule.amountMax)) return false;
+    return true;
+  }
+
+  /**
+   * Accounts each statement parser has imported into. A parser-scoped rule
+   * applies to an entry without a parser (an assistant entry) on one of them.
+   */
+  private static async parserAccounts(userId: string) {
+    const rows = await prisma.$queryRaw<Array<{ parser_id: string; account_id: string }>>`
+      SELECT DISTINCT COALESCE(b."parser_id", t."metadata"->>'parserId') AS parser_id, t."account_id"
+      FROM "transactions" t
+      LEFT JOIN "import_batches" b ON b."id" = t."import_batch_id"
+      WHERE t."user_id" = ${userId}
+        AND t."account_id" IS NOT NULL
+        AND COALESCE(b."parser_id", t."metadata"->>'parserId') IS NOT NULL`;
+    const byParser = new Map<string, Set<string>>();
+    for (const row of rows) {
+      for (const parserId of compatibleImportRuleParserIds(row.parser_id)) {
+        const set = byParser.get(parserId) ?? new Set<string>();
+        set.add(row.account_id);
+        byParser.set(parserId, set);
+      }
+    }
+    return byParser;
+  }
+
+  /**
+   * Applies the user's enabled rules to rows, in sortOrder. With a parserId
+   * (a statement import) the rules for that parser and those without one
+   * apply, as before. Without one (an assistant entry) the rules without a
+   * parser apply, and a parser's rules apply to rows on the accounts that
+   * parser imports into, so rules work by account whatever the source.
+   * Account and card scopes hold either way. A rule whose text and scope
+   * match but whose amount range doesn't is skipped and noted in
+   * metadata.ruleAmountMisses, so the caller can ask instead.
+   */
   static async applyImportRules(
     userId: string,
     parserId: string | undefined,
@@ -320,17 +441,34 @@ export class TransactionService {
       where: {
         userId,
         enabled: true,
-        OR: [
-          { parserId: null },
-          ...(compatibleParserIds.length
-            ? [{ parserId: { in: compatibleParserIds } }]
-            : []),
-        ],
+        ...(parserId
+          ? {
+              OR: [
+                { parserId: null },
+                ...(compatibleParserIds.length ? [{ parserId: { in: compatibleParserIds } }] : []),
+              ],
+            }
+          : {}),
       },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
     });
 
     if (rules.length === 0) return transactions;
+
+    const scoped = rules.some((rule) => rule.accountId || rule.cardId || (!parserId && rule.parserId));
+    const accountIds = new Map<string, string>();
+    if (scoped) {
+      const identifiers = await prisma.accountIdentifier.findMany({
+        where: { userId, accountId: { not: null } },
+        select: { accountIdentifier: true, accountId: true },
+      });
+      for (const item of identifiers) accountIds.set(item.accountIdentifier, item.accountId!);
+    }
+    const parserAccounts = !parserId && rules.some((rule) => rule.parserId) ? await this.parserAccounts(userId) : null;
+    const accountOf = (tx: ImportTransactionInput) =>
+      tx.accountId ||
+      accountIds.get(tx.accountIdentifier || (tx.metadata as { accountIdentifier?: string } | null)?.accountIdentifier || "") ||
+      null;
 
     const categoryNames = Array.from(
       new Set(
@@ -357,8 +495,31 @@ export class TransactionService {
 
     return transactions.map((originalTx) => {
       const tx = { ...originalTx };
+      // The first rule that set the category or Internal is the one that decided the row.
+      let decider: { id: string; name: string } | null = null;
       for (const rule of rules) {
-        if (!this.ruleMatches(rule, tx)) continue;
+        if (!parserId && rule.parserId) {
+          const account = accountOf(tx);
+          if (!account || !parserAccounts?.get(rule.parserId)?.has(account)) continue;
+        }
+        if (!this.ruleMatches(rule, tx, accountIds)) continue;
+        if (!this.ruleAmountFits(rule, tx)) {
+          const metadata = (tx.metadata || {}) as Record<string, any>;
+          const misses = Array.isArray(metadata.ruleAmountMisses) ? metadata.ruleAmountMisses : [];
+          tx.metadata = {
+            ...metadata,
+            ruleAmountMisses: [
+              ...misses.filter((miss: { ruleId?: string }) => miss?.ruleId !== rule.id),
+              {
+                ruleId: rule.id,
+                ruleName: rule.name,
+                amountMin: rule.amountMin == null ? null : Number(rule.amountMin),
+                amountMax: rule.amountMax == null ? null : Number(rule.amountMax),
+              },
+            ],
+          };
+          continue;
+        }
 
         // Rules override values that auto-categorization set, but not a suggestion it only
         // noted, nor a value the user has since changed (drafts re-run rules on every read).
@@ -417,11 +578,15 @@ export class TransactionService {
           }
         }
 
+        const decided =
+          applied && ((rule.markInternal && tx.linkage?.type === "internal") || (rule.setCategoryName && tx.categoryId === categoryMap.get(rule.setCategoryName.toLowerCase())));
         if (applied) {
+          if (decided && !decider) decider = { id: rule.id, name: rule.name };
+          const by = decider ?? { id: rule.id, name: rule.name };
           tx.metadata = {
             ...((tx.metadata || {}) as Record<string, any>),
-            fixedRuleId: rule.id,
-            fixedRuleName: rule.name,
+            fixedRuleId: by.id,
+            fixedRuleName: by.name,
             classificationAppliedAt: new Date().toISOString(),
           };
         }
@@ -1007,10 +1172,19 @@ export class TransactionService {
     ) {
       throw new Error("Match value is required for description contains rules");
     }
+    const extras = this.ruleExtras(payload);
+    this.assertAmountRange(extras);
+    const scope = await this.ruleScope(userId, {
+      accountIdentifier: normalized.accountIdentifier,
+      ...(payload.accountId !== undefined ? { accountId: payload.accountId } : {}),
+      cardId: payload.cardId ?? null,
+    });
     return prisma.importRule.create({
       data: {
         userId,
         ...normalized,
+        ...extras,
+        ...scope,
       },
     });
   }
@@ -1073,9 +1247,24 @@ export class TransactionService {
       throw new Error("Match value is required for description contains rules");
     }
 
+    const extras = this.ruleExtras(payload);
+    this.assertAmountRange({
+      amountMin: "amountMin" in extras ? extras.amountMin : existing.amountMin,
+      amountMax: "amountMax" in extras ? extras.amountMax : existing.amountMax,
+    });
+    const scopeChanged =
+      payload.accountId !== undefined || payload.cardId !== undefined || payload.accountIdentifier !== undefined;
+    const scope = scopeChanged
+      ? await this.ruleScope(userId, {
+          accountIdentifier: normalized.accountIdentifier,
+          ...(payload.accountId !== undefined ? { accountId: payload.accountId } : {}),
+          cardId: payload.cardId !== undefined ? payload.cardId : existing.cardId,
+        })
+      : {};
+
     return prisma.importRule.update({
       where: { id: ruleId },
-      data: normalized,
+      data: { ...normalized, ...extras, ...scope },
     });
   }
 

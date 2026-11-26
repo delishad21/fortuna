@@ -112,9 +112,10 @@ export async function enrichImportRows(
 }
 
 /**
- * Fortuna's classification for main-ledger rows, wherever they come from:
- * import rules, then auto-categorization, then reserved-category linkage.
- * Statement imports and assistant entries both go through it.
+ * Fortuna's classification for statement rows: import rules, then
+ * auto-categorization, then reserved-category linkage. Assistant entries are
+ * classified in their own order (transactions/entry-decision.ts) from the
+ * same pieces.
  */
 export async function classifyRows(
   userId: string,
@@ -129,6 +130,20 @@ export async function classifyRows(
     rows as never[],
   )) as unknown as Row[];
 
+  return autoCategorizeRows(userId, parserId, ruled);
+}
+
+/**
+ * Auto-categorization (learned patterns, history, heuristics, when the user
+ * has turned automatic labelling on), then reserved-category linkage. Rows a
+ * rule already decided keep what the rule set.
+ */
+export async function autoCategorizeRows(
+  userId: string,
+  parserId: string | undefined,
+  rows: Row[],
+): Promise<Row[]> {
+  if (rows.length === 0) return rows;
   const [categories, settings] = await Promise.all([
     prisma.category.findMany({
       where: {
@@ -148,13 +163,13 @@ export async function classifyRows(
     categories.map((category) => [category.name.toLowerCase(), category.id]),
   );
 
-  let categorized = ruled;
+  let categorized = rows;
   try {
     categorized = (await applyAutoCategorization(
       {
         userId,
         parserId: parserId || "",
-        transactions: ruled as ParsedImportTransaction[],
+        transactions: rows as ParsedImportTransaction[],
         categoryByName,
       },
       {

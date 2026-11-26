@@ -348,7 +348,7 @@ export class TransactionRepository {
   ) {
     // Imported rows come from a statement, which confirms them.
     const importedAt = new Date();
-    return prisma.transaction.createManyAndReturn({
+    const created = await prisma.transaction.createManyAndReturn({
       select: { id: true, metadata: true },
       data: transactions.map((t) => ({
         entrySource: "statement",
@@ -376,6 +376,18 @@ export class TransactionRepository {
         importBatchId,
       })),
     });
+    // Each committed row a rule classified counts as one of its hits.
+    const hits = new Map<string, number>();
+    for (const row of created) {
+      const ruleId = (row.metadata as { fixedRuleId?: unknown } | null)?.fixedRuleId;
+      if (typeof ruleId === "string") hits.set(ruleId, (hits.get(ruleId) ?? 0) + 1);
+    }
+    for (const [ruleId, count] of hits)
+      await prisma.importRule.updateMany({
+        where: { id: ruleId, userId },
+        data: { hitCount: { increment: count }, lastHitAt: importedAt },
+      });
+    return created;
   }
 
   /**

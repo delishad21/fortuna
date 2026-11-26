@@ -199,7 +199,7 @@ test("images are stored once per user, cards fall back to the account's, and unu
   }
 });
 
-test("assistant entries find cards by last 4, and an unknown card gets a flagged account with that card", () =>
+test("assistant entries find cards by last 4; an unknown card is a question unless creating is asked for", () =>
   withChatDb(async (db) => {
     const { withDatabase } = await import("../../lib/database-context");
     const { resolveAccount: resolveEntryAccount } = await import("../transactions/assistant-entries.service");
@@ -213,7 +213,13 @@ test("assistant entries find cards by last 4, and an unknown card gets a flagged
       assert.equal(known.cardId, debit.id);
       assert.equal(known.autoCreated, false);
 
-      const unknown = await resolveEntryAccount(user.id, { card: { last4: "7788" }, externalId: "n-1" });
+      // By default an unknown card isn't booked anywhere: a question asks where it belongs.
+      const asked = await resolveEntryAccount(user.id, { card: { last4: "7788" }, accountName: "Citi" });
+      assert.equal(asked.accountId, null);
+      assert.deepEqual(asked.unknown, { last4: "7788", name: "Citi" });
+      assert.equal(await db.card.count({ where: { userId: user.id, last4: "7788" } }), 0);
+
+      const unknown = await resolveEntryAccount(user.id, { card: { last4: "7788" }, externalId: "n-1" }, "create");
       assert.equal(unknown.autoCreated, true);
       const created = await db.financialAccount.findUniqueOrThrow({ where: { id: unknown.accountId! }, include: { cards: true } });
       assert.equal(created.autoCreated, true);

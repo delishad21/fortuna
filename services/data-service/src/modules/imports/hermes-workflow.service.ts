@@ -1,3 +1,4 @@
+import { draftAccountQuestions } from "./draft-account-questions";
 import { afterCommit } from "../../lib/database-context";
 import { draftAmountIssues, reviewDraftRows, summarizeDraftReview } from "./draft-review";
 import { createHash, randomBytes } from "node:crypto";
@@ -1739,6 +1740,11 @@ export class HermesWorkflowService {
         ),
         ...(reconcile ? { reconcile: reconcile.summary } : {}),
       },
+      // An unknown identifier is a question for the user, not an account to make up.
+      accountQuestions: await draftAccountQuestions(
+        userId,
+        draft.mode === "main" ? distinctAccountIdentifiers.filter((value) => !knownIdentifiers.has(value)) : [],
+      ),
       ...(reconcile
         ? {
             reconcile: {

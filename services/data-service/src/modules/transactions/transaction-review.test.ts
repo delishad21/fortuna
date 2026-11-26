@@ -53,7 +53,7 @@ async function setup(db: PrismaClient, name: string) {
   return { user, food, shopping };
 }
 
-test("Fortuna's rules classify assistant entries; the suggestion is only the fallback", () =>
+test("rules decide before the assistant's suggestion; a disagreement becomes a question", () =>
   withChatDb(async (db) => {
     const { user } = await setup(db, "review-rules");
     const rule = await db.importRule.create({
@@ -70,7 +70,11 @@ test("Fortuna's rules classify assistant entries; the suggestion is only the fal
       assert.equal(ruled.body.transaction.classification.ruleId, rule.id);
       assert.equal(ruled.body.transaction.classification.suggestedCategory, "Shopping");
       assert.equal(ruled.body.transaction.reviewStatus, "to_review");
-      assert.deepEqual(ruled.body.transaction.reviewReasons, []);
+      // The assistant thought otherwise: the rule's result stays and a question asks.
+      assert.deepEqual(ruled.body.transaction.reviewReasons, ["question"]);
+      assert.equal(ruled.body.transaction.questions[0].source, "rule_conflict");
+      const agreed = await call("POST", "", writer, entry("r-1b", { suggestedCategory: "Food", date: "2026-10-01", amountOut: 12 }));
+      assert.deepEqual(agreed.body.transaction.reviewReasons, []);
 
       const suggested = await call("POST", "", writer, entry("r-2", { description: "UNIQLO ION", suggestedCategory: "shopping" }));
       assert.equal(suggested.body.transaction.category.name, "Shopping");
@@ -99,7 +103,7 @@ test("Fortuna's rules classify assistant entries; the suggestion is only the fal
     }
   }));
 
-test("an entry that matches no account gets one Fortuna creates, to confirm or merge", () =>
+test("an unknown card is a question; only an entry naming nothing gets an account Fortuna creates", () =>
   withChatDb(async (db) => {
     const { user } = await setup(db, "review-accounts");
     await db.accountIdentifier.create({ data: { userId: user.id, accountIdentifier: "4265-****-****-4591", label: "UOB One" } });
@@ -111,63 +115,65 @@ test("an entry that matches no account gets one Fortuna creates, to confirm or m
       assert.equal(known.body.transaction.account, "4265-****-****-4591");
       assert.equal(known.body.accountCreated, undefined);
 
+      // A card nobody knows: no account is made up; the entry asks where it belongs.
       const first = await call("POST", "", writer, entry("a-1", { account: undefined, card: { last4: "7788" }, accountName: "Citi Rewards" }));
       assert.equal(first.status, 201);
-      assert.deepEqual(first.body.accountCreated, {
-        id: first.body.accountCreated.id,
-        accountIdentifier: "****7788",
-        label: "Citi Rewards",
-        autoCreated: true,
-      });
-      assert.ok(first.body.transaction.reviewReasons.includes("new_account"));
-      const created = await db.financialAccount.findFirstOrThrow({
-        where: { userId: user.id, identifiers: { some: { accountIdentifier: "****7788" } } },
-        include: { cards: true },
-      });
-      assert.equal(created.autoCreated, true);
-      assert.match(created.autoCreatedFrom!, /assistant entry a-1 \(card 7788\)/);
-      assert.deepEqual(created.cards.map((card) => card.last4), ["7788"], "a card for the last 4 digits");
-      const firstRow = await db.transaction.findFirstOrThrow({ where: { userId: user.id, externalId: "a-1" } });
-      assert.equal(firstRow.accountId, created.id);
-      assert.equal(firstRow.cardId, created.cards[0].id);
+      assert.equal(first.body.accountCreated, undefined);
+      assert.equal(first.body.transaction.accountId, null);
+      assert.ok(first.body.transaction.reviewReasons.includes("unknown_account"));
+      assert.ok(first.body.transaction.reviewReasons.includes("question"));
+      const [asked] = first.body.transaction.questions;
+      assert.equal(asked.field, "account");
+      assert.equal(asked.key, "unknown_card:7788");
+      assert.ok(asked.options.some((option: any) => option.id === "new_account:credit_card"));
+      assert.ok(asked.options.some((option: any) => option.id.startsWith("add_card:")));
+      assert.equal(await db.card.count({ where: { userId: user.id, last4: "7788" } }), 0);
 
-      // The next purchase on that card finds the created account and is still flagged.
+      // A second purchase on that card asks the same question.
       const second = await call("POST", "", writer, entry("a-2", { account: undefined, card: { last4: "7788" }, amountOut: 9 }));
-      assert.equal(second.body.transaction.account, "****7788");
-      assert.equal(second.body.accountCreated, undefined);
-      assert.ok(second.body.transaction.reviewReasons.includes("new_account"));
+      assert.equal(second.body.transaction.questions[0].key, "unknown_card:7788");
 
-      // Neither account nor card: one shared unassigned account.
-      const bare = await call("POST", "", writer, entry("a-3", { account: undefined, amountOut: 2 }));
+      // Answering creates the account and its card, and books both entries there.
+      const answered = await call("POST", "/review/questions/answer", reviewer, {
+        transactionId: first.body.transaction.id,
+        questionId: asked.id,
+        option: "new_account:credit_card",
+      });
+      assert.equal(answered.status, 200, JSON.stringify(answered.body));
+      const created = await db.financialAccount.findFirstOrThrow({ where: { userId: user.id, name: "Citi Rewards" }, include: { cards: true } });
+      assert.equal(created.type, "credit_card");
+      assert.equal(created.autoCreated, false);
+      assert.deepEqual(created.cards.map((card) => card.last4), ["7788"]);
+      assert.equal(answered.body.transaction.accountId, created.id);
+      assert.deepEqual(answered.body.transaction.questions, []);
+      assert.ok(!answered.body.transaction.reviewReasons.includes("unknown_account"));
+      assert.equal(answered.body.alsoAnswered.length, 1);
+      const secondRow = await db.transaction.findFirstOrThrow({ where: { userId: user.id, externalId: "a-2" } });
+      assert.equal(secondRow.accountId, created.id);
+      assert.equal(secondRow.cardId, created.cards[0].id);
+      assert.deepEqual(secondRow.questions, []);
+
+      // The next purchase on that card finds it.
+      const third = await call("POST", "", writer, entry("a-3", { account: undefined, card: { last4: "7788" }, amountOut: 4 }));
+      assert.equal(third.body.transaction.accountId, created.id);
+      assert.deepEqual(third.body.transaction.questions, []);
+
+      // Neither account nor card: the fallback still makes one shared unassigned account.
+      const bare = await call("POST", "", writer, entry("a-4", { account: undefined, amountOut: 2 }));
       assert.equal(bare.body.transaction.account, "Assistant: no account");
       assert.equal(bare.body.accountCreated.autoCreated, true);
+      assert.ok(bare.body.transaction.reviewReasons.includes("new_account"));
 
-      const accounts = await call("GET", "/context/accounts", writer);
-      const citi = accounts.body.accounts.find((item: any) => item.accountIdentifier === "****7788");
-      assert.equal(citi.last4, "7788");
-      assert.equal(citi.autoCreated, true);
-      assert.equal(citi.transactionCount, 2);
-
-      // Confirming keeps it and clears the reason.
-      const confirmed = await call("POST", `/review/accounts/${encodeURIComponent("****7788")}/confirm`, reviewer, { label: "Citi Rewards card" });
-      assert.equal(confirmed.status, 200);
-      assert.equal(confirmed.body.account.autoCreated, false);
-      assert.equal(confirmed.body.entriesUpdated, 2);
-      const afterConfirm = await db.transaction.findFirstOrThrow({ where: { userId: user.id, externalId: "a-2" } });
-      assert.ok(!afterConfirm.reviewReasons.includes("new_account"));
-
-      // Merging moves the entries to an existing account and removes the created one.
-      assert.equal((await call("POST", `/review/accounts/DBS%20123/merge`, reviewer, { into: "UOB One", confirmed: true })).status, 409);
+      // Merging it into a real account moves its entries.
       const merged = await call("POST", `/review/accounts/${encodeURIComponent("Assistant: no account")}/merge`, reviewer, {
         into: "DBS Savings",
         confirmed: true,
       });
       assert.equal(merged.status, 200);
       assert.equal(merged.body.transactionsMoved, 1);
-      const moved = await db.transaction.findFirstOrThrow({ where: { userId: user.id, externalId: "a-3" } });
+      const moved = await db.transaction.findFirstOrThrow({ where: { userId: user.id, externalId: "a-4" } });
       assert.equal(moved.accountIdentifier, "DBS 123");
       assert.ok(!moved.reviewReasons.includes("new_account"));
-      assert.equal(await db.accountIdentifier.count({ where: { userId: user.id, accountIdentifier: "Assistant: no account" } }), 0);
     } finally {
       server.close();
     }
@@ -364,7 +370,8 @@ test("the apps' To review screen works the same queue as the trusted frontend", 
     const app = { "x-internal-service-token": "review-test-internal", "x-authenticated-user-id": user.id, "Content-Type": "application/json" };
     const { server, call } = await serve(db);
     try {
-      const created = await call("POST", "", writer, entry("f-1", { account: undefined, card: { last4: "4591" } }));
+      // An unknown account name is a question now; the queue still finds the entry by account once booked.
+      const created = await call("POST", "", writer, entry("f-1", { account: undefined }));
       assert.equal(created.status, 201);
       const autoAccountId = created.body.transaction.accountId;
       assert.ok(autoAccountId);
@@ -395,7 +402,6 @@ test("the apps' To review screen works the same queue as the trusted frontend", 
       const merged = await call("POST", `/review/accounts/${autoAccountId}/merge`, app, { into: wallet.id, confirmed: true });
       assert.equal(merged.status, 200, JSON.stringify(merged.body));
       assert.equal(await db.financialAccount.count({ where: { id: autoAccountId } }), 0);
-      assert.equal(await db.card.count({ where: { accountId: wallet.id, last4: "4591" } }), 1);
     } finally {
       server.close();
       process.env.INTERNAL_SERVICE_TOKEN = previous;

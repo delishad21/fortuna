@@ -1,12 +1,16 @@
 import { z } from "zod";
 import { ExternalIdError, normalizeExternalId } from "../sources/sources";
+import { AssistantDecisionSchema, QuestionInputSchema } from "./entry-review";
 
 /**
  * Input rules for transactions the outside assistant writes through
  * /api/agent/transactions (scope transactions:write). Entries go straight into
- * the ledger with entrySource "assistant"; Fortuna picks the category with its
- * own rules (the assistant's suggestedCategory is only a fallback), books the
- * account (creating one when none matches) and queues the entry for review.
+ * the ledger with entrySource "assistant" and are queued for review. Fortuna
+ * detects transfers between the user's own accounts and applies enabled
+ * rules; everything else is the assistant's decision (decision: category,
+ * type, label, merchant, reason, confidence, precedents), with a learned
+ * pattern or history match only when the assistant sends none. An unknown
+ * card or account becomes a question on the entry.
  */
 
 export const ENTRY_SOURCES = ["assistant", "manual", "statement", "mobile"] as const;
@@ -75,6 +79,10 @@ const EntryFields = {
   accountName: z.string().trim().min(1).max(120).nullish(),
   card: CardSchema.nullish(),
   metadata: z.record(z.string(), z.unknown()).nullish(),
+  /** The assistant's classification, made from similar past entries and the user's instructions. */
+  decision: AssistantDecisionSchema.nullish(),
+  /** Questions for the review when the assistant is unsure. */
+  questions: z.array(QuestionInputSchema).max(5).nullish(),
 };
 
 /**
@@ -128,6 +136,8 @@ export const UpdateEntrySchema = z
     accountName: EntryFields.accountName,
     card: EntryFields.card,
     metadata: EntryFields.metadata,
+    decision: EntryFields.decision,
+    questions: EntryFields.questions,
   })
   .strict()
   .superRefine((value, context) => {

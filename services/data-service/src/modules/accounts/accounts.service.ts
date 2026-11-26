@@ -271,7 +271,10 @@ export async function mergeAccount(db: Db, userId: string, sourceId: string, tar
     target.id,
     twins.map(({ source: card, twin }) => ({ from: card.id, to: twin.id })),
   );
+  // Rules scoped to the account or a twin card follow them (they'd be deleted with them).
+  await db.importRule.updateMany({ where: { userId, accountId: source.id }, data: { accountId: target.id } });
   for (const { source: card, twin, transactionIds } of twins) {
+    await db.importRule.updateMany({ where: { userId, cardId: card.id }, data: { cardId: twin.id } });
     await db.transaction.updateMany({ where: { userId, id: { in: transactionIds } }, data: { cardId: twin.id } });
     if (!twin.imageId && card.imageId) await db.card.update({ where: { id: twin.id }, data: { imageId: card.imageId } });
     await db.card.delete({ where: { id: card.id } });

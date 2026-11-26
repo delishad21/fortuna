@@ -1,3 +1,4 @@
+import { Rules } from "../rules/rules.service";
 import { Router, Request, Response } from "express";
 import { TransactionService } from "./transactions.service";
 import { z } from "zod";
@@ -64,6 +65,11 @@ const ImportRuleSchema = z.object({
   setCategoryName: z.string().nullable().optional(),
   markInternal: z.boolean().optional(),
   sortOrder: z.number().int().optional(),
+  accountId: z.string().max(64).nullable().optional(),
+  cardId: z.string().max(64).nullable().optional(),
+  amountMin: z.number().finite().nonnegative().nullable().optional(),
+  amountMax: z.number().finite().nonnegative().nullable().optional(),
+  reason: z.string().max(1000).nullable().optional(),
 });
 
 const ClassificationPatternUpdateSchema = z.object({
@@ -449,7 +455,8 @@ transactionRouter.get("/import-rules", async (req: Request, res: Response) => {
     if (!userId) {
       return res.status(400).json({ error: "userId is required" });
     }
-    const rules = await TransactionService.getImportRules(userId);
+    // With origin, reason, examples, scope and hit stats for the rules screens.
+    const { rules } = await Rules.list(userId);
     res.json({ rules });
   } catch (error: any) {
     res.status(400).json({ error: error.message });

@@ -444,6 +444,7 @@ model FinancialAccount {
   transactions Transaction[]
   sources      TransactionSource[]
   instructions ClassificationInstruction[]
+  importRules  ImportRule[]
 
   @@index([userId])
   @@index([userId, autoCreated])
@@ -469,6 +470,7 @@ model Card {
   transactions Transaction[]
   sources      TransactionSource[]
   instructions ClassificationInstruction[]
+  importRules  ImportRule[]
 
   @@unique([accountId, last4])
   @@index([userId, last4])
@@ -639,9 +641,12 @@ model Transaction {
   externalId        String?   @map("external_id")
   // to_review | reviewed. Assistant entries start to_review; everything else is reviewed.
   reviewStatus      String    @default("reviewed") @map("review_status")
-  // Why it waits for review: no_rule_matched, assistant_category, new_account, possible_duplicate.
+  // Why it waits for review: see REVIEW_REASONS in transactions/entry-review.ts.
   reviewReasons     String[]  @default([]) @map("review_reasons")
   reviewedAt        DateTime? @map("reviewed_at")
+  // Open questions for the review: [{ id, key, field, prompt, options: [{ id, label }], source, ... }].
+  // Answering one applies it and removes it (see transactions/entry-questions.ts).
+  questions         Json      @default("[]")
   currency          String   @default("SGD")
   metadata          Json? // extra fields from parsing
   linkage           Json? // Transaction linkage data for internal/reimbursement
@@ -1016,12 +1021,37 @@ model ImportRule {
   setCategoryName String?  @map("set_category_name")
   markInternal    Boolean  @default(false) @map("mark_internal")
   sortOrder       Int      @default(0) @map("sort_order")
+  /// When set, the rule only applies to this account's transactions, whatever their source.
+  accountId       String?  @map("account_id")
+  /// When set, the rule only applies to transactions paid with this card.
+  cardId          String?  @map("card_id")
+  /// The rule doesn't apply outside this amount range (either bound optional); a miss asks instead.
+  amountMin       Decimal? @map("amount_min") @db.Decimal(12, 2)
+  amountMax       Decimal? @map("amount_max") @db.Decimal(12, 2)
+  /// user | assistant_on_request | assistant_detected
+  origin          String   @default("user")
+  /// Why the rule exists, in words (the user's request, or the pattern the assistant saw).
+  reason          String?  @db.Text
+  /// Reviewed transactions the rule was made from.
+  exampleTransactionIds String[] @default([]) @map("example_transaction_ids")
+  /// A recurring bill the assistant named instead of examples: { name, amount?, frequency? }.
+  recurringBill   Json?    @map("recurring_bill")
+  /// Transactions the rule has classified (assistant entries and committed imports).
+  hitCount        Int      @default(0) @map("hit_count")
+  lastHitAt       DateTime? @map("last_hit_at")
+  /// Set once a review has seen an assistant_detected rule; until then the review queue lists it.
+  acknowledgedAt  DateTime? @map("acknowledged_at")
+  /// Set when the rule was undone from a review (it is disabled too).
+  undoneAt        DateTime? @map("undone_at")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account FinancialAccount? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  card    Card?             @relation(fields: [cardId], references: [id], onDelete: Cascade)
 
   @@unique([userId, name])
+  @@index([userId, origin, acknowledgedAt])
   @@index([userId, enabled, parserId])
   @@index([userId, sortOrder, createdAt])
   @@map("import_rules")
