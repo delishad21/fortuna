@@ -36,7 +36,15 @@ import {
   REVIEW_REASON_LABELS,
   reviewReasonsText,
 } from "../../frontend/shared/entrySource";
-import { REVIEW_REASONS, suggestRuleMatch, type ReviewEntry, type ReviewQueue } from "../../frontend/shared/reviewTypes";
+import {
+  REVIEW_REASONS,
+  ruleEffectText,
+  suggestRuleMatch,
+  type PublicRule,
+  type ReviewEntry,
+  type ReviewQueue,
+} from "../../frontend/shared/reviewTypes";
+import { DecisionBlock, Questions } from "./decision";
 
 /**
  * To review: entries the assistant logged (and anything put back in the
@@ -119,6 +127,51 @@ function NewAccounts({ accounts, onChanged }: { accounts: Account[]; onChanged: 
           <Txt muted>No other accounts to merge into.</Txt>
         )}
       </Sheet>
+    </Section>
+  );
+}
+
+/** Rules the assistant created by itself since the last review; undoing one puts its entries back in the queue. */
+function NewRules({ rules, onChanged }: { rules: PublicRule[]; onChanged: () => Promise<any> | void }) {
+  const { call } = useApi();
+  if (!rules.length) return null;
+  return (
+    <Section title="New rules" hint="The assistant created these from entries it logged.">
+      <Group>
+        {rules.map((rule) => (
+          <ListItem
+            key={rule.id}
+            icon="git-branch-outline"
+            title={rule.name}
+            subtitle={[
+              ruleEffectText(rule),
+              rule.reason,
+              rule.examples.length ? plural(rule.examples.length, "example") : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+            right={
+              <Button
+                title="Undo"
+                compact
+                secondary
+                onPress={() =>
+                  confirm(
+                    `Undo “${rule.name}”?`,
+                    "The rule is turned off and the entries it classified go back in the queue.",
+                    async () => {
+                      const result = await call<{ reopened: number }>("undoReviewRule", rule.id);
+                      toast(result?.reopened ? `Undone · ${plural(result.reopened, "entry", "entries")} back in review` : "Rule undone");
+                      await onChanged();
+                    },
+                    "Undo",
+                  )
+                }
+              />
+            }
+          />
+        ))}
+      </Group>
     </Section>
   );
 }
@@ -261,6 +314,7 @@ export function ReviewScreen({ navigation }: any) {
   const [selecting, setSelecting] = useState(false);
   const [correcting, setCorrecting] = useState(false);
   const [reimbursing, setReimbursing] = useState(false);
+  const [open, setOpen] = useState<string[]>([]);
   const accounts = useResource<Account[]>("getAccounts", { includeArchived: false });
   const base = {
     status,
@@ -344,6 +398,7 @@ export function ReviewScreen({ navigation }: any) {
         ) : undefined
       }
     >
+      <NewRules rules={counts.data?.newRules || []} onChanged={reload} />
       <NewAccounts accounts={accounts.data || []} onChanged={reload} />
       <Chips values={Object.keys(STATUS_LABELS)} labels={STATUS_LABELS} value={status} onChange={setStatus} />
       <Chips
@@ -398,6 +453,8 @@ export function ReviewScreen({ navigation }: any) {
                 const why = [reviewReasonsText(item.reviewReasons), decided ? `Category from ${decided.charAt(0).toLowerCase()}${decided.slice(1)}` : null]
                   .filter(Boolean)
                   .join(" · ");
+                const hasDecision = !!(item.decision || item.classification?.decidedBy || item.precedents?.length);
+                const showing = hasDecision && open.includes(item.id);
                 return (
                   <View key={item.id}>
                     <TransactionRow
@@ -428,10 +485,37 @@ export function ReviewScreen({ navigation }: any) {
                         ) : undefined
                       }
                     />
-                    {!!why && (
-                      <Txt muted size={12} style={{ paddingLeft: 61, paddingRight: 12, marginTop: -6, paddingBottom: 8 }}>
-                        {why}
-                      </Txt>
+                    {(!!why || hasDecision || !!item.questions?.length) && (
+                      <View style={{ paddingLeft: 61, paddingRight: 12, marginTop: -6, paddingBottom: 8, gap: 8 }}>
+                        {(!!why || hasDecision) && (
+                          <View style={[styles.between, { gap: 8 }]}>
+                            <Txt muted size={12} style={{ flex: 1 }}>
+                              {why}
+                            </Txt>
+                            {hasDecision && (
+                              <Button
+                                title={showing ? "Hide" : "Show"}
+                                label={showing ? "Hide decision" : "Show decision"}
+                                compact
+                                ghost
+                                onPress={() =>
+                                  setOpen((now) => (now.includes(item.id) ? now.filter((x) => x !== item.id) : [...now, item.id]))
+                                }
+                              />
+                            )}
+                          </View>
+                        )}
+                        {showing && (
+                          <DecisionBlock
+                            classification={item.classification}
+                            decision={item.decision}
+                            merchant={item.merchant}
+                            transactionType={item.transactionType}
+                            precedents={item.precedents}
+                          />
+                        )}
+                        {!selecting && <Questions transactionId={item.id} questions={item.questions} onAnswered={reload} />}
+                      </View>
                     )}
                     {!!item.reimbursementProposal && !selecting && (
                       <View style={{ paddingLeft: 61, paddingRight: 12, paddingBottom: 10 }}>

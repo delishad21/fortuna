@@ -21,9 +21,11 @@ import {
   IconBubble,
   Input,
   ListItem,
+  money,
   MultiSelect,
   notice,
   Pill,
+  plural,
   Screen,
   Section,
   Segmented,
@@ -40,6 +42,7 @@ import {
 import { accountDisplay } from "../../frontend/shared/accounts";
 import { CATEGORY_ICONS, categoryIconKey, categoryIonicon } from "../../frontend/shared/categoryIcons";
 import { WORKFLOW_OPTIONS } from "../../frontend/shared/workflow";
+import { ruleOriginLabel, ruleScopeText } from "../../frontend/shared/reviewTypes";
 import { useWorkflow } from "./workflow";
 
 const SCOPES = [
@@ -370,6 +373,92 @@ export function PreferencesScreen() {
     </Screen>
   );
 }
+/** An import rule: what it matches and sets, where it came from, how often it's used, and an on/off switch. */
+function RuleRow({ rule, onOpen, onChanged }: { rule: any; onOpen: () => void; onChanged: () => Promise<any> | void }) {
+  const { call } = useApi();
+  const [showExamples, setShowExamples] = useState(false);
+  const examples: any[] = rule.examples || [];
+  const scope = ruleScopeText(rule);
+  const used = rule.hitCount
+    ? `Used ${plural(rule.hitCount, "time")}${rule.lastHitAt ? `, last on ${fmtDate(rule.lastHitAt)}` : ""}`
+    : null;
+  return (
+    <View>
+      <ListItem
+        icon={rule.markInternal ? "swap-horizontal-outline" : "git-branch-outline"}
+        tone={rule.enabled ? "purple" : "neutral"}
+        title={rule.name}
+        subtitle={
+          <View style={{ gap: 2 }}>
+            <Txt muted size={13} numberOfLines={2}>
+              {`${rule.matchType === "always" ? "Always" : `“${rule.matchValue}”`} → ${[
+                rule.setLabel && `label ${rule.setLabel}`,
+                rule.setCategoryName,
+                rule.markInternal && "internal",
+              ]
+                .filter(Boolean)
+                .join(", ") || "no change"}${rule.parserId ? ` · ${rule.parserId}` : ""}`}
+            </Txt>
+            <Txt muted size={12}>
+              {[ruleOriginLabel(rule.origin), scope].filter(Boolean).join(" · ")}
+            </Txt>
+            {!!rule.reason && (
+              <Txt muted size={12} numberOfLines={3}>
+                {rule.reason}
+              </Txt>
+            )}
+            {!!used && (
+              <Txt muted size={12}>
+                {used}
+              </Txt>
+            )}
+          </View>
+        }
+        right={
+          <View style={[styles.row, { gap: 6 }]}>
+            {!!rule.undoneAt && <Pill label="Undone" tone="amber" />}
+            <Switch
+              accessibilityLabel={`${rule.name} on`}
+              value={!!rule.enabled}
+              onValueChange={(enabled) =>
+                void call("updateImportRule", rule.id, { enabled })
+                  .then(() => {
+                    toast(enabled ? "Rule on" : "Rule off");
+                    return onChanged();
+                  })
+                  .catch(notice)
+              }
+            />
+          </View>
+        }
+        onPress={onOpen}
+      />
+      {examples.length > 0 && (
+        <View style={{ paddingLeft: 46, paddingRight: 14, paddingBottom: 10, gap: 4 }}>
+          <Button
+            title={showExamples ? "Hide examples" : plural(examples.length, "example")}
+            compact
+            ghost
+            style={{ alignSelf: "flex-start", paddingHorizontal: 0 }}
+            onPress={() => setShowExamples(!showExamples)}
+          />
+          {showExamples &&
+            examples.map((e) => (
+              <View key={e.id} style={[styles.between, { gap: 8 }]}>
+                <Txt size={13} numberOfLines={1} style={{ flex: 1 }}>
+                  {fmtDate(e.date, false)} · {e.label || e.description}
+                  {e.category ? ` · ${e.category}` : ""}
+                </Txt>
+                <Txt mono size={13} muted>
+                  {e.amountIn ? `+${money(e.amountIn)}` : `-${money(e.amountOut || 0)}`}
+                </Txt>
+              </View>
+            ))}
+        </View>
+      )}
+    </View>
+  );
+}
 const configs: Record<string, { title: string; get: string; noun: string; subtitle: string }> = {
   categories: { title: "Categories", get: "getCategories", noun: "category", subtitle: "Trip category names are fixed; you can change their color and icon." },
   rules: { title: "Import rules", get: "getImportRules", noun: "rule", subtitle: "Applied in priority order to rows as statements import." },
@@ -415,20 +504,11 @@ export function ManageScreen({ route, navigation }: any) {
               onPress={() => navigation.navigate("ManageEditor", { kind, item })}
             />
           ) : (
-            <ListItem
+            <RuleRow
               key={item.id}
-              icon={item.markInternal ? "swap-horizontal-outline" : "git-branch-outline"}
-              tone={item.enabled ? "purple" : "neutral"}
-              title={item.name}
-              subtitle={`${item.matchType === "always" ? "Always" : `“${item.matchValue}”`} → ${[
-                item.setLabel && `label ${item.setLabel}`,
-                item.setCategoryName,
-                item.markInternal && "internal",
-              ]
-                .filter(Boolean)
-                .join(", ") || "no change"}${item.parserId ? ` · ${item.parserId}` : ""}`}
-              right={!item.enabled ? <Pill label="Off" /> : undefined}
-              onPress={() => navigation.navigate("ManageEditor", { kind, item })}
+              rule={item}
+              onOpen={() => navigation.navigate("ManageEditor", { kind, item })}
+              onChanged={result.reload}
             />
           ),
         )}

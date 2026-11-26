@@ -54,6 +54,7 @@ import {
 } from "./ui";
 import { shareCsv } from "./sharing";
 import { ReimbursableSection, ReimbursableSheet } from "./reimbursables";
+import { DecisionBlock } from "./decision";
 import { pickImage, RemoteImage, TransactionThumb } from "./images";
 import { accountDisplay, accountName } from "../../frontend/shared/accounts";
 import { cardDisplay } from "../../frontend/shared/accountTypes";
@@ -681,8 +682,11 @@ export function TransactionScreen({ navigation, route }: any) {
     void pickImage()
       .then((base64) => (base64 ? setImage(base64) : undefined))
       .catch(notice);
+  const assistantEntry =
+    t.entrySource === "assistant" &&
+    !!(t.metadata?.classification?.decidedBy || t.metadata?.classification?.assistant || t.metadata?.merchant || t.metadata?.transactionType);
   const metadata = Object.entries(t.metadata || {}).filter(
-    ([k, v]) => v != null && v !== "" && typeof v !== "object" && !["parserId"].includes(k),
+    ([k, v]) => v != null && v !== "" && typeof v !== "object" && !["parserId", ...(assistantEntry ? ["merchant", "transactionType"] : [])].includes(k),
   );
   return (
     <Screen refreshControl={<RefreshControl refreshing={tx.loading && !!tx.data} onRefresh={reload} />}>
@@ -780,7 +784,7 @@ export function TransactionScreen({ navigation, route }: any) {
           {t.balance != null && <KeyValue label="Balance" mono value={money(t.balance, t.currency)} />}
           {!!t.currency && <KeyValue label="Currency" value={t.currency} />}
           {!!t.entrySource && <KeyValue label="Source" value={entrySourceLabel(t.entrySource)} />}
-          {!!classificationLabel(t.metadata?.classification) && (
+          {!assistantEntry && !!classificationLabel(t.metadata?.classification) && (
             <KeyValue label="Category from" value={classificationLabel(t.metadata?.classification)!} />
           )}
           {t.reviewStatus === "to_review" && (
@@ -809,6 +813,18 @@ export function TransactionScreen({ navigation, route }: any) {
           )}
         </Card>
       </Section>
+      {assistantEntry && (
+        <Section title="Decision">
+          <Card style={{ gap: 12 }}>
+            <DecisionBlock
+              classification={t.metadata?.classification}
+              decision={t.metadata?.classification?.assistant}
+              merchant={t.metadata?.merchant}
+              transactionType={t.metadata?.transactionType}
+            />
+          </Card>
+        </Section>
+      )}
       <Section title="Image">
         {t.imageId ? (
           <Card style={{ gap: 12 }}>
