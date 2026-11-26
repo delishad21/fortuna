@@ -10,7 +10,7 @@ x-logging: &logging
     max-file: "3"
 
 # Backup decisions for the named volumes (devbot's repo convention). Postgres
-# and the statements and inbox folders live under /srv/fortuna.
+# and the statements, images and inbox folders live under /srv/fortuna.
 x-devbot:
   backup:
     parser-sandbox-queue: "none: transient job files between file-parser and the sandbox worker"
@@ -53,6 +53,18 @@ services:
         condition: service_healthy
     networks:
       - finance-network
+    logging: *logging
+
+  # Creates /srv/fortuna/images owned by the data-service user (uid 1000):
+  # /srv/fortuna belongs to root, so Docker would otherwise create it as root.
+  image-storage:
+    image: postgres:16-alpine
+    restart: "no"
+    user: "0:0"
+    network_mode: none
+    entrypoint: ["sh", "-c", "mkdir -p /data/images && chown 1000:1000 /data/images && chmod 700 /data/images"]
+    volumes:
+      - ${FORTUNA_DATA_DIR:-/srv/fortuna}/images:/data/images
     logging: *logging
 
   file-parser:
@@ -135,14 +147,19 @@ services:
       - CHAT_WORKER_URL=http://chat-worker:4003
       - CHAT_ENABLED=${CHAT_ENABLED:-false}
       - STATEMENT_STORAGE_DIR=/data/statements
+      - IMAGE_STORAGE_DIR=/data/images
       - COMMIT_TOKEN_SECRET=${COMMIT_TOKEN_SECRET}
       - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
     volumes:
       - ${FORTUNA_DATA_DIR:-/srv/fortuna}/statements:/data/statements
+      # Transaction, account and card images (files, not in Postgres).
+      - ${FORTUNA_DATA_DIR:-/srv/fortuna}/images:/data/images
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      image-storage:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]

@@ -7,6 +7,14 @@ import {
   TransactionLinkage,
 } from "../duplicates/duplicate-detector";
 
+/** What lists and detail views show with each transaction. */
+export const transactionDisplayInclude = {
+  category: true,
+  importBatch: true,
+  account: { select: { id: true, name: true, color: true, type: true, imageId: true } },
+  card: { select: { id: true, last4: true, network: true, nickname: true, imageId: true } },
+} satisfies Prisma.TransactionInclude;
+
 export class TransactionRepository {
   // Adds the trip fundings and trip entries each bank transaction backs.
   private static async attachTripFundingSummary<T extends { id: string }>(
@@ -355,6 +363,8 @@ export class TransactionRepository {
         balance: t.balance,
         ...({ currency: t.currency || "SGD" } as any),
         accountIdentifier: t.accountIdentifier,
+        accountId: t.accountId ?? undefined,
+        cardId: t.cardId ?? undefined,
         source: t.source,
         metadata: t.metadata
           ? (t.metadata as Prisma.InputJsonValue)
@@ -399,10 +409,7 @@ export class TransactionRepository {
     const [transactions, total] = await Promise.all([
       prisma.transaction.findMany({
         where,
-        include: {
-          category: true,
-          importBatch: true,
-        },
+        include: transactionDisplayInclude,
         orderBy,
         take: filters?.limit || 50,
         skip: filters?.offset || 0,
@@ -431,10 +438,7 @@ export class TransactionRepository {
     );
     const transactions = await prisma.transaction.findMany({
       where,
-      include: {
-        category: true,
-        importBatch: true,
-      },
+      include: transactionDisplayInclude,
       orderBy: { date: "desc" },
     });
     return TransactionRepository.attachTripFundingSummary(userId, transactions);
@@ -465,10 +469,7 @@ export class TransactionRepository {
         : { date: "desc" as const };
     const transactions = await prisma.transaction.findMany({
       where,
-      include: {
-        category: true,
-        importBatch: true,
-      },
+      include: transactionDisplayInclude,
       orderBy,
     });
     return TransactionRepository.attachTripFundingSummary(userId, transactions);
@@ -499,6 +500,8 @@ export class TransactionRepository {
           : {}),
         ...(updates.date !== undefined && { date: toTransactionDate(updates.date) }),
         ...(updates.accountIdentifier !== undefined && { accountIdentifier: updates.accountIdentifier }),
+        ...(updates.accountId !== undefined && { accountId: updates.accountId }),
+        ...(updates.cardId !== undefined && { cardId: updates.cardId }),
       },
     });
   }
@@ -536,6 +539,8 @@ export class TransactionRepository {
           : {}),
         ...(updates.date !== undefined && { date: toTransactionDate(updates.date) }),
         ...(updates.accountIdentifier !== undefined && { accountIdentifier: updates.accountIdentifier }),
+        ...(updates.accountId !== undefined && { accountId: updates.accountId }),
+        ...(updates.cardId !== undefined && { cardId: updates.cardId }),
       },
     });
   }
@@ -604,10 +609,7 @@ export class TransactionRepository {
   static async findById(id: string, userId: string) {
     const transaction = await prisma.transaction.findFirst({
       where: { id, userId },
-      include: {
-        category: true,
-        importBatch: true,
-      },
+      include: transactionDisplayInclude,
     });
     if (!transaction) return null;
     const [decorated] = await TransactionRepository.attachTripFundingSummary(
@@ -646,6 +648,8 @@ export class TransactionRepository {
           : {}),
         date: data.date === undefined || data.date === null ? undefined : toTransactionDate(data.date),
         accountIdentifier: data.accountIdentifier,
+        accountId: data.accountId,
+        cardId: data.cardId,
         linkage: linkageData,
       },
     });

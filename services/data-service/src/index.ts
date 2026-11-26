@@ -15,6 +15,8 @@ import { parserRuntimeRouter } from "./modules/imports/parser-runtime.controller
 import { HermesWorkflowService } from "./modules/imports/hermes-workflow.service";
 import { accountsRouter } from "./modules/accounts/accounts.controller";
 import { createAgentTransactionsRouter } from "./modules/transactions/agent-transactions.controller";
+import { imagesRouter, transactionImagesRouter } from "./modules/images/images.controller";
+import { cleanupUnusedImages } from "./modules/images/image-store";
 
 const app = express();
 const PORT = process.env.PORT || 4001;
@@ -42,6 +44,8 @@ app.use("/api/agent/context", hermesContextRouter);
 app.use("/api/agent/parser-factory", parserFactoryRouter);
 app.use("/api/parser-runtime", parserRuntimeRouter);
 app.use("/api/agent/accounts", accountsRouter);
+app.use("/api/agent/transactions", transactionImagesRouter);
+app.use("/api/images", imagesRouter);
 app.use("/api/agent/analytics", agentAnalyticsRouter);
 app.use("/api/agent/transactions", createAgentTransactionsRouter(prisma));
 
@@ -67,6 +71,9 @@ app.listen(PORT, () => {
 const cleanupTimer = setInterval(() => {
   void HermesWorkflowService.cleanupExpiredData().catch((error) =>
     console.error("Failed to clean expired Hermes workflow data:", error),
+  );
+  void cleanupUnusedImages(prisma).catch((error) =>
+    console.error("Failed to clean unused images:", error),
   );
 }, 60 * 60 * 1000);
 cleanupTimer.unref();

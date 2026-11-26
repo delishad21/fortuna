@@ -1,4 +1,4 @@
-import { TransactionRepository } from "./transactions.repository";
+import { TransactionRepository, transactionDisplayInclude } from "./transactions.repository";
 import {
   DuplicateDetector,
   ImportTransactionInput,
@@ -1637,6 +1637,9 @@ export class TransactionService {
               amountOut: child.amountOut || null,
               balance: index === children.length - 1 ? existing.balance : null,
               accountIdentifier: existing.accountIdentifier,
+              accountId: existing.accountId,
+              cardId: existing.cardId,
+              imageId: existing.imageId,
               source: existing.source,
               entrySource: existing.entrySource,
               reconciled: existing.reconciled,
@@ -1656,7 +1659,7 @@ export class TransactionService {
               importBatchId: existing.importBatchId,
               createdAt: new Date(existing.createdAt.getTime() + index),
             },
-            include: { category: true, importBatch: true },
+            include: transactionDisplayInclude,
           }),
         );
       }

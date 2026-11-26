@@ -23,7 +23,7 @@ ENV NODE_ENV=production
 COPY package*.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-RUN mkdir -p /data/statements && chown -R node:node /data /app
+RUN mkdir -p /data/statements /data/images && chown -R node:node /data /app
 USER node
 EXPOSE 4001
 CMD ["node", "dist/index.js"]

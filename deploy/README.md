@@ -12,7 +12,8 @@ Hermes ─▶ 127.0.0.1:4002 finance-mcp ─▶ data-service
 - Settings and secrets: `~/services/fortuna/.env` on the server (mode 600),
   from [fortuna.env.example](fortuna.env.example).
 - Data: `/srv/fortuna/postgres`, `/srv/fortuna/statements`,
-  `/srv/fortuna/inbox`, plus the `fortuna_chat-credentials` and
+  `/srv/fortuna/images` (transaction, account and card images; the one-shot
+  `image-storage` service creates it for uid 1000), `/srv/fortuna/inbox`, plus the `fortuna_chat-credentials` and
   `fortuna_parser-sandbox-queue` volumes. Those two aren't backed up
   (`x-devbot.backup` in the compose file): the queue only holds transient
   jobs, and Codex sign-ins are kept out of backups (users reconnect in the app).

@@ -116,6 +116,7 @@ services:
       - CHAT_WORKER_URL=http://chat-worker:4003
       - CHAT_ENABLED=${CHAT_ENABLED:-false}
       - STATEMENT_STORAGE_DIR=/data/statements
+      - IMAGE_STORAGE_DIR=/data/images
       - COMMIT_TOKEN_SECRET=${COMMIT_TOKEN_SECRET:-development-only-commit-token-secret-change-me}
       - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-development-only-internal-service-token}
     volumes:
@@ -124,6 +125,7 @@ services:
       # Exclude node_modules
       - /app/node_modules
       - statement-data:/data/statements
+      - image-data:/data/images
     depends_on:
       postgres:
         condition: service_healthy
@@ -260,5 +262,6 @@ networks:
 
 volumes:
   statement-data:
+  image-data:
   parser-sandbox-queue:
   chat-credentials:

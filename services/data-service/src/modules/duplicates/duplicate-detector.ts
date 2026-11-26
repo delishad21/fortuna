@@ -38,6 +38,10 @@ export interface ImportTransactionInput {
   balance?: number | null;
   currency?: string | null;
   accountIdentifier?: string | null;
+  /** The account; when only accountIdentifier is given, a trigger finds it. */
+  accountId?: string | null;
+  /** The card used; its account wins over accountId and accountIdentifier. */
+  cardId?: string | null;
   source?: string | null;
   metadata?: any;
   linkage?: TransactionLinkage | null;

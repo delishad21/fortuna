@@ -64,6 +64,9 @@ model User {
   settings               UserSettings?
   categories             Category[]
   accountIdentifiers     AccountIdentifier[]
+  financialAccounts      FinancialAccount[]
+  cards                  Card[]
+  images                 StoredImage[]
   transactions           Transaction[]
   importBatches          ImportBatch[]
   trips                  Trip[]
@@ -380,25 +383,109 @@ model UserSettings {
   @@map("user_settings")
 }
 
-// Account Numbers
+// Statement identifiers: the account number or name read off a statement.
+// Each one maps to a FinancialAccount, so imports keep matching by identifier.
+// A database trigger creates an account for an identifier added without one.
 model AccountIdentifier {
   id                String   @id @default(cuid())
   userId            String   @map("user_id")
   accountIdentifier String   @map("account_number")
-  /// Friendly name shown with the identifier, e.g. "UOB One credit card".
+  /// Legacy: the account's name now lives on FinancialAccount.name.
   label             String?
+  /// Legacy: the account's colour now lives on FinancialAccount.color.
   color             String   @default("#6366f1") // hex color
-  /// Created by Fortuna for an assistant entry that matched no account; the user confirms or merges it.
+  /// Legacy: set by assistant entries before accounts existed; the account carries it now.
   autoCreated       Boolean  @default(false) @map("auto_created")
-  /// What created it, e.g. "assistant entry gmail:18c2 (card 4591)".
+  /// Legacy: see FinancialAccount.autoCreatedFrom.
   autoCreatedFrom   String?  @map("auto_created_from")
+  accountId         String?  @map("account_id")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account FinancialAccount? @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@unique([userId, accountIdentifier])
+  @@index([accountId])
   @@map("account_numbers")
+}
+
+// A bank account, credit card account, wallet or other place money sits.
+// (Named FinancialAccount because Account is the Auth.js model.) A credit card
+// is its own account with one or more cards under it; debit cards sit under a
+// savings or current account.
+model FinancialAccount {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  name            String
+  institution     String?
+  /// savings | current | credit_card | other
+  type            String   @default("other")
+  color           String   @default("#6366f1")
+  imageId         String?  @map("image_id")
+  archived        Boolean  @default(false)
+  /// Created by the assistant because nothing matched; shown for review until
+  /// confirmed or merged into another account.
+  autoCreated     Boolean  @default(false) @map("auto_created")
+  /// What it was created from, e.g. "identifier:532392****2124" or "card:1234".
+  autoCreatedFrom String?  @map("auto_created_from")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  image        StoredImage?        @relation("FinancialAccountImage", fields: [imageId], references: [id], onDelete: SetNull)
+  identifiers  AccountIdentifier[]
+  cards        Card[]
+  transactions Transaction[]
+
+  @@index([userId])
+  @@index([userId, autoCreated])
+  @@map("financial_accounts")
+}
+
+// A physical or virtual card on an account, matched by its last 4 digits
+// (notifications say "card ending 1234").
+model Card {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  accountId String   @map("account_id")
+  last4     String   @db.VarChar(4)
+  network   String?
+  nickname  String?
+  imageId   String?  @map("image_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account      FinancialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  image        StoredImage?     @relation("CardImage", fields: [imageId], references: [id], onDelete: SetNull)
+  transactions Transaction[]
+
+  @@unique([accountId, last4])
+  @@index([userId, last4])
+  @@map("cards")
+}
+
+// An image file kept in IMAGE_STORAGE_DIR (not in Postgres), one row per
+// distinct file per user so a merchant logo used by many transactions is
+// stored once.
+model StoredImage {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  contentType String   @map("content_type")
+  sizeBytes   Int      @map("size_bytes")
+  sha256      String
+  storagePath String   @map("storage_path")
+  sourceUrl   String?  @map("source_url") @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accounts     FinancialAccount[] @relation("FinancialAccountImage")
+  cards        Card[]             @relation("CardImage")
+  transactions Transaction[]      @relation("TransactionImage")
+
+  @@unique([userId, sha256])
+  @@map("images")
 }
 
 // Categories
@@ -474,11 +561,18 @@ model Transaction {
   metadata          Json? // extra fields from parsing
   linkage           Json? // Transaction linkage data for internal/reimbursement
   importBatchId     String?  @map("import_batch_id")
+  /// Kept in step with accountIdentifier by a database trigger.
+  accountId         String?  @map("account_id")
+  cardId            String?  @map("card_id")
+  imageId           String?  @map("image_id")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  category     Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category     Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  account      FinancialAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  card         Card?             @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  image        StoredImage?      @relation("TransactionImage", fields: [imageId], references: [id], onDelete: SetNull)
   importBatch  ImportBatch?  @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
   tripFundings TripFunding[]
   tripEntries  TripEntry[]   @relation("TripEntrySourceTransaction")
@@ -490,6 +584,9 @@ model Transaction {
   @@index([userId, categoryId])
   @@index([userId, entrySource])
   @@index([userId, reviewStatus])
+  @@index([accountId])
+  @@index([cardId])
+  @@index([imageId])
   @@map("transactions")
 }
 
